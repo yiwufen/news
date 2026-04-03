@@ -35,6 +35,8 @@ class Database:
         """初始化数据库表结构"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
+
+            # 新闻文章表
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS news_articles (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,6 +55,35 @@ class Database:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_news_publish_time ON news_articles(publish_time)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_news_category ON news_articles(category)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_news_source ON news_articles(source_name)")
+
+            # 情报微粒表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS intelligence_particles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    particle_id TEXT UNIQUE NOT NULL,
+                    slice_window TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    event_summary TEXT NOT NULL,
+                    entities TEXT NOT NULL,
+                    source_doc_ids TEXT NOT NULL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_particles_slice ON intelligence_particles(slice_window)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_particles_type ON intelligence_particles(event_type)")
+
+            # 处理记录表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS processing_log (
+                    doc_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    particle_id TEXT,
+                    error_message TEXT,
+                    processed_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_processing_status ON processing_log(status)")
+
             conn.commit()
 
     def _prepare_article_data(self, article: dict) -> tuple:
@@ -78,7 +109,7 @@ class Database:
                 self._prepare_article_data(article)
             )
             conn.commit()
-            return cursor.lastrowid
+            return cursor.lastrowid or 0
 
     def insert_articles_batch(self, articles: list[dict]) -> int:
         """批量插入文章，返回成功数量"""
@@ -142,7 +173,154 @@ class Database:
         """清空所有数据"""
         with self._get_connection() as conn:
             conn.cursor().execute("DELETE FROM news_articles")
+            conn.cursor().execute("DELETE FROM intelligence_particles")
             conn.commit()
+
+    # === 情报微粒操作 ===
+
+    def insert_particle(self, particle: dict) -> int:
+        """插入情报微粒，返回行 ID"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """INSERT INTO intelligence_particles
+                   (particle_id, slice_window, event_type, event_summary, entities, source_doc_ids)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    particle["particle_id"],
+                    particle["slice_window"],
+                    particle["event_type"],
+                    particle["event_summary"],
+                    json.dumps(particle.get("entities", []), ensure_ascii=False),
+                    json.dumps(particle.get("source_doc_ids", []), ensure_ascii=False),
+                )
+            )
+            conn.commit()
+            return cursor.lastrowid or 0
+
+    def insert_particles_batch(self, particles: list[dict]) -> int:
+        """批量插入情报微粒，返回成功数量"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            data = [
+                (
+                    p["particle_id"],
+                    p["slice_window"],
+                    p["event_type"],
+                    p["event_summary"],
+                    json.dumps(p.get("entities", []), ensure_ascii=False),
+                    json.dumps(p.get("source_doc_ids", []), ensure_ascii=False),
+                )
+                for p in particles
+            ]
+            cursor.executemany(
+                """INSERT OR IGNORE INTO intelligence_particles
+                   (particle_id, slice_window, event_type, event_summary, entities, source_doc_ids)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                data
+            )
+            conn.commit()
+            return cursor.rowcount
+
+    def get_particle_count(self) -> int:
+        """获取情报微粒总数"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM intelligence_particles")
+            return cursor.fetchone()[0]
+
+    def get_particles_by_slice(self, slice_window: str) -> list[dict]:
+        """按时间切片获取微粒"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM intelligence_particles WHERE slice_window = ? ORDER BY id",
+                (slice_window,)
+            )
+            return [self._row_to_particle(row) for row in cursor.fetchall()]
+
+    def get_all_particles(self, limit: int | None = None) -> list[dict]:
+        """获取所有情报微粒"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            sql = "SELECT * FROM intelligence_particles ORDER BY slice_window DESC"
+            if limit:
+                cursor.execute(f"{sql} LIMIT ?", (limit,))
+            else:
+                cursor.execute(sql)
+            return [self._row_to_particle(row) for row in cursor.fetchall()]
+
+    def get_processed_doc_ids(self) -> set[str]:
+        """获取已成功处理的文档 ID"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT doc_id FROM processing_log WHERE status = 'success'")
+            return {row[0] for row in cursor.fetchall()}
+
+    def log_processing(self, doc_id: str, status: str, particle_id: str | None = None, error_message: str | None = None):
+        """记录处理状态"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """INSERT OR REPLACE INTO processing_log
+                   (doc_id, status, particle_id, error_message)
+                   VALUES (?, ?, ?, ?)""",
+                (doc_id, status, particle_id, error_message)
+            )
+            conn.commit()
+
+    def log_processing_batch(self, records: list[dict]):
+        """批量记录处理状态"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            data = [
+                (
+                    r["doc_id"],
+                    r["status"],
+                    r.get("particle_id"),
+                    r.get("error_message"),
+                )
+                for r in records
+            ]
+            cursor.executemany(
+                """INSERT OR REPLACE INTO processing_log
+                   (doc_id, status, particle_id, error_message)
+                   VALUES (?, ?, ?, ?)""",
+                data
+            )
+            conn.commit()
+
+    def get_processing_stats(self) -> dict[str, int]:
+        """获取处理统计"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT status, COUNT(*) FROM processing_log GROUP BY status")
+            return {row[0]: row[1] for row in cursor.fetchall()}
+
+    def get_failed_docs(self) -> list[dict]:
+        """获取处理失败的文档"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT doc_id, error_message, processed_at FROM processing_log WHERE status = 'failed'"
+            )
+            return [
+                {"doc_id": row[0], "error_message": row[1], "processed_at": row[2]}
+                for row in cursor.fetchall()
+            ]
+
+    def _row_to_particle(self, row: sqlite3.Row) -> dict:
+        """将数据库行转换为情报微粒字典"""
+        return {
+            "id": row["id"],
+            "particle_id": row["particle_id"],
+            "slice_window": row["slice_window"],
+            "event_type": row["event_type"],
+            "event_summary": row["event_summary"],
+            "entities": json.loads(row["entities"]),
+            "source_doc_ids": json.loads(row["source_doc_ids"]),
+            "created_at": row["created_at"],
+        }
 
     def _row_to_dict(self, row: sqlite3.Row) -> dict:
         """将数据库行转换为字典"""
