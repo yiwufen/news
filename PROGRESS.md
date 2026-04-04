@@ -193,6 +193,7 @@ print(result)
 - Graph sync is now usable again: `KnowledgeGraphSync` no longer writes Neo4j map properties for entity identifiers, and writes `primary_identifier` plus `identifiers_json` instead.
 - Intent parsing is more stable: `IntentClassifier` now adds deterministic post-processing for time expressions and entity supplementation from the local entity repository when the LLM response is incomplete.
 - Retrieval matching is more stable: `KnowledgeSearcher` now matches entity filters through normalized canonical names plus aliases instead of raw string contains only.
+- Retrieval storage now self-heals stale SQLite materializations: `KnowledgeUnitRepository` backfills missing `entity_ids` from persisted payloads and rebuilds missing FTS rows on open, so older databases do not silently lose entity-filtered BM25 recall.
 - Retrieval is now formally indexed: `KnowledgeUnitRepository` maintains SQLite FTS5 rows, stores persisted embeddings, and supports BM25 query plus filtered embedding hydration.
 - Hybrid retrieval is now live: `KnowledgeSearcher` executes BM25 + vector recall with reciprocal rank fusion, returns retrieval metadata, and keeps `run_pipeline()` compatibility output stable.
 - `run_pipeline()` now degrades to BM25-only retrieval when embedding credentials are absent, instead of failing the default knowledge-base query path.

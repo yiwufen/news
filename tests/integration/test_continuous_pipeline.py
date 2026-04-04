@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
 from collectors.database import Database
 from src.entities import Entity, EntityRepository
@@ -467,7 +468,7 @@ def test_index_failure_does_not_make_persisted_documents_retryable(tmp_path) -> 
         incremental=True,
         db_path=str(db_path),
         extractor=StubExtractor(),
-        index_builder=FailingIndexBuilder(),
+        index_builder=cast(Any, FailingIndexBuilder()),
     )
 
     first = pipeline.run()

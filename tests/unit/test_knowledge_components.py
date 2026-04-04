@@ -356,6 +356,38 @@ def test_knowledge_unit_repository_syncs_fts_rows(tmp_path) -> None:
     assert "Xiaomi Group" in row[1]
 
 
+def test_knowledge_unit_repository_repairs_stale_entity_ids_and_fts_rows(tmp_path) -> None:
+    db_path = tmp_path / "news.db"
+    repo = KnowledgeUnitRepository(str(db_path))
+    unit = build_unit()
+    unit.entities[0].entity_id = "ent_xiaomi"
+    repo.save_batch([unit])
+
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute("UPDATE knowledge_units SET entity_ids = '[]'")
+        connection.execute("DELETE FROM knowledge_units_fts")
+        connection.commit()
+    finally:
+        connection.close()
+
+    repaired = KnowledgeUnitRepository(str(db_path))
+
+    connection = sqlite3.connect(db_path)
+    try:
+        entity_ids = connection.execute(
+            "SELECT entity_ids FROM knowledge_units WHERE ku_id = ?",
+            (unit.ku_id,),
+        ).fetchone()[0]
+        fts_count = connection.execute("SELECT COUNT(*) FROM knowledge_units_fts").fetchone()[0]
+    finally:
+        connection.close()
+
+    assert repaired.get_by_ids([unit.ku_id])[0].entities[0].entity_id == "ent_xiaomi"
+    assert entity_ids == '["ent_xiaomi"]'
+    assert fts_count == 1
+
+
 def test_knowledge_index_builder_saves_embeddings(tmp_path) -> None:
     db_path = tmp_path / "news.db"
     entity_repo = EntityRepository(str(db_path))

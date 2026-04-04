@@ -315,6 +315,7 @@ class KnowledgeUnitRepository(_SQLiteRepository):
     def __init__(self, db_path: str = "data/news.db"):
         super().__init__(db_path)
         self._init_table()
+        self._ensure_materialized_search_state()
 
     def _init_table(self) -> None:
         with self._connect() as connection:
@@ -379,6 +380,63 @@ class KnowledgeUnitRepository(_SQLiteRepository):
                 """
             )
             connection.commit()
+
+    def _ensure_materialized_search_state(self) -> None:
+        with self._connect() as connection:
+            entity_ids_updated = self._backfill_entity_ids_from_payload(connection)
+            self._backfill_fts_rows(connection)
+            if entity_ids_updated:
+                connection.commit()
+
+    def _backfill_entity_ids_from_payload(self, connection: sqlite3.Connection) -> int:
+        rows = connection.execute(
+            """
+            SELECT ku_id, payload
+            FROM knowledge_units
+            WHERE entity_ids = '[]'
+            """
+        ).fetchall()
+        updates: list[tuple[str, str]] = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            entity_ids = list(
+                dict.fromkeys(
+                    entity.get("entity_id")
+                    for entity in payload.get("entities", [])
+                    if isinstance(entity, dict) and entity.get("entity_id")
+                )
+            )
+            if not entity_ids:
+                continue
+            updates.append((json.dumps(entity_ids, ensure_ascii=False), row["ku_id"]))
+
+        if updates:
+            connection.executemany(
+                "UPDATE knowledge_units SET entity_ids = ? WHERE ku_id = ?",
+                updates,
+            )
+        return len(updates)
+
+    def _backfill_fts_rows(self, connection: sqlite3.Connection) -> int:
+        ku_count = connection.execute("SELECT COUNT(*) FROM knowledge_units").fetchone()[0]
+        if ku_count == 0:
+            return 0
+
+        fts_count = connection.execute("SELECT COUNT(*) FROM knowledge_units_fts").fetchone()[0]
+        if fts_count == ku_count:
+            return 0
+
+        rows = connection.execute(
+            "SELECT payload FROM knowledge_units ORDER BY published_at DESC, ku_id ASC"
+        ).fetchall()
+        units = [KnowledgeUnit.model_validate(json.loads(row["payload"])) for row in rows]
+        connection.execute("DELETE FROM knowledge_units_fts")
+        self._sync_fts_rows(connection, units)
+        connection.commit()
+        return len(units)
 
     def _ensure_column(
         self,
