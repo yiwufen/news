@@ -1,39 +1,49 @@
 """
-持续运行模式入口。
-
-完整的持续运行流程：
-原始文档 -> KnowledgeUnit -> Entity/EventCluster -> 图谱同步 -> legacy 回填
+Offline continuous pipeline entrypoint.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
-from collectors.database import Database
-from src.entities_v2 import EntityResolver, EntityRepository
+from src.entities import EntityResolver, EntityRepository
 from src.event_clustering import EventClusterRepository, EventClusterer
 from src.knowledge_base import (
     KnowledgeProcessingLogRepository,
-    KnowledgeToLegacyParticleAdapter,
     KnowledgeUnit,
     KnowledgeUnitRepository,
     RawDocumentRepository,
+    compute_slice_window_from_datetime,
 )
 from src.knowledge_extractor import KnowledgeExtractor
 from src.knowledge_graph_sync import KnowledgeGraphSync
-from src.schemas import IntelligenceParticle
+from src.retrieval.indexing import KnowledgeIndexBuilder
+
+
+def _build_legacy_particle(unit: KnowledgeUnit) -> dict[str, Any]:
+    """Build a compatibility payload for legacy callers of `run_continuous()`."""
+    anchor = unit.time.event_time or unit.time.published_at
+    return {
+        "particle_id": unit.ku_id,
+        "slice_window": compute_slice_window_from_datetime(anchor),
+        "event_type": unit.unit_type,
+        "event_summary": unit.summary,
+        "entities": [entity.mention for entity in unit.entities],
+        "source_doc_ids": [unit.source.doc_id],
+    }
 
 
 @dataclass
 class ContinuousRunResult:
-    """持续运行结果"""
+    """Result of one continuous run."""
 
-    particles_extracted: int
-    particles_saved: int
     nodes_created: int
     edges_created: int
     errors: list[str]
-    particles: list[IntelligenceParticle]
+    particles_extracted: int = 0
+    particles_saved: int = 0
+    particles: list[dict[str, Any]] = field(default_factory=list)
     knowledge_units_extracted: int = 0
     knowledge_units_saved: int = 0
     entities_saved: int = 0
@@ -41,18 +51,7 @@ class ContinuousRunResult:
 
 
 class ContinuousPipeline:
-    """持续运行模式流水线
-
-    完整流程：
-    1. 从数据库读取未处理的新闻
-    2. Worker Agent 提取情报微粒
-    3. 保存到 SQLite
-    4. Integrator Agent 实体对齐 + 图谱同步
-
-    这是持续运行模式的标准入口，产出：
-    - SQLite: 情报微粒存储
-    - Neo4j: 知识图谱
-    """
+    """RawDocument -> KnowledgeUnit -> Entity/EventCluster -> graph sync."""
 
     def __init__(
         self,
@@ -61,18 +60,11 @@ class ContinuousPipeline:
         incremental: bool = True,
         db_path: str = "data/news.db",
         extractor: KnowledgeExtractor | None = None,
+        index_builder: KnowledgeIndexBuilder | None = None,
     ):
-        """初始化持续运行流水线
-
-        Args:
-            batch_size: 每批处理数量
-            graph_enabled: 是否启用图谱同步（默认启用）
-            incremental: 是否增量处理
-        """
         self.batch_size = batch_size
         self.graph_enabled = graph_enabled
         self.incremental = incremental
-        self.db = Database(db_path)
         self.raw_documents = RawDocumentRepository(db_path)
         self.knowledge_units = KnowledgeUnitRepository(db_path)
         self.entity_repo = EntityRepository(db_path)
@@ -82,25 +74,19 @@ class ContinuousPipeline:
         self.entity_resolver = EntityResolver(self.entity_repo)
         self.clusterer = EventClusterer(self.cluster_repo)
         self.graph_sync = KnowledgeGraphSync() if graph_enabled else None
-        self.legacy_adapter = KnowledgeToLegacyParticleAdapter()
+        self.index_builder = index_builder or KnowledgeIndexBuilder(
+            self.knowledge_units,
+            self.entity_repo,
+        )
 
     def run(
         self,
         time_window: str | None = None,
         dry_run: bool = False,
     ) -> ContinuousRunResult:
-        """运行持续处理流程
-
-        Args:
-            time_window: 时间切片过滤 (YYYY-WNN)
-            dry_run: 仅测试，不保存
-
-        Returns:
-            ContinuousRunResult: 处理结果
-        """
         errors: list[str] = []
-        all_particles: list[IntelligenceParticle] = []
         all_units: list[KnowledgeUnit] = []
+        legacy_particles: list[dict[str, Any]] = []
         total_nodes = 0
         total_edges = 0
         total_entities_saved = 0
@@ -122,7 +108,7 @@ class ContinuousPipeline:
                     batch_units.extend(units)
                     all_units.extend(units)
                 except Exception as exc:
-                    errors.append(f"[{document.doc_id}] KnowledgeUnit 提取失败: {exc}")
+                    errors.append(f"[{document.doc_id}] KnowledgeUnit extraction failed: {exc}")
                     batch_log_records.append(
                         {
                             "doc_id": document.doc_id,
@@ -144,22 +130,17 @@ class ContinuousPipeline:
                 resolved_units,
                 persist=not dry_run,
             )
-            legacy_particles: list[IntelligenceParticle] = []
-            legacy_rows: list[dict[str, object]] = []
-            for unit in clustered_units:
-                legacy_particle = self.legacy_adapter.to_legacy_particle(unit)
-                legacy_row = self.legacy_adapter.to_legacy_row(unit)
-                if legacy_particle is None or legacy_row is None:
-                    continue
-                legacy_particles.append(legacy_particle)
-                legacy_rows.append(legacy_row)
-            all_particles.extend(legacy_particles)
+            legacy_particles.extend(_build_legacy_particle(unit) for unit in clustered_units)
 
-            graph_sync_error_message: str | None = None
+            indexing_errors: list[str] = []
+            post_processing_errors: list[str] = []
             if not dry_run:
                 self.knowledge_units.save_batch(clustered_units)
-                if legacy_rows:
-                    self.db.insert_particles_batch(legacy_rows)
+                try:
+                    self.index_builder.build_for_units(clustered_units)
+                except Exception as exc:
+                    indexing_errors.append(str(exc))
+                    errors.append(f"[index] {exc}")
 
                 if self.graph_enabled and self.graph_sync:
                     sync_result = self.graph_sync.sync(resolved_entities, clusters)
@@ -167,7 +148,7 @@ class ContinuousPipeline:
                     total_edges += sync_result["edges_created"]
                     errors.extend(sync_result["errors"])
                     if sync_result["errors"]:
-                        graph_sync_error_message = "; ".join(sync_result["errors"])
+                        post_processing_errors.extend(sync_result["errors"])
 
             total_entities_saved += len(resolved_entities)
             total_clusters_saved += len(clusters)
@@ -185,7 +166,11 @@ class ContinuousPipeline:
                 if any(record["doc_id"] == document.doc_id for record in batch_log_records):
                     continue
                 doc_units = extracted_by_doc.get(document.doc_id, [])
-                status = "failed" if graph_sync_error_message else "success"
+                blocking_errors = list(post_processing_errors)
+                error_details = list(blocking_errors)
+                error_details.extend(error for error in indexing_errors if error not in error_details)
+                error_message = "; ".join(error_details) if error_details else None
+                status = "failed" if blocking_errors else "success"
                 batch_log_records.append(
                     {
                         "doc_id": document.doc_id,
@@ -193,7 +178,7 @@ class ContinuousPipeline:
                         "knowledge_units_count": len(doc_units),
                         "entities_count": len(entities_by_doc.get(document.doc_id, set())),
                         "clusters_count": len(clusters_by_doc.get(document.doc_id, set())),
-                        "error_message": graph_sync_error_message,
+                        "error_message": error_message,
                     }
                 )
 
@@ -201,12 +186,12 @@ class ContinuousPipeline:
                 self.log_repo.log_batch(batch_log_records)
 
         return ContinuousRunResult(
-            particles_extracted=len(all_particles),
-            particles_saved=len(all_particles) if not dry_run else 0,
             nodes_created=total_nodes,
             edges_created=total_edges,
             errors=errors,
-            particles=all_particles,
+            particles_extracted=len(legacy_particles),
+            particles_saved=len(legacy_particles) if not dry_run else 0,
+            particles=legacy_particles,
             knowledge_units_extracted=len(all_units),
             knowledge_units_saved=len(all_units) if not dry_run else 0,
             entities_saved=total_entities_saved if not dry_run else 0,
@@ -214,20 +199,9 @@ class ContinuousPipeline:
         )
 
     def run_once(self, limit: int = 10) -> ContinuousRunResult:
-        """运行一次处理（用于测试或手动触发）
-
-        Args:
-            limit: 处理文章数量上限
-
-        Returns:
-            ContinuousRunResult: 处理结果
-        """
-        # 临时修改 batch_size
         original_batch_size = self.batch_size
         self.batch_size = limit
-
         result = self.run()
-
         self.batch_size = original_batch_size
         return result
 
@@ -239,18 +213,7 @@ def run_continuous(
     time_window: str | None = None,
     dry_run: bool = False,
 ) -> ContinuousRunResult:
-    """持续运行模式便捷入口
-
-    Args:
-        batch_size: 每批处理数量
-        graph_enabled: 是否启用图谱同步
-        incremental: 是否增量处理
-        time_window: 时间切片过滤
-        dry_run: 仅测试
-
-    Returns:
-        ContinuousRunResult: 处理结果
-    """
+    """Convenience entrypoint for the continuous pipeline."""
     pipeline = ContinuousPipeline(
         batch_size=batch_size,
         graph_enabled=graph_enabled,

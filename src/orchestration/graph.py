@@ -1,197 +1,188 @@
 """
-LangGraph 状态图构建
-
-使用 PipelineContext 和 StageOutput 的状态机。
+Knowledge retrieval entrypoint for `run_pipeline`.
 """
 
 from __future__ import annotations
 
 from typing import Literal
+from uuid import uuid4
 
-from langgraph.graph import END, StateGraph
-
-from src.orchestration.adapters import wrap_node, wrap_node_with_retry_increment
-from src.orchestration.nodes import (
-    comparative_analysis_node,
-    critic_node,
-    event_impact_node,
-    final_node,
-    intent_parse_node,
-    integrator_node,
-    master_node,
-    relationship_query_node,
-    retrieval_node,
-    timeline_node,
-    worker_node,
-)
-from src.orchestration.state import PipelineContext
-from src.routing.router import TaskRouter
+from src.intent import IntentClassifier
+from src.intent.models import IntentType, StructuredQuery
+from src.retrieval.knowledge_search import KnowledgeSearchRequest, KnowledgeSearcher
 
 
-# =============================================================================
-# 条件判断函数
-# =============================================================================
+def _resolve_retrieval_mode(
+    searcher: KnowledgeSearcher,
+    *,
+    has_direct_articles: bool,
+) -> Literal["hybrid", "bm25_only"]:
+    if has_direct_articles:
+        return "hybrid"
+
+    embedding_client = getattr(searcher, "embedding_client", None)
+    is_configured = getattr(embedding_client, "is_configured", None)
+    if callable(is_configured) and not is_configured():
+        return "bm25_only"
+    return "hybrid"
 
 
-def route_by_intent(state: PipelineContext) -> Literal[
-    "entity_timeline_path",
-    "risk_assessment_path",
-    "relationship_query_path",
-    "comparative_analysis_path",
-    "event_impact_path",
-    "error_path",
-]:
-    """根据意图类型路由到不同的执行路径
-
-    Args:
-        state: 流水线上下文
-
-    Returns:
-        下一个节点名称
-    """
-    intent = state.input.intent if state.input else None
-    return TaskRouter.route_by_intent(intent)
+def _build_timeline_events(result: dict) -> list[dict]:
+    events: list[dict] = []
+    for unit in result["knowledge_units"]:
+        anchor = unit["time"]["event_time"] or unit["time"]["published_at"]
+        events.append(
+            {
+                "date": anchor,
+                "event_type": unit["unit_type"],
+                "description": unit["summary"],
+                "source_ids": [unit["source"]["doc_id"]],
+                "particle_id": unit["ku_id"],
+                "cluster_id": unit.get("cluster_id"),
+            }
+        )
+    events.sort(key=lambda item: item["date"], reverse=True)
+    return events
 
 
-def should_retry(state: PipelineContext) -> Literal["retry", "final"]:
-    """判断是否需要重试
-
-    按共享规范（docs/SHARED_RULES.md）规定，max_retries = 2。
-
-    Args:
-        state: 流水线上下文
-
-    Returns:
-        路由结果
-    """
-    MAX_RETRIES = 2
-
-    # 核查通过，直接结束
-    if state.is_verification_passed():
-        return "final"
-
-    # 超过最大重试次数，降级输出
-    if state.retry_count >= MAX_RETRIES:
-        return "final"
-
-    return "retry"
-
-
-# =============================================================================
-# 状态图构建
-# =============================================================================
-
-
-def build_graph() -> StateGraph:
-    """构建任务驱动状态图
-
-    流程：
-    Start → IntentParse → Retrieval → [路由判断]
-                                         │
-        ┌────────────────────────────────┼────────────────────────────────────┐
-        │                                │                                    │
-        ▼                                ▼                                    ▼
-    ENTITY_TIMELINE               RISK_ASSESSMENT                    COMPARATIVE_ANALYSIS
-        │                                │                                    │
-        ▼                                ▼                                    │
-    TimelineNode                  Worker → Integrator                       │
-        │                                │                                    │
-        │                                ▼                                    │
-        │                             Master                                  │
-        │                                │                                    │
-        │                                ▼                                    │
-        │                             Critic                                  │
-        │                                │                                    │
-        │                    ┌───────────┴───────────┐                        │
-        │                 retry                    pass                       │
-        │                    │                       │                        │
-        │                    ▼                       ▼                        │
-        │                 Master                   Final  ←───────────────────┘
-        │                    │
-        └────────────────────┴──────────────────────────────→ End
-
-    同时支持：
-    - RELATIONSHIP_QUERY → relationship_query → critic → final
-    - EVENT_IMPACT → event_impact → critic → final
-    """
-    graph = StateGraph(PipelineContext)
-
-    # === 注册节点 ===
-    # Note: Pyright 对 LangGraph 节点函数的类型推断有限制，使用 type: ignore 绕过
-    graph.add_node("intent_parse", wrap_node(intent_parse_node))  # type: ignore[arg-type]
-    graph.add_node("retrieval", wrap_node(retrieval_node))  # type: ignore[arg-type]
-    graph.add_node("timeline", wrap_node(timeline_node))  # type: ignore[arg-type]
-    graph.add_node("worker", wrap_node(worker_node))  # type: ignore[arg-type]
-    graph.add_node("integrator", wrap_node(integrator_node))  # type: ignore[arg-type]
-    graph.add_node("master", wrap_node(master_node))  # type: ignore[arg-type]
-    graph.add_node("critic", wrap_node_with_retry_increment(critic_node))  # type: ignore[arg-type]
-    graph.add_node("relationship_query", wrap_node(relationship_query_node))  # type: ignore[arg-type]
-    graph.add_node("comparative_analysis", wrap_node(comparative_analysis_node))  # type: ignore[arg-type]
-    graph.add_node("event_impact", wrap_node(event_impact_node))  # type: ignore[arg-type]
-    graph.add_node("final", wrap_node(final_node))  # type: ignore[arg-type]
-
-    # === 设置入口 ===
-    graph.set_entry_point("intent_parse")
-
-    # === 定义边 ===
-
-    # intent_parse → retrieval
-    graph.add_edge("intent_parse", "retrieval")
-
-    # retrieval → 按意图路由
-    graph.add_conditional_edges(
-        "retrieval",
-        route_by_intent,
-        {
-            "entity_timeline_path": "timeline",
-            "risk_assessment_path": "worker",
-            "relationship_query_path": "relationship_query",
-            "comparative_analysis_path": "comparative_analysis",
-            "event_impact_path": "event_impact",
-            "error_path": "final",
+def _build_compatibility_output(
+    structured_query: StructuredQuery,
+    result: dict,
+    source: str,
+    graph_enabled: bool,
+) -> dict:
+    events = _build_timeline_events(result)
+    request_id = str(uuid4())[:8]
+    target_entity = structured_query.entities[0] if structured_query.entities else None
+    graph_edges = []
+    if graph_enabled:
+        graph_edges = [
+            {
+                "entity_id": entity["entity_id"],
+                "cluster_id": unit["cluster_id"],
+                "ku_id": unit["ku_id"],
+            }
+            for unit in result["knowledge_units"]
+            for entity in unit["entities"]
+            if entity.get("entity_id") and unit.get("cluster_id")
+        ]
+    base_output = {
+        "request_id": request_id,
+        "query": structured_query.to_dict(),
+        "source": source,
+        "retrieval": result["retrieval"],
+        "graph": {
+            "enabled": graph_enabled,
+            "edges": graph_edges,
         },
-    )
-
-    # ENTITY_TIMELINE 路径：timeline → final
-    graph.add_edge("timeline", "final")
-
-    # RISK_ASSESSMENT 路径：worker → integrator → master → critic
-    graph.add_edge("worker", "integrator")
-    graph.add_edge("integrator", "master")
-    graph.add_edge("master", "critic")
-
-    # RELATIONSHIP_QUERY 路径：relationship_query → critic
-    graph.add_edge("relationship_query", "critic")
-
-    # COMPARATIVE_ANALYSIS 路径：comparative_analysis → final（无需 Critic）
-    graph.add_edge("comparative_analysis", "final")
-
-    # EVENT_IMPACT 路径：event_impact → critic
-    graph.add_edge("event_impact", "critic")
-
-    # Critic 重试逻辑
-    graph.add_conditional_edges(
-        "critic",
-        should_retry,
-        {
-            "retry": "master",
-            "final": "final",
+        "knowledge_units": result["knowledge_units"],
+        "entities": result["entities"],
+        "event_clusters": result["event_clusters"],
+        "total_count": result["total_count"],
+        "report": {},
+        "risk_assessment": {},
+        "timeline_data": {},
+        "comparison_report": {},
+        "event_impact": {},
+        "verification": {
+            "passed": True,
+            "retry_count": 0,
+            "issues": [],
         },
-    )
+        "particles_count": len(result["knowledge_units"]),
+        "errors": [],
+        "stage_durations": {},
+    }
 
-    # final → END
-    graph.add_edge("final", END)
+    if structured_query.intent == IntentType.ENTITY_TIMELINE:
+        base_output["timeline_data"] = {
+            "timeline": {
+                "entity": target_entity,
+                "events": events,
+                "total_events": len(events),
+                "time_range": {
+                    "start": events[-1]["date"] if events else None,
+                    "end": events[0]["date"] if events else None,
+                },
+            },
+            "entity": target_entity,
+            "event_count": len(events),
+        }
+        return base_output
 
-    return graph
+    if structured_query.intent == IntentType.RELATIONSHIP_QUERY:
+        if not graph_enabled:
+            return {
+                **base_output,
+                "errors": ["关系查询需要图谱支持，请启用 graph_enabled"],
+                "verification": {
+                    "passed": False,
+                    "retry_count": 0,
+                    "issues": [],
+                },
+            }
+        base_output["report"] = {
+            "entities": structured_query.entities,
+            "relationships": base_output["graph"]["edges"],
+            "total_relationships": len(base_output["graph"]["edges"]),
+        }
+        return base_output
 
+    if structured_query.intent == IntentType.COMPARATIVE_ANALYSIS:
+        comparison = {
+            "entities": structured_query.entities,
+            "entity_event_counts": {
+                entity: sum(
+                    1
+                    for unit in result["knowledge_units"]
+                    if entity.lower()
+                    in " ".join(
+                        ref["mention"] for ref in unit["entities"]
+                    ).lower()
+                )
+                for entity in structured_query.entities
+            },
+            "summary": "",
+        }
+        if len(structured_query.entities) >= 2:
+            entity_a = structured_query.entities[0]
+            entity_b = structured_query.entities[1]
+            count_a = comparison["entity_event_counts"][entity_a]
+            count_b = comparison["entity_event_counts"][entity_b]
+            if count_a > count_b:
+                comparison["summary"] = f"{entity_a} has more matched events than {entity_b}"
+            elif count_b > count_a:
+                comparison["summary"] = f"{entity_b} has more matched events than {entity_a}"
+            else:
+                comparison["summary"] = f"{entity_a} and {entity_b} have the same matched event count"
+        base_output["comparison_report"] = comparison
+        return base_output
 
-# 预编译图
-COMPILED_GRAPH = build_graph().compile()
+    if structured_query.intent == IntentType.EVENT_IMPACT:
+        base_output["event_impact"] = {
+            "key_events": events[:10],
+            "impact_scope": {
+                "entities": [entity["canonical_name"] for entity in result["entities"]],
+                "event_clusters": [cluster["cluster_id"] for cluster in result["event_clusters"]],
+            },
+            "affected_entities": [entity["canonical_name"] for entity in result["entities"]],
+        }
+        return base_output
 
-
-# =============================================================================
-# 入口函数
-# =============================================================================
+    summaries = [event["description"] for event in events[:5]]
+    base_output["report"] = {
+        "target_entity": target_entity,
+        "summary": summaries,
+        "evidence_count": len(result["knowledge_units"]),
+        "entity_count": len(result["entities"]),
+        "cluster_count": len(result["event_clusters"]),
+    }
+    base_output["risk_assessment"] = {
+        "target_entity": target_entity,
+        "risk_level": "MEDIUM" if result["knowledge_units"] else "LOW",
+        "risk_score": min(1.0, len(result["knowledge_units"]) / 10),
+    }
+    return base_output
 
 
 def run_pipeline(
@@ -199,47 +190,32 @@ def run_pipeline(
     articles: list[dict] | None = None,
     graph_enabled: bool = True,
 ) -> dict:
-    """运行任务驱动流水线
+    """Run the knowledge retrieval pipeline over normalized evidence."""
+    if not raw_query and not articles:
+        return {"error": "missing query input"}
 
-    Args:
-        raw_query: 用户自然语言查询
-        articles: 直接传入的文章列表（可选）
-        graph_enabled: 是否启用图谱同步
-
-    Returns:
-        最终输出
-    """
-    from src.orchestration.state import QueryInput, StageOutput
-
-    # 构建上下文
-    ctx = PipelineContext(
-        input=QueryInput(raw_query=raw_query),
-        graph_enabled=graph_enabled,
+    classifier = IntentClassifier()
+    structured_query = classifier.parse(raw_query or "")
+    searcher = KnowledgeSearcher()
+    request = KnowledgeSearchRequest(
+        structured_query=structured_query,
+        top_k=20,
+        retrieval_mode=_resolve_retrieval_mode(
+            searcher,
+            has_direct_articles=bool(articles),
+        ),
     )
 
-    # 如果直接传入文章，注入到上下文
     if articles:
-        ctx.stages["input"] = StageOutput.ok(
-            stage_name="input",
-            data={"articles": articles},
-        )
-
-    # 运行图
-    result = COMPILED_GRAPH.invoke(ctx)
-
-    # result 可能是 PipelineContext 或 dict
-    if isinstance(result, PipelineContext):
-        stages = result.stages
+        result = searcher.search_articles(articles, request)
+        source = "direct_articles"
     else:
-        stages = result.get("stages", {})
+        result = searcher.search(request)
+        source = "knowledge_base"
 
-    # 返回最终输出
-    final_stage = stages.get("final")
-    if final_stage and final_stage.success:
-        return final_stage.data
-
-    # 如果没有 final 阶段，返回错误
-    return {
-        "error": "流水线执行失败",
-        "stages": {k: v.to_dict() if hasattr(v, "to_dict") else v for k, v in stages.items()},
-    }
+    return _build_compatibility_output(
+        structured_query=structured_query,
+        result=result.to_dict(),
+        source=source,
+        graph_enabled=graph_enabled,
+    )

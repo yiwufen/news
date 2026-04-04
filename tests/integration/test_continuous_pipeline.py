@@ -8,11 +8,21 @@ import sqlite3
 from datetime import UTC, datetime, timedelta
 
 from collectors.database import Database
+from src.entities import Entity, EntityRepository
 from src.intent.models import IntentType, QueryFilters, StructuredQuery
-from src.knowledge_base import EntityRef, EvidenceSpan, KnowledgeUnit, SourceRef, TimeRef
+from src.knowledge_base import (
+    EntityRef,
+    EvidenceSpan,
+    KnowledgeUnit,
+    KnowledgeUnitRepository,
+    SourceRef,
+    TimeRef,
+)
 from src.knowledge_extractor import KnowledgeExtractor
+from src.knowledge_graph_sync import KnowledgeGraphSync
 from src.orchestration import run_pipeline
 from src.pipeline import ContinuousPipeline
+from src.retrieval.indexing import KnowledgeIndexBuilder
 
 
 def seed_articles(db_path: str) -> None:
@@ -44,6 +54,9 @@ def seed_articles(db_path: str) -> None:
 
 
 class StubExtractor(KnowledgeExtractor):
+    def __init__(self) -> None:
+        super().__init__(enable_llm=True)
+
     def extract(self, document) -> list[KnowledgeUnit]:
         published_at = document.published_at
         return [
@@ -68,7 +81,32 @@ class StubExtractor(KnowledgeExtractor):
         ]
 
 
-def test_run_continuous_builds_knowledge_tables_and_backfills_legacy(tmp_path) -> None:
+class StubEmbeddingClient:
+    def __init__(self) -> None:
+        self.model = "test-embedding-3-small"
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        return [self._embed(text) for text in texts]
+
+    def _embed(self, text: str) -> list[float]:
+        lower = text.lower()
+        return [
+            float(len(lower)),
+            float(lower.count("xiaomi") + lower.count("\u5c0f\u7c73")),
+            float(lower.count("penalty") + lower.count("sanction") + lower.count("\u5904\u7f5a")),
+            float(lower.count("update") + lower.count("progress") + lower.count("\u66f4\u65b0")),
+        ]
+
+
+def build_index_builder(db_path: str) -> KnowledgeIndexBuilder:
+    return KnowledgeIndexBuilder(
+        knowledge_units=KnowledgeUnitRepository(db_path),
+        entities=EntityRepository(db_path),
+        embedding_client=StubEmbeddingClient(),
+    )
+
+
+def test_run_continuous_builds_knowledge_tables_without_legacy_backfill(tmp_path) -> None:
     db_path = tmp_path / "news.db"
     seed_articles(str(db_path))
 
@@ -78,6 +116,7 @@ def test_run_continuous_builds_knowledge_tables_and_backfills_legacy(tmp_path) -
         incremental=True,
         db_path=str(db_path),
         extractor=StubExtractor(),
+        index_builder=build_index_builder(str(db_path)),
     )
     result = pipeline.run()
 
@@ -85,14 +124,17 @@ def test_run_continuous_builds_knowledge_tables_and_backfills_legacy(tmp_path) -
     assert result.knowledge_units_saved == 2
     assert result.entities_saved >= 1
     assert result.clusters_saved >= 1
+    assert result.particles_extracted == 2
     assert result.particles_saved == 2
+    assert len(result.particles) == 2
 
     connection = sqlite3.connect(db_path)
     try:
         ku_count = connection.execute("SELECT COUNT(*) FROM knowledge_units").fetchone()[0]
+        fts_count = connection.execute("SELECT COUNT(*) FROM knowledge_units_fts").fetchone()[0]
+        embedding_count = connection.execute("SELECT COUNT(*) FROM knowledge_unit_embeddings").fetchone()[0]
         entity_count = connection.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
         cluster_count = connection.execute("SELECT COUNT(*) FROM event_clusters").fetchone()[0]
-        legacy_count = connection.execute("SELECT COUNT(*) FROM intelligence_particles").fetchone()[0]
         log_rows = connection.execute(
             "SELECT doc_id, status, knowledge_units_count FROM knowledge_processing_log ORDER BY doc_id"
         ).fetchall()
@@ -100,16 +142,17 @@ def test_run_continuous_builds_knowledge_tables_and_backfills_legacy(tmp_path) -
         connection.close()
 
     assert ku_count == 2
+    assert fts_count == 2
+    assert embedding_count == 2
     assert entity_count >= 1
     assert cluster_count >= 1
-    assert legacy_count == 2
     assert [(row[0], row[1], row[2]) for row in log_rows] == [
         ("doc-1", "success", 1),
         ("doc-2", "success", 1),
     ]
 
 
-def test_run_pipeline_can_consume_backfilled_legacy_particles(tmp_path, monkeypatch) -> None:
+def test_run_pipeline_queries_new_knowledge_store(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "data" / "news.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     seed_articles(str(db_path))
@@ -120,6 +163,74 @@ def test_run_pipeline_can_consume_backfilled_legacy_particles(tmp_path, monkeypa
         incremental=True,
         db_path=str(db_path),
         extractor=StubExtractor(),
+        index_builder=build_index_builder(str(db_path)),
+    )
+    pipeline.run()
+    entity_repo = EntityRepository(str(db_path))
+    entities = entity_repo.get_all()
+    for entity in entities:
+        if entity.canonical_name == "Xiaomi Group" and "小米集团" not in entity.aliases:
+            entity.aliases.append("小米集团")
+    entity_repo.save_batch(entities)
+
+    class FakeIntentClassifier:
+        def parse(self, raw_query: str) -> StructuredQuery:
+            return StructuredQuery(
+                intent=IntentType.ENTITY_TIMELINE,
+                entities=["Xiaomi Group"],
+                time_range=None,
+                filters=QueryFilters(),
+                original_query=raw_query,
+            )
+
+    import src.intent
+    import src.orchestration.graph as graph_module
+
+    original_searcher_cls = graph_module.KnowledgeSearcher
+
+    class FakeKnowledgeSearcher:
+        def __init__(self) -> None:
+            self._searcher = original_searcher_cls(
+                db_path=str(db_path),
+                embedding_client=StubEmbeddingClient(),
+            )
+
+        def search(self, request):
+            return self._searcher.search(request)
+
+        def search_articles(self, articles, request):
+            return self._searcher.search_articles(articles, request)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(src.intent, "IntentClassifier", FakeIntentClassifier)
+    monkeypatch.setattr(graph_module, "IntentClassifier", FakeIntentClassifier)
+    monkeypatch.setattr(graph_module, "KnowledgeSearcher", FakeKnowledgeSearcher)
+
+    result = run_pipeline(raw_query="Show the Xiaomi Group timeline")
+
+    assert result["source"] == "knowledge_base"
+    assert result["query"]["entities"] == ["Xiaomi Group"]
+    assert len(result["knowledge_units"]) >= 1
+    assert len(result["entities"]) >= 1
+    assert result["retrieval"]["retrieval_mode"] == "hybrid"
+    assert result["retrieval"]["bm25_count"] >= 1
+    assert result["retrieval"]["vector_count"] >= 1
+    assert result["timeline_data"]["entity"] == "Xiaomi Group"
+    assert result["timeline_data"]["timeline"]["total_events"] >= 1
+
+
+def test_run_pipeline_falls_back_to_bm25_without_embedding_config(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "data" / "news.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    seed_articles(str(db_path))
+
+    pipeline = ContinuousPipeline(
+        batch_size=10,
+        graph_enabled=False,
+        incremental=True,
+        db_path=str(db_path),
+        extractor=StubExtractor(),
+        index_builder=build_index_builder(str(db_path)),
     )
     pipeline.run()
 
@@ -133,48 +244,137 @@ def test_run_pipeline_can_consume_backfilled_legacy_particles(tmp_path, monkeypa
                 original_query=raw_query,
             )
 
-    class FakeMasterAgent:
-        def __init__(self, graph_enabled: bool = False):
-            self.graph_enabled = graph_enabled
-
-        def generate_timeline(self, entity: str, particles):
-            events = [
-                {
-                    "date": particle.event_time.isoformat(),
-                    "event_type": particle.event_type.value,
-                    "description": particle.risk_signal.description,
-                    "risk_level": particle.risk_level.value,
-                    "source_ids": particle.source_doc_ids,
-                    "particle_id": particle.id,
-                }
-                for particle in particles
-                if entity in particle.risk_signal.description
-                or any(entity in source_id for source_id in particle.source_doc_ids)
-            ]
-            return {
-                "entity": entity,
-                "events": events,
-                "total_events": len(events),
-                "time_range": {
-                    "start": events[-1]["date"] if events else None,
-                    "end": events[0]["date"] if events else None,
-                },
-            }
-
     import src.intent
-    import src.orchestration.nodes as nodes_module
+    import src.orchestration.graph as graph_module
 
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("OPENAI_EMBEDDING_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(src.intent, "IntentClassifier", FakeIntentClassifier)
-    monkeypatch.setattr(nodes_module, "MasterAgent", FakeMasterAgent)
+    monkeypatch.setattr(graph_module, "IntentClassifier", FakeIntentClassifier)
+
+    result = run_pipeline(raw_query="Show the Xiaomi Group timeline")
+
+    assert result["source"] == "knowledge_base"
+    assert result["retrieval"]["retrieval_mode"] == "bm25_only"
+    assert result["retrieval"]["bm25_count"] >= 1
+    assert result["retrieval"]["vector_count"] == 0
+    assert len(result["knowledge_units"]) >= 1
+
+
+def test_run_pipeline_returns_transient_entities_for_direct_articles(monkeypatch) -> None:
+    class FakeIntentClassifier:
+        def parse(self, raw_query: str) -> StructuredQuery:
+            return StructuredQuery(
+                intent=IntentType.ENTITY_TIMELINE,
+                entities=["Xiaomi Group"],
+                time_range=None,
+                filters=QueryFilters(),
+                original_query=raw_query,
+            )
+
+    import src.intent
+    import src.orchestration.graph as graph_module
+
+    original_searcher_cls = graph_module.KnowledgeSearcher
+
+    class FakeKnowledgeSearcher:
+        def __init__(self) -> None:
+            self._searcher = original_searcher_cls(
+                extractor=StubExtractor(),
+                embedding_client=StubEmbeddingClient(),
+            )
+
+        def search(self, request):
+            return self._searcher.search(request)
+
+        def search_articles(self, articles, request):
+            return self._searcher.search_articles(articles, request)
+
+    monkeypatch.setattr(src.intent, "IntentClassifier", FakeIntentClassifier)
+    monkeypatch.setattr(graph_module, "IntentClassifier", FakeIntentClassifier)
+    monkeypatch.setattr(graph_module, "KnowledgeSearcher", FakeKnowledgeSearcher)
 
     result = run_pipeline(
         raw_query="Show the Xiaomi Group timeline",
+        articles=[
+            {
+                "doc_id": "doc-1",
+                "title": "Xiaomi Group receives a regulatory penalty",
+                "content": "Xiaomi Group received a regulatory penalty and started remediation.",
+                "publish_time": "2026-04-01T09:00:00+00:00",
+                "source_name": "test-source",
+                "source_type": "news",
+                "category": "company",
+                "raw_tags": [],
+            }
+        ],
+    )
+
+    assert result["source"] == "direct_articles"
+    assert len(result["knowledge_units"]) == 1
+    assert len(result["entities"]) == 1
+    assert len(result["event_clusters"]) == 1
+    assert result["retrieval"]["retrieval_mode"] == "hybrid"
+    assert result["entities"][0]["entity_id"] == result["knowledge_units"][0]["entities"][0]["entity_id"]
+    assert result["event_clusters"][0]["cluster_id"] == result["knowledge_units"][0]["cluster_id"]
+
+
+def test_run_pipeline_omits_graph_edges_when_disabled(monkeypatch) -> None:
+    class FakeIntentClassifier:
+        def parse(self, raw_query: str) -> StructuredQuery:
+            return StructuredQuery(
+                intent=IntentType.ENTITY_TIMELINE,
+                entities=["Xiaomi Group"],
+                time_range=None,
+                filters=QueryFilters(),
+                original_query=raw_query,
+            )
+
+    import src.intent
+    import src.orchestration.graph as graph_module
+
+    original_searcher_cls = graph_module.KnowledgeSearcher
+
+    class FakeKnowledgeSearcher:
+        def __init__(self) -> None:
+            self._searcher = original_searcher_cls(
+                extractor=StubExtractor(),
+                embedding_client=StubEmbeddingClient(),
+            )
+
+        def search(self, request):
+            return self._searcher.search(request)
+
+        def search_articles(self, articles, request):
+            return self._searcher.search_articles(articles, request)
+
+    monkeypatch.setattr(src.intent, "IntentClassifier", FakeIntentClassifier)
+    monkeypatch.setattr(graph_module, "IntentClassifier", FakeIntentClassifier)
+    monkeypatch.setattr(graph_module, "KnowledgeSearcher", FakeKnowledgeSearcher)
+
+    result = run_pipeline(
+        raw_query="Show the Xiaomi Group timeline",
+        articles=[
+            {
+                "doc_id": "doc-1",
+                "title": "Xiaomi Group receives a regulatory penalty",
+                "content": "Xiaomi Group received a regulatory penalty and started remediation.",
+                "publish_time": "2026-04-01T09:00:00+00:00",
+                "source_name": "test-source",
+                "source_type": "news",
+                "category": "company",
+                "raw_tags": [],
+            }
+        ],
         graph_enabled=False,
     )
 
-    assert result["timeline_data"]["entity"] == "Xiaomi Group"
-    assert result["timeline_data"]["timeline"]["total_events"] >= 1
+    assert result["graph"]["enabled"] is False
+    assert result["graph"]["edges"] == []
+    assert len(result["knowledge_units"]) == 1
+    assert len(result["entities"]) == 1
+    assert len(result["event_clusters"]) == 1
 
 
 def test_run_continuous_reuses_stable_knowledge_ids_on_rebuild(tmp_path) -> None:
@@ -187,6 +387,7 @@ def test_run_continuous_reuses_stable_knowledge_ids_on_rebuild(tmp_path) -> None
         incremental=False,
         db_path=str(db_path),
         extractor=StubExtractor(),
+        index_builder=build_index_builder(str(db_path)),
     )
 
     first = pipeline.run()
@@ -198,12 +399,10 @@ def test_run_continuous_reuses_stable_knowledge_ids_on_rebuild(tmp_path) -> None
     connection = sqlite3.connect(db_path)
     try:
         ku_count = connection.execute("SELECT COUNT(*) FROM knowledge_units").fetchone()[0]
-        legacy_count = connection.execute("SELECT COUNT(*) FROM intelligence_particles").fetchone()[0]
     finally:
         connection.close()
 
     assert ku_count == 2
-    assert legacy_count == 2
 
 
 def test_graph_sync_failure_keeps_documents_retryable(tmp_path) -> None:
@@ -232,6 +431,7 @@ def test_graph_sync_failure_keeps_documents_retryable(tmp_path) -> None:
         incremental=True,
         db_path=str(db_path),
         extractor=StubExtractor(),
+        index_builder=build_index_builder(str(db_path)),
     )
     pipeline.graph_sync = KnowledgeGraphSync(connection=FailingConnection())
 
@@ -251,3 +451,163 @@ def test_graph_sync_failure_keeps_documents_retryable(tmp_path) -> None:
         ("doc-1", "failed", "neo4j unavailable"),
         ("doc-2", "failed", "neo4j unavailable"),
     ]
+
+
+def test_index_failure_does_not_make_persisted_documents_retryable(tmp_path) -> None:
+    class FailingIndexBuilder:
+        def build_for_units(self, units: list[KnowledgeUnit]) -> int:
+            raise RuntimeError("embedding API unavailable")
+
+    db_path = tmp_path / "news.db"
+    seed_articles(str(db_path))
+
+    pipeline = ContinuousPipeline(
+        batch_size=10,
+        graph_enabled=False,
+        incremental=True,
+        db_path=str(db_path),
+        extractor=StubExtractor(),
+        index_builder=FailingIndexBuilder(),
+    )
+
+    first = pipeline.run()
+    second = pipeline.run()
+
+    assert "[index] embedding API unavailable" in first.errors
+    assert second.knowledge_units_extracted == 0
+
+    connection = sqlite3.connect(db_path)
+    try:
+        log_rows = connection.execute(
+            "SELECT doc_id, status, error_message FROM knowledge_processing_log ORDER BY doc_id"
+        ).fetchall()
+    finally:
+        connection.close()
+
+    assert [(row[0], row[1], row[2]) for row in log_rows] == [
+        ("doc-1", "success", "embedding API unavailable"),
+        ("doc-2", "success", "embedding API unavailable"),
+    ]
+
+
+def test_run_pipeline_supplements_entities_and_time_range_when_llm_response_is_incomplete(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    chinese_alias = "\u5c0f\u7c73\u96c6\u56e2"
+    chinese_query = "\u67e5\u770b\u5c0f\u7c73\u96c6\u56e2\u8fc7\u53bb\u4e00\u5e74\u505a\u7684\u4e8b\u60c5"
+    db_path = tmp_path / "data" / "news.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    seed_articles(str(db_path))
+
+    pipeline = ContinuousPipeline(
+        batch_size=10,
+        graph_enabled=False,
+        incremental=True,
+        db_path=str(db_path),
+        extractor=StubExtractor(),
+        index_builder=build_index_builder(str(db_path)),
+    )
+    pipeline.run()
+    entity_repo = EntityRepository(str(db_path))
+    entities = entity_repo.get_all()
+    for entity in entities:
+        if entity.canonical_name == "Xiaomi Group" and chinese_alias not in entity.aliases:
+            entity.aliases.append(chinese_alias)
+    entity_repo.save_batch(entities)
+
+    class FallbackIntentClassifier:
+        def parse(self, raw_query: str) -> StructuredQuery:
+            from src.entities import EntityRepository
+            from src.intent.classifier import IntentClassifier
+
+            classifier = IntentClassifier(entity_repository=EntityRepository(str(db_path)))
+            classifier._call_llm = lambda query: {  # type: ignore[method-assign]
+                "intent": "ENTITY_TIMELINE",
+                "entities": [],
+                "time_expression": "",
+                "filters": {},
+                "confidence": 0.1,
+            }
+            original_parse_time_range = classifier.parse_time_range
+            classifier.parse_time_range = lambda expression, ref=None: original_parse_time_range(  # type: ignore[method-assign]
+                expression,
+                ref=datetime(2026, 4, 4, tzinfo=UTC).date(),
+            )
+            return classifier.parse(raw_query)
+
+    import src.intent
+    import src.orchestration.graph as graph_module
+
+    original_searcher_cls = graph_module.KnowledgeSearcher
+
+    class FakeKnowledgeSearcher:
+        def __init__(self) -> None:
+            self._searcher = original_searcher_cls(
+                db_path=str(db_path),
+                embedding_client=StubEmbeddingClient(),
+            )
+
+        def search(self, request):
+            return self._searcher.search(request)
+
+        def search_articles(self, articles, request):
+            return self._searcher.search_articles(articles, request)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(src.intent, "IntentClassifier", FallbackIntentClassifier)
+    monkeypatch.setattr(graph_module, "IntentClassifier", FallbackIntentClassifier)
+    monkeypatch.setattr(graph_module, "KnowledgeSearcher", FakeKnowledgeSearcher)
+
+    result = run_pipeline(raw_query=chinese_query, graph_enabled=False)
+
+    assert result["query"]["entities"] == ["Xiaomi Group"]
+    assert result["query"]["time_range"] == {
+        "start": "2025-04-04",
+        "end": "2026-04-04",
+    }
+    assert len(result["knowledge_units"]) >= 1
+
+
+def test_run_continuous_graph_sync_serializes_entity_identifiers(tmp_path) -> None:
+    class RecordingSession:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict]] = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def run(self, query: str, **params):
+            self.calls.append((query, params))
+            return None
+
+    class RecordingConnection:
+        def __init__(self, session: RecordingSession) -> None:
+            self._session = session
+
+        def session(self):
+            return self._session
+
+    db_path = tmp_path / "news.db"
+    seed_articles(str(db_path))
+    session = RecordingSession()
+
+    pipeline = ContinuousPipeline(
+        batch_size=10,
+        graph_enabled=True,
+        incremental=True,
+        db_path=str(db_path),
+        extractor=StubExtractor(),
+        index_builder=build_index_builder(str(db_path)),
+    )
+    pipeline.graph_sync = KnowledgeGraphSync(connection=RecordingConnection(session))
+
+    result = pipeline.run()
+
+    assert result.errors == []
+    entity_write = next(params for query, params in session.calls if "MERGE (e:Entity {id: $id})" in query)
+    assert "identifiers_json" in entity_write
+    assert isinstance(entity_write["identifiers_json"], str)

@@ -20,11 +20,11 @@
 | 层级 | 状态 | 完成度 | 说明 |
 |------|------|--------|------|
 | 1. 原始文档接入 | ✅ 已完成 | 100% | SQLite 文档存储、测试数据与增量读取已具备 |
-| 2. 文档知识化抽取 | ⚠️ 迁移中 | 70% | `run_continuous()` 已切到 `RawDocument -> KnowledgeUnit` 新主线，抽取仍以启发式/最小 LLM 契约为主 |
+| 2. 文档知识化抽取 | ⚠️ 迁移中 | 70% | `run_continuous()` 已切到 `RawDocument -> KnowledgeUnit` 新主线，默认采用 fail-fast 抽取，不再因未配置或异常静默回退到启发式 |
 | 3. 实体与事件归一 | ⚠️ 迁移中 | 65% | 已新增 `Entity` / `EventCluster` 保守归一与归并，但规则仍需继续增强 |
-| 4. 检索层 | ⚠️ 部分实现 | 40% | 基础过滤和回退已实现，正式 BM25/向量/统一重排仍缺失 |
-| 5. 图谱层 | ⚠️ 迁移中 | 65% | 新离线路径已同步 `Entity + EventCluster + INVOLVED_IN`，旧查询层仍保留风险导向实现 |
-| 6. 任务消费层 | ⚠️ 暂保留 | 30% | 现有 `run_pipeline()` 可运行，但属于旧风险导向消费逻辑 |
+| 4. 检索层 | ✅ 主线可用 | 85% | `run_pipeline()` 已切到混合检索主线，`KnowledgeUnit` FTS + 向量索引、融合排序、统一检索元数据与 `Entity` / `EventCluster` 检索入口已落地 |
+| 5. 图谱层 | ⚠️ 迁移中 | 70% | 新离线路径已同步 `Entity + EventCluster + INVOLVED_IN`，图谱默认开启 |
+| 6. 消费层 | ✅ 已移除旧链路 | 100% | 不再兼容旧风险导向消费链路，入口直接面向知识检索 |
 
 ---
 
@@ -39,31 +39,32 @@
 ### 双模式骨架
 - [x] `run_continuous()` 离线流水线入口
 - [x] `run_pipeline()` 任务入口
-- [x] LangGraph 编排骨架
 - [x] 阶段状态与错误追踪
 
 ### 抽取与图谱基础设施
-- [x] Worker Agent 结构化抽取能力
-- [x] Integrator Agent 图谱同步能力
+- [x] `KnowledgeExtractor` LLM 结构化抽取能力
+- [x] `KnowledgeGraphSync` 图谱同步能力
 - [x] Neo4j 连接管理
 - [x] 基础 Cypher 查询模板
 
 ### 基础检索
 - [x] 文章检索器骨架
 - [x] 结构化过滤基础能力
-- [x] 微粒到文章的回退机制
+- [x] `KnowledgeUnit` / `Entity` / `EventCluster` 统一检索入口骨架
 
 ### 测试与工程
 - [x] 单元测试与集成测试骨架
 - [x] `uv` 环境与依赖管理
 - [x] `pyright` 类型检查接入
 - [x] `uv` 本地缓存目录固定为仓库内 `.uv-cache/`，避免用户目录缓存异常影响 `uv run`
+- [x] `pytest` 缓存与临时目录固定到仓库内 `.tmp/`，避免在项目根生成随机 `pytest-cache-files-*` 临时目录
+- [x] 建立项目级临时文件治理规则，并提供仓库内统一清理脚本，避免 pytest/Codex 调试产物污染项目根目录
 
 ---
 
 ## 明确需要迁移或降级的旧设计
 
-以下内容仍存在于代码中，但不再代表目标架构：
+以下内容已明确降级为非主线设计，不再允许继续扩展：
 
 - [ ] `IntelligenceParticle` 作为核心数据契约
 - [ ] `risk_signal` 作为抽取层强制中心字段
@@ -92,7 +93,9 @@
 - [x] 将新离线路径的 Integrator 职责迁移为实体标准化、事件归并、图谱更新
 - [ ] 建立冲突保留与多来源聚合逻辑
 - [x] 建立可追踪的离线知识化状态记录
-- [x] 修复知识化主线稳定性问题：`ku_id` 可重放、图同步失败可重试、legacy 回填仅保留明确可映射事件
+- [x] 修复知识化主线稳定性问题：`ku_id` 可重放、图同步失败可重试
+- [x] 收紧抽取策略：`KnowledgeUnit` 抽取默认 fail-fast，禁止因未配置或异常静默回退到启发式
+- [x] 移除 legacy 回填：离线主线不再写入 `intelligence_particles`
 
 ### 图谱与 GraphRAG
 - [x] 按 `Entity + EventCluster` 重构新离线路径图谱主模型
@@ -100,12 +103,18 @@
 - [ ] 让图谱成为正式可检索产物
 - [x] 保证图结果可回溯到底层 `KnowledgeUnit`
 
+### 消费链路清理
+- [x] 删除 `heuristic` 抽取回退，抽取失败直接报错
+- [x] 统一实体模块最终命名，移除 `entities_v2`
+- [x] 让 `run_pipeline()` 直接面向知识检索，不再兼容旧消费链路
+- [x] 图谱默认开启
+
 ### 检索系统
-- [ ] 建立 `KnowledgeUnit` 稀疏索引
-- [ ] 建立 `KnowledgeUnit` 向量索引
-- [ ] 建立 `Entity` 与 `EventCluster` 检索入口
-- [ ] 定义统一检索返回契约
-- [ ] 实现 BM25 / 向量检索 / 融合排序
+- [x] 建立 `KnowledgeUnit` 稀疏索引
+- [x] 建立 `KnowledgeUnit` 向量索引
+- [x] 建立 `Entity` 与 `EventCluster` 检索入口
+- [x] 定义统一检索返回契约
+- [x] 实现 BM25 / 向量检索 / 融合排序
 
 ---
 
@@ -140,7 +149,7 @@ from dotenv import load_dotenv
 load_dotenv()
 from src.pipeline import run_continuous
 
-result = run_continuous(graph_enabled=False)
+result = run_continuous(graph_enabled=True)
 print(result)
 "
 ```
@@ -153,7 +162,7 @@ from src.orchestration import run_pipeline
 
 result = run_pipeline(
     raw_query='查看小米集团过去一年做的事情',
-    graph_enabled=False,
+    graph_enabled=True,
 )
 print(result)
 "
@@ -162,16 +171,34 @@ print(result)
 说明：
 
 - 上述入口当前仍可运行
-- 但 `run_pipeline()` 代表的是迁移期旧消费层，不代表项目最终目标形态
-- 当前研发重点应优先放在 `run_continuous()` 驱动的离线知识化建库
+- `run_pipeline()` 已直接返回知识检索结果，不再兼容旧风险消费链路
+- 图谱默认开启；显式传 `graph_enabled=False` 仅用于调试或测试
 
 ---
 
 ## 相关文档
 
+- [docs/STATUS_OVERVIEW.md](docs/STATUS_OVERVIEW.md) - 当前实现进度与可见结果总览
 - [docs/SHARED_RULES.md](docs/SHARED_RULES.md) - 项目共享规范真源
 - [README.md](README.md) - 项目入口说明
 - [AGENTS.md](AGENTS.md) - Codex 入口
 - [CLAUDE.md](CLAUDE.md) - Claude Code 入口
 
 项目级规则统一以 `docs/SHARED_RULES.md` 为准。
+
+---
+
+## 2026-04-04 Fix Update
+
+- Graph sync is now usable again: `KnowledgeGraphSync` no longer writes Neo4j map properties for entity identifiers, and writes `primary_identifier` plus `identifiers_json` instead.
+- Intent parsing is more stable: `IntentClassifier` now adds deterministic post-processing for time expressions and entity supplementation from the local entity repository when the LLM response is incomplete.
+- Retrieval matching is more stable: `KnowledgeSearcher` now matches entity filters through normalized canonical names plus aliases instead of raw string contains only.
+- Retrieval is now formally indexed: `KnowledgeUnitRepository` maintains SQLite FTS5 rows, stores persisted embeddings, and supports BM25 query plus filtered embedding hydration.
+- Hybrid retrieval is now live: `KnowledgeSearcher` executes BM25 + vector recall with reciprocal rank fusion, returns retrieval metadata, and keeps `run_pipeline()` compatibility output stable.
+- `run_pipeline()` now degrades to BM25-only retrieval when embedding credentials are absent, instead of failing the default knowledge-base query path.
+- Offline indexing is now part of the mainline: `ContinuousPipeline` builds embeddings after each batch, and `rebuild_knowledge_indexes()` can backfill FTS plus embeddings for existing knowledge bases.
+- Offline processing logs now keep successfully persisted documents in `success` state when only embedding index post-processing fails, avoiding repeated incremental re-extraction.
+- Windows pytest temp handling is stabilized for this repo test suite by replacing direct `tmp_path` usage with a repo-local temp fixture and disabling the cacheprovider plugin for test runs.
+- Regression checks passed after the fix:
+  - `uv run pytest`
+  - `uv run pyright .`
