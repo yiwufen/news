@@ -1,5 +1,7 @@
 # 意图解析与检索层规范
 
+> 项目级规则以 `docs/SHARED_RULES.md` 为准；本文件保留 Claude 侧专题规范。
+
 ## 1. 意图类型枚举 (Intent Types)
 
 | 意图类型 | 说明 | 示例查询 |

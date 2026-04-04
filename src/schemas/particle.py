@@ -2,7 +2,7 @@
 情报微粒 Schema 定义
 
 核心数据契约，Worker Agent 输出的结构化情报。
-严格按照 CLAUDE.md 和规则文件定义。
+严格按照 docs/SHARED_RULES.md 中的共享规范定义。
 """
 
 from __future__ import annotations

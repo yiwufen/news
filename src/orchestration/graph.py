@@ -56,7 +56,7 @@ def route_by_intent(state: PipelineContext) -> Literal[
 def should_retry(state: PipelineContext) -> Literal["retry", "final"]:
     """判断是否需要重试
 
-    按 CLAUDE.md 规定，max_retries = 2。
+    按共享规范（docs/SHARED_RULES.md）规定，max_retries = 2。
 
     Args:
         state: 流水线上下文

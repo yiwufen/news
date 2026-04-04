@@ -1,5 +1,7 @@
 # Agent System Prompt 模板
 
+> 项目级规则以 `docs/SHARED_RULES.md` 为准；本文件仅保留 Claude 侧 Prompt 模板。
+
 ## 1. Worker Agent (The Extractor)
 
 ```

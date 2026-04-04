@@ -1,5 +1,7 @@
 # 金融语义标准
 
+> 项目级规则以 `docs/SHARED_RULES.md` 为准；本文件保留 Claude 需要的专题规则摘录。
+
 ## 1. 事件类型 (risk_signal.type) 强制枚举
 
 | 类型 | 说明 | 触发条件 |

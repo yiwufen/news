@@ -251,8 +251,16 @@ print(f'检索到 {result.total_count} 个情报微粒')
 
 ## 相关文档
 
-- [CLAUDE.md](CLAUDE.md) - 项目架构与开发规则
+- [docs/SHARED_RULES.md](docs/SHARED_RULES.md) - 项目共享规范真源
+- [AGENTS.md](AGENTS.md) - Codex 入口
+- [CLAUDE.md](CLAUDE.md) - Claude Code 入口
 - [.claude/rules/01-taxonomy.md](.claude/rules/01-taxonomy.md) - 金融语义标准
 - [.claude/rules/02-prompts.md](.claude/rules/02-prompts.md) - Agent Prompt 模板
 - [.claude/rules/03-risk-logic.md](.claude/rules/03-risk-logic.md) - 风险传导算法
 - [.claude/rules/04-intent-retrieval.md](.claude/rules/04-intent-retrieval.md) - 意图解析与检索规范
+
+## 规范入口说明
+
+- 项目级规则统一以 `docs/SHARED_RULES.md` 为准
+- `AGENTS.md` 和 `CLAUDE.md` 仅作为各自 agent 的入口文件，不再重复维护完整项目规范
+- 共享规范已补充图谱关系边 `valid_from` 时间戳约束，继续与现有实现保持一致
