@@ -31,6 +31,13 @@
 
 当前主线已经切到知识底座：`run_continuous()` 负责离线知识化建库，`run_pipeline()` 直接检索 `KnowledgeUnit` / `Entity` / `EventCluster`。旧的风险导向消费链路不再作为默认实现维护。
 
+当前检索主线已包含：
+
+- `KnowledgeUnit` FTS 稀疏索引
+- `KnowledgeUnit` embedding 向量索引
+- BM25 / 向量召回与融合排序
+- 旧 SQLite 库的检索物化状态自愈：仓库打开时会自动回填缺失的 `entity_ids` 并重建缺失的 FTS 行，避免出现“图里有实体、知识库检索为空”的状态漂移
+
 ## 开发命令
 
 ```bash
@@ -48,8 +55,9 @@ uv run pyright .
 
 ```bash
 uv run python -c "
+from pathlib import Path
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(dotenv_path=Path('.env'))
 from src.pipeline import run_continuous
 
 result = run_continuous(graph_enabled=True)
@@ -61,8 +69,9 @@ print(result)
 
 ```bash
 uv run python -c "
+from pathlib import Path
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(dotenv_path=Path('.env'))
 from src.orchestration import run_pipeline
 
 result = run_pipeline(
@@ -78,6 +87,8 @@ print(result)
 - `run_continuous()` 是当前阶段的重点入口
 - `run_pipeline()` 直接检索 `KnowledgeUnit` / `Entity` / `EventCluster`
 - 图谱默认开启
+- 若未配置 `ANTHROPIC_API_KEY`，`run_pipeline()` 的意图解析会按 fail-fast 约束直接失败
+- 若未配置 embedding 凭据，`run_pipeline()` 会退化到 BM25-only 检索，而不会让默认知识库查询路径整体失败
 
 ## 协作约定
 

@@ -197,6 +197,7 @@ print(result)
 - Retrieval is now formally indexed: `KnowledgeUnitRepository` maintains SQLite FTS5 rows, stores persisted embeddings, and supports BM25 query plus filtered embedding hydration.
 - Hybrid retrieval is now live: `KnowledgeSearcher` executes BM25 + vector recall with reciprocal rank fusion, returns retrieval metadata, and keeps `run_pipeline()` compatibility output stable.
 - `run_pipeline()` now degrades to BM25-only retrieval when embedding credentials are absent, instead of failing the default knowledge-base query path.
+- README and `docs/STATUS_OVERVIEW.md` are now aligned with the current code path: they no longer describe BM25 / vector / fusion retrieval as unfinished, and the inline run examples now use explicit `.env` loading to match actual execution behavior.
 - Offline indexing is now part of the mainline: `ContinuousPipeline` builds embeddings after each batch, and `rebuild_knowledge_indexes()` can backfill FTS plus embeddings for existing knowledge bases.
 - Offline processing logs now keep successfully persisted documents in `success` state when only embedding index post-processing fails, avoiding repeated incremental re-extraction.
 - Windows pytest temp handling is stabilized for this repo test suite by replacing direct `tmp_path` usage with a repo-local temp fixture and disabling the cacheprovider plugin for test runs.

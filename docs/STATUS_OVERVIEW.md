@@ -32,7 +32,8 @@
 | 事件归并 | 主线可用 | 可看到 `event_clusters` 表和事件簇结果 |
 | 图谱同步 | 主线可用 | 可看到 graph sync 节点/边计数 |
 | 检索入口 | 主线可用 | `run_pipeline()` 直接返回知识检索结果 |
-| BM25 / 向量 / 融合排序 | 未完成 | 当前还是知识库直查与简单排序 |
+| BM25 / 向量 / 融合排序 | 主线可用 | 已有 `knowledge_units_fts`、`knowledge_unit_embeddings`、混合召回与融合排序元数据 |
+| 检索物化状态自愈 | 主线可用 | 旧 SQLite 库会在打开 `KnowledgeUnitRepository` 时自动回填 `entity_ids` 并重建缺失 FTS 行 |
 
 ## 现在可以直接运行的内容
 
@@ -40,8 +41,9 @@
 
 ```bash
 uv run python -c "
+from pathlib import Path
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(dotenv_path=Path('.env'))
 from src.pipeline import run_continuous
 
 result = run_continuous(graph_enabled=True)
@@ -67,8 +69,9 @@ print(result)
 
 ```bash
 uv run python -c "
+from pathlib import Path
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(dotenv_path=Path('.env'))
 from src.orchestration import run_pipeline
 
 result = run_pipeline(
@@ -98,6 +101,7 @@ print(result)
 
 - `run_pipeline()` 的意图解析当前依赖 LLM 配置
 - 若未配置 `ANTHROPIC_API_KEY`，入口会直接失败，这符合当前 fail-fast 开发约束
+- 若未配置 embedding 凭据，检索会退化到 BM25-only 模式；这是当前默认的可接受降级，而不是失败
 
 ## 现在能直接查看的数据结果
 
@@ -145,6 +149,22 @@ conn.close()
 "
 ```
 
+### 4. 查看索引和物化状态是否正常
+
+```bash
+uv run python -c "
+import sqlite3
+conn = sqlite3.connect('data/news.db')
+print('knowledge_units', conn.execute('SELECT COUNT(*) FROM knowledge_units').fetchone()[0])
+print('knowledge_units_fts', conn.execute('SELECT COUNT(*) FROM knowledge_units_fts').fetchone()[0])
+print('knowledge_unit_embeddings', conn.execute('SELECT COUNT(*) FROM knowledge_unit_embeddings').fetchone()[0])
+print('knowledge_units_with_entity_ids', conn.execute(\"SELECT COUNT(*) FROM knowledge_units WHERE entity_ids != '[]'\").fetchone()[0])
+conn.close()
+"
+```
+
+如果 `knowledge_units > 0`，但 `knowledge_units_fts = 0` 或 `knowledge_units_with_entity_ids = 0`，说明你看到的是旧库物化状态。当前代码会在仓库初始化时自动修复，但排查时仍建议先确认这组指标。
+
 ## 结果怎么看
 
 如果你只是想判断“项目现在有没有跑起来”，看下面这几个信号就够了：
@@ -159,11 +179,13 @@ conn.close()
 
 这些是下一阶段真正影响检索质量的能力：
 
-- `KnowledgeUnit` 稀疏索引
-- `KnowledgeUnit` 向量索引
-- BM25 / 向量 / 融合排序
 - 图谱作为正式检索产物参与统一召回
 - 面向 skill 的稳定统一检索契约
+
+说明：
+
+- `KnowledgeUnit` 稀疏索引、向量索引、BM25 / 向量 / 融合排序已经在主线落地
+- 当前真正未完成的是“图谱参与统一召回”和“面向 skill 的稳定统一检索契约”
 
 ## 推荐查看顺序
 
