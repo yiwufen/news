@@ -1,11 +1,13 @@
 """
-Entity + EventCluster 鍥捐氨鍚屾銆?"""
+Sync Entity and EventCluster views into Neo4j.
+"""
 
 from __future__ import annotations
 
+import json
 from typing import ContextManager, Protocol, TypedDict
 
-from src.entities_v2 import Entity
+from src.entities import Entity
 from src.event_clustering import EventCluster
 from src.graph.connection import get_connection
 
@@ -28,7 +30,7 @@ class GraphSyncStats(TypedDict):
 
 
 class KnowledgeGraphSync:
-    """鍚屾 Entity / EventCluster / INVOLVED_IN 鍥捐氨銆?"""
+    """Sync Entity / EventCluster / INVOLVED_IN into Neo4j."""
 
     def __init__(self, connection: GraphConnectionLike | None = None):
         self.connection = connection or get_connection()
@@ -61,7 +63,8 @@ class KnowledgeGraphSync:
                         SET e.name = $name,
                             e.entity_type = $entity_type,
                             e.aliases = $aliases,
-                            e.identifiers = $identifiers,
+                            e.primary_identifier = $primary_identifier,
+                            e.identifiers_json = $identifiers_json,
                             e.tags = $tags,
                             e.source_ku_ids = $source_ku_ids,
                             e.updated_at = $updated_at
@@ -70,7 +73,8 @@ class KnowledgeGraphSync:
                         name=entity.canonical_name,
                         entity_type=entity.entity_type,
                         aliases=entity.aliases,
-                        identifiers=entity.identifiers,
+                        primary_identifier=next(iter(entity.identifiers.values()), None),
+                        identifiers_json=json.dumps(entity.identifiers, ensure_ascii=False),
                         tags=entity.tags,
                         source_ku_ids=entity.source_ku_ids,
                         updated_at=entity.updated_at.isoformat(),

@@ -15,6 +15,15 @@ venv/
 
 # uv 本地缓存
 .uv-cache/
+.tmp/
+pytest-cache-files-*/
+tmp_pytest/
+tmp*/
+codex-pytest-temp/
+codex-pytest-review-*/
+codex_pytest_review_*/
+codex-manual-check/
+codex-manual-check-pipeline/
 
 # IDE
 .vscode/

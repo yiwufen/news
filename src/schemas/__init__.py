@@ -12,14 +12,6 @@ from src.schemas.enums import (
     classify_risk_score,
 )
 from src.schemas.graph import GraphEdge, GraphNode, GraphUpdates
-from src.schemas.particle import (
-    ExtractionResult,
-    IntelligenceParticle,
-    Metadata,
-    RiskSignal,
-    Traceability,
-    EXTRACTION_TOOL_SCHEMA,
-)
 
 __all__ = [
     # 枚举
@@ -32,11 +24,4 @@ __all__ = [
     "GraphNode",
     "GraphEdge",
     "GraphUpdates",
-    # 情报微粒
-    "IntelligenceParticle",
-    "Metadata",
-    "RiskSignal",
-    "Traceability",
-    "ExtractionResult",
-    "EXTRACTION_TOOL_SCHEMA",
 ]

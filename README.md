@@ -20,6 +20,7 @@
 ## 文档入口
 
 - 项目共享规范真源：[`docs/SHARED_RULES.md`](docs/SHARED_RULES.md)
+- 当前进度总览：[`docs/STATUS_OVERVIEW.md`](docs/STATUS_OVERVIEW.md)
 - 当前进度：[`PROGRESS.md`](PROGRESS.md)
 - Codex 入口：[`AGENTS.md`](AGENTS.md)
 - Claude Code 入口：[`CLAUDE.md`](CLAUDE.md)
@@ -28,9 +29,7 @@
 
 ## 当前状态
 
-仓库里仍保留一部分旧的风险导向实现，例如 `IntelligenceParticle`、`RiskReport` 和部分风险图查询逻辑。它们属于迁移期遗留实现，不再代表项目目标架构。
-
-当前研发重点应优先放在 `run_continuous()` 驱动的离线知识化建库，而不是继续扩展旧的风险分析消费链路。
+当前主线已经切到知识底座：`run_continuous()` 负责离线知识化建库，`run_pipeline()` 直接检索 `KnowledgeUnit` / `Entity` / `EventCluster`。旧的风险导向消费链路不再作为默认实现维护。
 
 ## 开发命令
 
@@ -53,7 +52,7 @@ from dotenv import load_dotenv
 load_dotenv()
 from src.pipeline import run_continuous
 
-result = run_continuous(graph_enabled=False)
+result = run_continuous(graph_enabled=True)
 print(result)
 "
 ```
@@ -68,7 +67,7 @@ from src.orchestration import run_pipeline
 
 result = run_pipeline(
     raw_query='查看小米集团过去一年做的事情',
-    graph_enabled=False,
+    graph_enabled=True,
 )
 print(result)
 "
@@ -77,7 +76,8 @@ print(result)
 说明：
 
 - `run_continuous()` 是当前阶段的重点入口
-- `run_pipeline()` 在迁移期仍可保留，但不代表项目最终产品形态
+- `run_pipeline()` 直接检索 `KnowledgeUnit` / `Entity` / `EventCluster`
+- 图谱默认开启
 
 ## 协作约定
 

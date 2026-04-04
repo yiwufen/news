@@ -1,22 +1,17 @@
 """
-PipelineContext 数据结构单元测试
-
-测试 QueryInput、StageOutput、PipelineContext 的核心功能。
+PipelineContext 数据结构单元测试。
 """
 
-from datetime import date, datetime, timedelta
-
-import pytest
+from datetime import date
 
 from src.intent.models import IntentType, QueryFilters, TimeRange
 from src.orchestration.state import PipelineContext, QueryInput, StageOutput
 
 
 class TestQueryInput:
-    """QueryInput 测试"""
+    """QueryInput 测试。"""
 
     def test_creation_with_defaults(self):
-        """测试默认值创建"""
         inp = QueryInput(raw_query="查看小米过去一年")
         assert inp.raw_query == "查看小米过去一年"
         assert inp.entities == []
@@ -24,27 +19,25 @@ class TestQueryInput:
         assert inp.intent is None
 
     def test_creation_with_all_fields(self):
-        """测试完整字段创建"""
         time_range = TimeRange(start=date(2025, 1, 1), end=date(2025, 12, 31))
-        filters = QueryFilters(event_types=["POLICY_SANCTION"])
+        filters = QueryFilters(event_types=["policy_sanction"])
 
         inp = QueryInput(
-            raw_query="查看小米过去一年的政策风险",
+            raw_query="查看小米过去一年的政策事件",
             entities=["小米集团"],
             time_range=time_range,
             intent=IntentType.ENTITY_TIMELINE,
             filters=filters,
         )
 
-        assert inp.raw_query == "查看小米过去一年的政策风险"
+        assert inp.raw_query == "查看小米过去一年的政策事件"
         assert inp.entities == ["小米集团"]
         assert inp.time_range is not None
         assert inp.time_range.start == date(2025, 1, 1)
         assert inp.intent == IntentType.ENTITY_TIMELINE
-        assert inp.filters.event_types == ["POLICY_SANCTION"]
+        assert inp.filters.event_types == ["policy_sanction"]
 
     def test_to_dict(self):
-        """测试字典转换"""
         time_range = TimeRange(start=date(2025, 1, 1), end=date(2025, 12, 31))
         inp = QueryInput(
             raw_query="测试查询",
@@ -61,10 +54,9 @@ class TestQueryInput:
 
 
 class TestStageOutput:
-    """StageOutput 测试"""
+    """StageOutput 测试。"""
 
     def test_success_output(self):
-        """测试成功输出"""
         output = StageOutput(
             stage_name="retrieval",
             success=True,
@@ -79,7 +71,6 @@ class TestStageOutput:
         assert output.errors == []
 
     def test_failure_output(self):
-        """测试失败输出"""
         output = StageOutput(
             stage_name="intent_parse",
             success=False,
@@ -91,17 +82,14 @@ class TestStageOutput:
         assert "无用户查询" in output.errors
 
     def test_factory_methods(self):
-        """测试工厂方法"""
-        # success 工厂方法
         success_output = StageOutput.ok(
-            stage_name="master",
-            data={"risk_level": "HIGH"},
+            stage_name="summary",
+            data={"total_count": 10},
             duration_ms=500,
         )
         assert success_output.success is True
-        assert success_output.data["risk_level"] == "HIGH"
+        assert success_output.data["total_count"] == 10
 
-        # failure 工厂方法
         failure_output = StageOutput.failure(
             stage_name="critic",
             errors=["核查失败"],
@@ -110,11 +98,10 @@ class TestStageOutput:
         assert failure_output.errors == ["核查失败"]
 
     def test_to_dict(self):
-        """测试字典转换"""
         output = StageOutput(
             stage_name="worker",
             success=True,
-            data={"particles": []},
+            data={"knowledge_units": []},
             errors=[],
             duration_ms=200,
         )
@@ -126,10 +113,9 @@ class TestStageOutput:
 
 
 class TestPipelineContext:
-    """PipelineContext 测试"""
+    """PipelineContext 测试。"""
 
     def test_creation_with_defaults(self):
-        """测试默认值创建"""
         ctx = PipelineContext()
 
         assert ctx.request_id != ""
@@ -139,7 +125,6 @@ class TestPipelineContext:
         assert ctx.current_stage == "init"
 
     def test_creation_with_input(self):
-        """测试带输入创建"""
         inp = QueryInput(raw_query="测试查询", entities=["小米"])
         ctx = PipelineContext(input=inp, graph_enabled=False)
 
@@ -148,7 +133,6 @@ class TestPipelineContext:
         assert ctx.graph_enabled is False
 
     def test_add_stage(self):
-        """测试添加阶段输出"""
         ctx = PipelineContext()
 
         output = StageOutput.ok(
@@ -161,7 +145,6 @@ class TestPipelineContext:
         assert ctx.current_stage == "intent_parse"
 
     def test_add_error(self):
-        """测试添加错误"""
         ctx = PipelineContext()
         ctx.add_error("retrieval", "检索失败")
 
@@ -169,75 +152,101 @@ class TestPipelineContext:
         assert ctx.stages["retrieval"].success is False
         assert "检索失败" in ctx.stages["retrieval"].errors
 
-    def test_get_particles_from_retrieval(self):
-        """测试从检索结果获取微粒"""
+    def test_get_knowledge_units_from_retrieval(self):
         ctx = PipelineContext()
-        ctx.add_stage(StageOutput.ok(
-            stage_name="retrieval",
-            data={"particles": []},  # 空列表
-        ))
+        ctx.add_stage(
+            StageOutput.ok(
+                stage_name="retrieval",
+                data={"knowledge_units": []},
+            )
+        )
 
-        particles = ctx.get_particles()
-        assert particles == []
+        knowledge_units = ctx.get_knowledge_units()
+        assert knowledge_units == []
 
-    def test_get_particles_from_worker(self):
-        """测试从 Worker 结果获取微粒"""
+    def test_get_knowledge_units_from_worker(self):
         ctx = PipelineContext()
-        ctx.add_stage(StageOutput.ok(
-            stage_name="worker",
-            data={"particles": []},
-        ))
+        ctx.add_stage(
+            StageOutput.ok(
+                stage_name="worker",
+                data={"knowledge_units": []},
+            )
+        )
 
-        particles = ctx.get_particles()
-        assert particles == []
+        knowledge_units = ctx.get_knowledge_units()
+        assert knowledge_units == []
 
-    def test_get_report(self):
-        """测试获取报告"""
+    def test_get_entities(self):
         ctx = PipelineContext()
-        ctx.add_stage(StageOutput.ok(
-            stage_name="master",
-            data={"risk_level": "HIGH", "risk_score": 0.8},
-        ))
+        ctx.add_stage(
+            StageOutput.ok(
+                stage_name="retrieval",
+                data={"entities": [{"entity_id": "ent-1"}]},
+            )
+        )
 
-        report = ctx.get_report()
-        assert report["risk_level"] == "HIGH"
-        assert report["risk_score"] == 0.8
+        entities = ctx.get_entities()
+        assert entities == [{"entity_id": "ent-1"}]
 
-    def test_get_report_not_found(self):
-        """测试获取不存在的报告"""
+    def test_get_event_clusters(self):
         ctx = PipelineContext()
-        report = ctx.get_report()
-        assert report == {}
+        ctx.add_stage(
+            StageOutput.ok(
+                stage_name="integrator",
+                data={"event_clusters": [{"cluster_id": "clu-1"}]},
+            )
+        )
+
+        clusters = ctx.get_event_clusters()
+        assert clusters == [{"cluster_id": "clu-1"}]
+
+    def test_get_stage_data(self):
+        ctx = PipelineContext()
+        ctx.add_stage(
+            StageOutput.ok(
+                stage_name="summary",
+                data={"total_count": 2},
+            )
+        )
+
+        summary = ctx.get_stage_data("summary")
+        assert summary["total_count"] == 2
+
+    def test_get_stage_data_not_found(self):
+        ctx = PipelineContext()
+        summary = ctx.get_stage_data("summary")
+        assert summary == {}
 
     def test_is_verification_passed(self):
-        """测试核查通过判断"""
         ctx = PipelineContext()
 
-        # 未执行 Critic
         assert ctx.is_verification_passed() is False
 
-        # Critic 通过
-        ctx.add_stage(StageOutput.ok(
-            stage_name="critic",
-            data={"passed": True},
-        ))
+        ctx.add_stage(
+            StageOutput.ok(
+                stage_name="critic",
+                data={"passed": True},
+            )
+        )
         assert ctx.is_verification_passed() is True
 
-        # Critic 未通过
-        ctx.add_stage(StageOutput.ok(
-            stage_name="critic",
-            data={"passed": False},
-        ))
+        ctx.add_stage(
+            StageOutput.ok(
+                stage_name="critic",
+                data={"passed": False},
+            )
+        )
         assert ctx.is_verification_passed() is False
 
     def test_to_dict(self):
-        """测试字典转换"""
         inp = QueryInput(raw_query="测试", intent=IntentType.ENTITY_TIMELINE)
         ctx = PipelineContext(input=inp)
-        ctx.add_stage(StageOutput.ok(
-            stage_name="intent_parse",
-            data={},
-        ))
+        ctx.add_stage(
+            StageOutput.ok(
+                stage_name="intent_parse",
+                data={},
+            )
+        )
 
         result = ctx.to_dict()
         assert result["request_id"] == ctx.request_id
@@ -247,72 +256,68 @@ class TestPipelineContext:
 
 
 class TestPipelineContextIntegration:
-    """PipelineContext 集成场景测试"""
+    """PipelineContext 集成场景测试。"""
 
     def test_full_flow_simulation(self):
-        """模拟完整流程"""
-        # 1. 创建上下文
         inp = QueryInput(
-            raw_query="分析恒大集团的债务风险",
+            raw_query="查看恒大集团相关事件",
             entities=["恒大集团"],
-            intent=IntentType.RISK_ASSESSMENT,
+            intent=IntentType.ENTITY_TIMELINE,
         )
         ctx = PipelineContext(input=inp)
 
-        # 2. 意图解析
-        ctx.add_stage(StageOutput.ok(
-            stage_name="intent_parse",
-            data={"confidence": 0.95},
-            duration_ms=100,
-        ))
+        ctx.add_stage(
+            StageOutput.ok(
+                stage_name="intent_parse",
+                data={"confidence": 0.95},
+                duration_ms=100,
+            )
+        )
 
-        # 3. 检索
-        ctx.add_stage(StageOutput.ok(
-            stage_name="retrieval",
-            data={"particles": [], "total_count": 0},
-            duration_ms=50,
-        ))
+        ctx.add_stage(
+            StageOutput.ok(
+                stage_name="retrieval",
+                data={
+                    "knowledge_units": [],
+                    "entities": [],
+                    "event_clusters": [],
+                    "total_count": 0,
+                },
+                duration_ms=50,
+            )
+        )
 
-        # 4. Worker（无微粒时回退）
-        ctx.add_stage(StageOutput.ok(
-            stage_name="worker",
-            data={"particles": []},
-            duration_ms=2000,
-        ))
+        ctx.add_stage(
+            StageOutput.ok(
+                stage_name="integrator",
+                data={"entities": [], "event_clusters": []},
+                duration_ms=300,
+            )
+        )
 
-        # 5. Integrator
-        ctx.add_stage(StageOutput.ok(
-            stage_name="integrator",
-            data={"entities_created": 1, "edges_created": 0},
-            duration_ms=300,
-        ))
+        ctx.add_stage(
+            StageOutput.ok(
+                stage_name="summary",
+                data={"total_count": 0, "source": "knowledge_base"},
+                duration_ms=500,
+            )
+        )
 
-        # 6. Master
-        ctx.add_stage(StageOutput.ok(
-            stage_name="master",
-            data={"risk_level": "HIGH", "risk_score": 0.85},
-            duration_ms=500,
-        ))
+        ctx.add_stage(
+            StageOutput.ok(
+                stage_name="critic",
+                data={"passed": True},
+                duration_ms=200,
+            )
+        )
 
-        # 7. Critic
-        ctx.add_stage(StageOutput.ok(
-            stage_name="critic",
-            data={"passed": True},
-            duration_ms=200,
-        ))
-
-        # 验证最终状态
         assert ctx.is_verification_passed() is True
         assert ctx.current_stage == "critic"
 
-        # 验证报告
-        report = ctx.get_report()
-        assert report["risk_level"] == "HIGH"
+        summary = ctx.get_stage_data("summary")
+        assert summary["source"] == "knowledge_base"
 
-        # 验证可追溯性
         result = ctx.to_dict()
-        assert len(result["stages"]) == 6
-        total_duration = sum(
-            s["duration_ms"] for s in result["stages"].values()
-        )
-        assert total_duration == 3150
+        assert len(result["stages"]) == 5
+        total_duration = sum(s["duration_ms"] for s in result["stages"].values())
+        assert total_duration == 1150

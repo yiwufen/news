@@ -23,3 +23,20 @@ dev = [
 venvPath = "."
 venv = ".venv"
 pythonVersion = "3.13"
+
+[tool.pytest.ini_options]
+addopts = "-p no:cacheprovider"
+tmp_path_retention_policy = "failed"
+testpaths = ["tests"]
+norecursedirs = [
+    ".tmp",
+    ".pytest-tmp",
+    "tmp_pytest",
+    "tmp*",
+    "pytest-cache-files-*",
+    "codex-pytest-temp",
+    "codex_pytest_review_*",
+    "codex-pytest-review-*",
+    "codex-manual-check",
+    "codex-manual-check-pipeline",
+]
