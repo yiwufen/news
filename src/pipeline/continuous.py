@@ -68,11 +68,17 @@ class ContinuousPipeline:
         self.raw_documents = RawDocumentRepository(db_path)
         self.knowledge_units = KnowledgeUnitRepository(db_path)
         self.entity_repo = EntityRepository(db_path)
-        self.cluster_repo = EventClusterRepository(db_path)
+        self.cluster_repo = EventClusterRepository(
+            db_path,
+            knowledge_units=self.knowledge_units,
+        )
         self.log_repo = KnowledgeProcessingLogRepository(db_path)
         self.extractor = extractor or KnowledgeExtractor()
         self.entity_resolver = EntityResolver(self.entity_repo)
-        self.clusterer = EventClusterer(self.cluster_repo)
+        self.clusterer = EventClusterer(
+            self.cluster_repo,
+            knowledge_units=self.knowledge_units,
+        )
         self.graph_sync = KnowledgeGraphSync() if graph_enabled else None
         self.index_builder = index_builder or KnowledgeIndexBuilder(
             self.knowledge_units,

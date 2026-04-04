@@ -4,6 +4,7 @@ Continuous pipeline integration tests.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -136,6 +137,11 @@ def test_run_continuous_builds_knowledge_tables_without_legacy_backfill(tmp_path
         embedding_count = connection.execute("SELECT COUNT(*) FROM knowledge_unit_embeddings").fetchone()[0]
         entity_count = connection.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
         cluster_count = connection.execute("SELECT COUNT(*) FROM event_clusters").fetchone()[0]
+        cluster_payload = json.loads(
+            connection.execute(
+                "SELECT payload FROM event_clusters ORDER BY cluster_id ASC LIMIT 1"
+            ).fetchone()[0]
+        )
         log_rows = connection.execute(
             "SELECT doc_id, status, knowledge_units_count FROM knowledge_processing_log ORDER BY doc_id"
         ).fetchall()
@@ -147,6 +153,12 @@ def test_run_continuous_builds_knowledge_tables_without_legacy_backfill(tmp_path
     assert embedding_count == 2
     assert entity_count >= 1
     assert cluster_count >= 1
+    assert cluster_payload["member_count"] >= 1
+    assert cluster_payload["source_count"] >= 1
+    assert "representative_ku_id" in cluster_payload
+    assert "summary_variants" in cluster_payload
+    assert "event_time_variants" in cluster_payload
+    assert "conflict_reasons" in cluster_payload
     assert [(row[0], row[1], row[2]) for row in log_rows] == [
         ("doc-1", "success", 1),
         ("doc-2", "success", 1),
@@ -218,6 +230,10 @@ def test_run_pipeline_queries_new_knowledge_store(tmp_path, monkeypatch) -> None
     assert result["retrieval"]["vector_count"] >= 1
     assert result["timeline_data"]["entity"] == "Xiaomi Group"
     assert result["timeline_data"]["timeline"]["total_events"] >= 1
+    assert len(result["event_clusters"]) >= 1
+    assert result["event_clusters"][0]["source_count"] >= 1
+    assert "conflict_reasons" in result["event_clusters"][0]
+    assert "summary_variants" in result["event_clusters"][0]
 
 
 def test_run_pipeline_falls_back_to_bm25_without_embedding_config(tmp_path, monkeypatch) -> None:
@@ -610,5 +626,88 @@ def test_run_continuous_graph_sync_serializes_entity_identifiers(tmp_path) -> No
 
     assert result.errors == []
     entity_write = next(params for query, params in session.calls if "MERGE (e:Entity {id: $id})" in query)
+    cluster_write = next(params for query, params in session.calls if "MERGE (c:EventCluster {id: $id})" in query)
     assert "identifiers_json" in entity_write
     assert isinstance(entity_write["identifiers_json"], str)
+    assert "summary_variants_json" in cluster_write
+    assert "event_time_variants_json" in cluster_write
+    assert "representative_ku_id" in cluster_write
+
+
+def test_run_pipeline_repairs_legacy_event_cluster_payloads(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "data" / "news.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    seed_articles(str(db_path))
+
+    pipeline = ContinuousPipeline(
+        batch_size=10,
+        graph_enabled=False,
+        incremental=True,
+        db_path=str(db_path),
+        extractor=StubExtractor(),
+        index_builder=build_index_builder(str(db_path)),
+    )
+    pipeline.run()
+
+    connection = sqlite3.connect(db_path)
+    try:
+        cluster_id, payload = connection.execute(
+            "SELECT cluster_id, payload FROM event_clusters ORDER BY cluster_id ASC LIMIT 1"
+        ).fetchone()
+        legacy_payload = json.loads(payload)
+        for key in (
+            "representative_ku_id",
+            "member_count",
+            "source_count",
+            "summary_variants",
+            "event_time_variants",
+            "conflict_reasons",
+        ):
+            legacy_payload.pop(key, None)
+        connection.execute(
+            "UPDATE event_clusters SET payload = ? WHERE cluster_id = ?",
+            (json.dumps(legacy_payload, ensure_ascii=False), cluster_id),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    class FakeIntentClassifier:
+        def parse(self, raw_query: str) -> StructuredQuery:
+            return StructuredQuery(
+                intent=IntentType.ENTITY_TIMELINE,
+                entities=["Xiaomi Group"],
+                time_range=None,
+                filters=QueryFilters(),
+                original_query=raw_query,
+            )
+
+    import src.intent
+    import src.orchestration.graph as graph_module
+
+    original_searcher_cls = graph_module.KnowledgeSearcher
+
+    class FakeKnowledgeSearcher:
+        def __init__(self) -> None:
+            self._searcher = original_searcher_cls(
+                db_path=str(db_path),
+                embedding_client=StubEmbeddingClient(),
+            )
+
+        def search(self, request):
+            return self._searcher.search(request)
+
+        def search_articles(self, articles, request):
+            return self._searcher.search_articles(articles, request)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(src.intent, "IntentClassifier", FakeIntentClassifier)
+    monkeypatch.setattr(graph_module, "IntentClassifier", FakeIntentClassifier)
+    monkeypatch.setattr(graph_module, "KnowledgeSearcher", FakeKnowledgeSearcher)
+
+    result = run_pipeline(raw_query="Show the Xiaomi Group timeline")
+
+    assert len(result["event_clusters"]) >= 1
+    assert result["event_clusters"][0]["member_count"] >= 1
+    assert "representative_ku_id" in result["event_clusters"][0]
+    assert "summary_variants" in result["event_clusters"][0]

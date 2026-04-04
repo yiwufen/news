@@ -4,6 +4,7 @@ Knowledge pipeline component tests.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
@@ -197,6 +198,250 @@ def test_event_clusterer_merges_only_when_all_conditions_match(tmp_path) -> None
     assert clustered_units[0].cluster_id == clustered_units[1].cluster_id
     assert clustered_units[2].cluster_id != clustered_units[0].cluster_id
     assert len(clusters) == 2
+    primary_cluster = next(
+        cluster for cluster in clusters if cluster.cluster_id == clustered_units[0].cluster_id
+    )
+    assert primary_cluster.member_count == 2
+    assert primary_cluster.source_count == 2
+    assert primary_cluster.summary_variants[0].count == 2
+    assert primary_cluster.representative_ku_id in primary_cluster.member_ku_ids
+
+
+def test_event_clusterer_prefers_majority_summary_variant_for_representative(tmp_path) -> None:
+    db_path = tmp_path / "clusters.db"
+    repo = EventClusterRepository(str(db_path))
+    clusterer = EventClusterer(repo)
+
+    unit_a = build_unit(
+        summary="Xiaomi Group announced an investment plan",
+        doc_id="doc-1",
+    )
+    unit_a.entities[0].entity_id = "ent_xiaomi"
+    unit_a.entities[0].entity_type = "Company"
+    unit_a.confidence = 0.72
+
+    unit_b = build_unit(
+        summary="Xiaomi Group announced an investment plan",
+        doc_id="doc-2",
+    )
+    unit_b.entities[0].entity_id = "ent_xiaomi"
+    unit_b.entities[0].entity_type = "Company"
+    unit_b.confidence = 0.74
+
+    unit_c = build_unit(
+        summary="Xiaomi Group announced investment plan",
+        doc_id="doc-3",
+    )
+    unit_c.entities[0].entity_id = "ent_xiaomi"
+    unit_c.entities[0].entity_type = "Company"
+    unit_c.confidence = 0.99
+
+    _, clusters = clusterer.assign_clusters([unit_a, unit_b, unit_c], persist=False)
+
+    assert len(clusters) == 1
+    cluster = clusters[0]
+    assert cluster.summary == "Xiaomi Group announced an investment plan"
+    assert cluster.title == "Xiaomi Group announced an investment plan"
+    assert cluster.member_count == 3
+    assert cluster.source_count == 3
+    assert [variant.count for variant in cluster.summary_variants] == [2, 1]
+    assert cluster.representative_ku_id in {unit_a.ku_id, unit_b.ku_id}
+
+
+def test_event_clusterer_marks_adjacent_event_dates_as_possible_conflict(tmp_path) -> None:
+    db_path = tmp_path / "clusters.db"
+    repo = EventClusterRepository(str(db_path))
+    clusterer = EventClusterer(repo)
+
+    unit_a = build_unit(
+        summary="Xiaomi Group announced a product launch schedule",
+        doc_id="doc-1",
+        published_at=datetime(2026, 4, 1, 10, 0, tzinfo=UTC),
+    )
+    unit_a.entities[0].entity_id = "ent_xiaomi"
+    unit_a.entities[0].entity_type = "Company"
+
+    unit_b = build_unit(
+        summary="Xiaomi Group announced a product launch schedule",
+        doc_id="doc-2",
+        published_at=datetime(2026, 4, 2, 9, 0, tzinfo=UTC),
+    )
+    unit_b.entities[0].entity_id = "ent_xiaomi"
+    unit_b.entities[0].entity_type = "Company"
+
+    _, clusters = clusterer.assign_clusters([unit_a, unit_b], persist=False)
+
+    assert len(clusters) == 1
+    cluster = clusters[0]
+    assert cluster.conflict_status == "possible"
+    assert cluster.conflict_reasons == ["multiple_event_time_values"]
+    assert [variant.value for variant in cluster.event_time_variants] == ["2026-04-01", "2026-04-02"]
+
+
+def test_event_clusterer_merges_adjacent_high_similarity_but_keeps_distant_events_separate(tmp_path) -> None:
+    db_path = tmp_path / "clusters.db"
+    repo = EventClusterRepository(str(db_path))
+    clusterer = EventClusterer(repo)
+
+    unit_a = build_unit(
+        summary="Xiaomi Group announced a chip investment plan",
+        doc_id="doc-1",
+        published_at=datetime(2026, 4, 1, 10, 0, tzinfo=UTC),
+    )
+    unit_b = build_unit(
+        summary="Xiaomi Group announced chip investment plan",
+        doc_id="doc-2",
+        published_at=datetime(2026, 4, 2, 10, 0, tzinfo=UTC),
+    )
+    unit_c = build_unit(
+        summary="Xiaomi Group announced a chip investment plan",
+        doc_id="doc-3",
+        published_at=datetime(2026, 4, 5, 10, 0, tzinfo=UTC),
+    )
+    for unit in (unit_a, unit_b, unit_c):
+        unit.entities[0].entity_id = "ent_xiaomi"
+        unit.entities[0].entity_type = "Company"
+
+    clustered_units, clusters = clusterer.assign_clusters([unit_a, unit_b, unit_c], persist=False)
+
+    assert clustered_units[0].cluster_id == clustered_units[1].cluster_id
+    assert clustered_units[2].cluster_id != clustered_units[0].cluster_id
+    assert len(clusters) == 2
+
+
+def test_event_clusterer_merges_across_a_contiguous_adjacent_day_window(tmp_path) -> None:
+    db_path = tmp_path / "clusters.db"
+    repo = EventClusterRepository(str(db_path))
+    clusterer = EventClusterer(repo)
+
+    units = [
+        build_unit(
+            summary="Xiaomi Group announced a product launch schedule",
+            doc_id="doc-1",
+            published_at=datetime(2026, 4, 1, 10, 0, tzinfo=UTC),
+        ),
+        build_unit(
+            summary="Xiaomi Group announced a product launch schedule",
+            doc_id="doc-2",
+            published_at=datetime(2026, 4, 2, 10, 0, tzinfo=UTC),
+        ),
+        build_unit(
+            summary="Xiaomi Group announced a product launch schedule",
+            doc_id="doc-3",
+            published_at=datetime(2026, 4, 3, 10, 0, tzinfo=UTC),
+        ),
+    ]
+    for unit in units:
+        unit.entities[0].entity_id = "ent_xiaomi"
+        unit.entities[0].entity_type = "Company"
+
+    clustered_units, clusters = clusterer.assign_clusters(units, persist=False)
+
+    assert len(clusters) == 1
+    assert len({unit.cluster_id for unit in clustered_units}) == 1
+    assert clusters[0].member_count == 3
+    assert clusters[0].time_range == {
+        "start": "2026-04-01T10:00:00+00:00",
+        "end": "2026-04-03T10:00:00+00:00",
+    }
+
+
+def test_event_cluster_repository_repairs_legacy_payload_with_aggregated_fields(tmp_path) -> None:
+    db_path = tmp_path / "news.db"
+    knowledge_repo = KnowledgeUnitRepository(str(db_path))
+    cluster_repo = EventClusterRepository(str(db_path), knowledge_units=knowledge_repo)
+    clusterer = EventClusterer(cluster_repo, knowledge_units=knowledge_repo)
+
+    unit_a = build_unit(summary="Xiaomi Group announced an investment update", doc_id="doc-1")
+    unit_b = build_unit(summary="Xiaomi Group announced an investment update", doc_id="doc-2")
+    for unit in (unit_a, unit_b):
+        unit.entities[0].entity_id = "ent_xiaomi"
+        unit.entities[0].entity_type = "Company"
+    knowledge_repo.save_batch([unit_a, unit_b])
+    _, clusters = clusterer.assign_clusters([unit_a, unit_b], persist=True)
+    cluster = clusters[0]
+
+    legacy_payload = cluster.model_dump(mode="json")
+    for key in (
+        "representative_ku_id",
+        "member_count",
+        "source_count",
+        "summary_variants",
+        "event_time_variants",
+        "conflict_reasons",
+    ):
+        legacy_payload.pop(key, None)
+
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.execute(
+            "UPDATE event_clusters SET payload = ?, updated_at = ? WHERE cluster_id = ?",
+            (
+                json.dumps(legacy_payload, ensure_ascii=False),
+                cluster.updated_at.isoformat(),
+                cluster.cluster_id,
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    repaired_cluster = cluster_repo.get_by_ids([cluster.cluster_id])[0]
+
+    assert repaired_cluster.member_count == 2
+    assert repaired_cluster.source_count == 2
+    assert repaired_cluster.representative_ku_id in repaired_cluster.member_ku_ids
+    assert repaired_cluster.summary_variants[0].count == 2
+
+    connection = sqlite3.connect(db_path)
+    try:
+        repaired_payload = json.loads(
+            connection.execute(
+                "SELECT payload FROM event_clusters WHERE cluster_id = ?",
+                (cluster.cluster_id,),
+            ).fetchone()[0]
+        )
+    finally:
+        connection.close()
+
+    assert repaired_payload["member_count"] == 2
+    assert repaired_payload["source_count"] == 2
+
+
+def test_event_cluster_repository_filters_by_time_range_overlap(tmp_path) -> None:
+    db_path = tmp_path / "news.db"
+    knowledge_repo = KnowledgeUnitRepository(str(db_path))
+    cluster_repo = EventClusterRepository(str(db_path), knowledge_units=knowledge_repo)
+    clusterer = EventClusterer(cluster_repo, knowledge_units=knowledge_repo)
+
+    unit_a = build_unit(
+        summary="Xiaomi Group announced a product launch schedule",
+        doc_id="doc-1",
+        published_at=datetime(2026, 4, 1, 10, 0, tzinfo=UTC),
+    )
+    unit_b = build_unit(
+        summary="Xiaomi Group announced a product launch schedule",
+        doc_id="doc-2",
+        published_at=datetime(2026, 4, 2, 9, 0, tzinfo=UTC),
+    )
+    for unit in (unit_a, unit_b):
+        unit.entities[0].entity_id = "ent_xiaomi"
+        unit.entities[0].entity_type = "Company"
+
+    knowledge_repo.save_batch([unit_a, unit_b])
+    _, clusters = clusterer.assign_clusters([unit_a, unit_b], persist=True)
+
+    same_day = cluster_repo.find_related(
+        primary_entity_ids=["ent_xiaomi"],
+        time_range=("2026-04-01", "2026-04-01"),
+    )
+    next_day = cluster_repo.find_related(
+        primary_entity_ids=["ent_xiaomi"],
+        time_range=("2026-04-02", "2026-04-02"),
+    )
+
+    assert [cluster.cluster_id for cluster in same_day] == [clusters[0].cluster_id]
+    assert [cluster.cluster_id for cluster in next_day] == [clusters[0].cluster_id]
 
 
 class FakeSession:
@@ -261,8 +506,16 @@ def test_knowledge_graph_sync_emits_entity_cluster_and_edge_queries() -> None:
     assert "MERGE (c:EventCluster {id: $id})" in queries
     assert "MERGE (e)-[r:INVOLVED_IN]->(c)" in queries
     entity_write = next(params for query, params in session.calls if "MERGE (e:Entity {id: $id})" in query)
+    cluster_write = next(params for query, params in session.calls if "MERGE (c:EventCluster {id: $id})" in query)
     assert entity_write["primary_identifier"] is None
     assert entity_write["identifiers_json"] == "{}"
+    assert cluster_write["representative_ku_id"] is None
+    assert cluster_write["member_count"] == 0
+    assert cluster_write["source_count"] == 0
+    assert cluster_write["time_range_json"] == "null"
+    assert cluster_write["summary_variants_json"] == "[]"
+    assert cluster_write["event_time_variants_json"] == "[]"
+    assert cluster_write["conflict_reasons"] == []
 
 
 def test_knowledge_graph_sync_serializes_identifiers_to_json() -> None:

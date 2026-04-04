@@ -21,9 +21,9 @@
 |------|------|--------|------|
 | 1. 原始文档接入 | ✅ 已完成 | 100% | SQLite 文档存储、测试数据与增量读取已具备 |
 | 2. 文档知识化抽取 | ⚠️ 迁移中 | 70% | `run_continuous()` 已切到 `RawDocument -> KnowledgeUnit` 新主线，默认采用 fail-fast 抽取，不再因未配置或异常静默回退到启发式 |
-| 3. 实体与事件归一 | ⚠️ 迁移中 | 65% | 已新增 `Entity` / `EventCluster` 保守归一与归并，但规则仍需继续增强 |
+| 3. 实体与事件归一 | ⚠️ 迁移中 | 80% | 已新增 `Entity` / `EventCluster` 保守归一与归并，并补上事件簇层冲突保留与多来源聚合视图 |
 | 4. 检索层 | ✅ 主线可用 | 85% | `run_pipeline()` 已切到混合检索主线，`KnowledgeUnit` FTS + 向量索引、融合排序、统一检索元数据与 `Entity` / `EventCluster` 检索入口已落地 |
-| 5. 图谱层 | ⚠️ 迁移中 | 70% | 新离线路径已同步 `Entity + EventCluster + INVOLVED_IN`，图谱默认开启 |
+| 5. 图谱层 | ⚠️ 迁移中 | 75% | 新离线路径已同步 `Entity + EventCluster + INVOLVED_IN`，并写入事件簇聚合元数据，图谱默认开启 |
 | 6. 消费层 | ✅ 已移除旧链路 | 100% | 不再兼容旧风险导向消费链路，入口直接面向知识检索 |
 
 ---
@@ -91,7 +91,7 @@
 ### 离线知识化流水线
 - [x] 将 `run_continuous()` 主线输出从 `IntelligenceParticle` 迁移到 `KnowledgeUnit`
 - [x] 将新离线路径的 Integrator 职责迁移为实体标准化、事件归并、图谱更新
-- [ ] 建立冲突保留与多来源聚合逻辑
+- [x] 建立冲突保留与多来源聚合逻辑
 - [x] 建立可追踪的离线知识化状态记录
 - [x] 修复知识化主线稳定性问题：`ku_id` 可重放、图同步失败可重试
 - [x] 收紧抽取策略：`KnowledgeUnit` 抽取默认 fail-fast，禁止因未配置或异常静默回退到启发式
@@ -201,6 +201,11 @@ print(result)
 - Offline indexing is now part of the mainline: `ContinuousPipeline` builds embeddings after each batch, and `rebuild_knowledge_indexes()` can backfill FTS plus embeddings for existing knowledge bases.
 - Offline processing logs now keep successfully persisted documents in `success` state when only embedding index post-processing fails, avoiding repeated incremental re-extraction.
 - Windows pytest temp handling is stabilized for this repo test suite by replacing direct `tmp_path` usage with a repo-local temp fixture and disabling the cacheprovider plugin for test runs.
+- Event clustering now produces an aggregated `EventCluster` view with `representative_ku_id`, `member_count`, `source_count`, `summary_variants`, `event_time_variants`, and `conflict_reasons`.
+- Cluster conflict retention is now live: multi-source member evidence is preserved at cluster level, explicit member conflicts are carried forward, and adjacent-day explicit event-date disagreements are surfaced as `possible` conflicts instead of being silently flattened.
+- Legacy cluster payloads now self-heal on read: when older SQLite rows are missing aggregation fields, `EventClusterRepository` rebuilds the cluster snapshot from persisted `KnowledgeUnit` members and writes the repaired payload back.
+- `run_pipeline()` now returns enriched `event_clusters`, and Neo4j sync now stores cluster aggregation metadata alongside the existing node and edge provenance fields.
+- Event cluster time handling is now range-aware: adjacent-day merged clusters match against their full `time_range`, so chained day-by-day reports stay in one cluster and date-filtered retrieval does not miss later member dates.
 - Regression checks passed after the fix:
   - `uv run pytest`
   - `uv run pyright .`

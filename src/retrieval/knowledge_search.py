@@ -80,11 +80,17 @@ class KnowledgeSearcher:
     ):
         self.units = KnowledgeUnitRepository(db_path)
         self.entities = EntityRepository(db_path)
-        self.clusters = EventClusterRepository(db_path)
+        self.clusters = EventClusterRepository(
+            db_path,
+            knowledge_units=self.units,
+        )
         self.extractor = extractor or KnowledgeExtractor()
         self.embedding_client = embedding_client or OpenAIEmbeddingClient()
         self.entity_resolver = EntityResolver(self.entities)
-        self.clusterer = EventClusterer(self.clusters)
+        self.clusterer = EventClusterer(
+            self.clusters,
+            knowledge_units=self.units,
+        )
 
     def search(self, request: KnowledgeSearchRequest) -> KnowledgeSearchResult:
         query = request.structured_query
