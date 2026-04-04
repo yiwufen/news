@@ -10,7 +10,7 @@ import sqlite3
 from datetime import UTC, date, datetime
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Iterable, Literal, Sequence
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -122,6 +122,48 @@ class EventClusterRepository:
             rows = connection.execute(
                 "SELECT payload FROM event_clusters ORDER BY updated_at DESC, cluster_id ASC"
             ).fetchall()
+        return [EventCluster.model_validate(json.loads(row["payload"])) for row in rows]
+
+    def get_by_ids(self, cluster_ids: Sequence[str]) -> list[EventCluster]:
+        if not cluster_ids:
+            return []
+        placeholders = ", ".join("?" for _ in cluster_ids)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"SELECT payload FROM event_clusters WHERE cluster_id IN ({placeholders})",
+                list(cluster_ids),
+            ).fetchall()
+        return [EventCluster.model_validate(json.loads(row["payload"])) for row in rows]
+
+    def find_related(
+        self,
+        *,
+        primary_entity_ids: Iterable[str] | None = None,
+        cluster_types: Sequence[str] | None = None,
+        time_range: tuple[str, str] | None = None,
+    ) -> list[EventCluster]:
+        where_clauses: list[str] = []
+        params: list[Any] = []
+        entity_ids = list(dict.fromkeys(primary_entity_ids or []))
+        if entity_ids:
+            placeholders = ", ".join("?" for _ in entity_ids)
+            where_clauses.append(f"primary_entity_id IN ({placeholders})")
+            params.extend(entity_ids)
+        if cluster_types:
+            placeholders = ", ".join("?" for _ in cluster_types)
+            where_clauses.append(f"cluster_type IN ({placeholders})")
+            params.extend(cluster_types)
+        if time_range is not None:
+            where_clauses.append("substr(time_anchor, 1, 10) BETWEEN ? AND ?")
+            params.extend(time_range)
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        sql = f"""
+            SELECT payload FROM event_clusters
+            {where_sql}
+            ORDER BY updated_at DESC, cluster_id ASC
+        """
+        with self._connect() as connection:
+            rows = connection.execute(sql, params).fetchall()
         return [EventCluster.model_validate(json.loads(row["payload"])) for row in rows]
 
 

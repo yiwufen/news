@@ -1,31 +1,19 @@
 """
-知识底座核心模型、适配层与仓储。
+Core knowledge models and SQLite repositories.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import re
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator, Literal
-from uuid import uuid4
+from typing import Any, Iterator, Literal, Sequence
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from collectors.database import Database
-from src.schemas import (
-    EntityType,
-    EventType,
-    GraphUpdates,
-    IntelligenceParticle,
-    Metadata,
-    RiskLevel,
-    RiskSignal,
-    Traceability,
-)
 
 
 ConflictStatus = Literal["none", "possible", "confirmed"]
@@ -34,7 +22,7 @@ KnowledgeUnitKind = Literal["event", "fact"]
 
 
 class RawDocument(BaseModel):
-    """原始文档。"""
+    """Raw input document."""
 
     doc_id: str
     source_type: str
@@ -55,12 +43,12 @@ class RawDocument(BaseModel):
     def validate_content(cls, value: str) -> str:
         content = value.strip()
         if not content:
-            raise ValueError("content 不能为空")
+            raise ValueError("content cannot be empty")
         return content
 
 
 class EntityRef(BaseModel):
-    """知识单元中的实体引用。"""
+    """Entity reference inside one knowledge unit."""
 
     entity_id: str | None = None
     mention: str
@@ -73,12 +61,12 @@ class EntityRef(BaseModel):
     def validate_mention(cls, value: str) -> str:
         mention = value.strip()
         if not mention:
-            raise ValueError("mention 不能为空")
+            raise ValueError("mention cannot be empty")
         return mention
 
 
 class SourceRef(BaseModel):
-    """来源引用。"""
+    """Source reference."""
 
     doc_id: str
     source_name: str
@@ -86,7 +74,7 @@ class SourceRef(BaseModel):
 
 
 class EvidenceSpan(BaseModel):
-    """证据片段。"""
+    """Evidence snippet."""
 
     text: str
     start_offset: int | None = None
@@ -97,12 +85,12 @@ class EvidenceSpan(BaseModel):
     def validate_text(cls, value: str) -> str:
         text = value.strip()
         if not text:
-            raise ValueError("evidence.text 不能为空")
+            raise ValueError("evidence.text cannot be empty")
         return text
 
 
 class TimeRef(BaseModel):
-    """时间引用。"""
+    """Time reference."""
 
     event_time: datetime | None = None
     published_at: datetime
@@ -110,7 +98,7 @@ class TimeRef(BaseModel):
 
 
 class RelationHint(BaseModel):
-    """潜在关系线索。"""
+    """Potential relationship hint extracted from text."""
 
     relation_type: str
     subject_entity_id: str | None = None
@@ -119,7 +107,7 @@ class RelationHint(BaseModel):
 
 
 class KnowledgeUnit(BaseModel):
-    """最小可检索证据单元。"""
+    """Smallest retrievable evidence unit."""
 
     ku_id: str = ""
     unit_kind: KnowledgeUnitKind
@@ -141,21 +129,21 @@ class KnowledgeUnit(BaseModel):
     def validate_non_empty(cls, value: str) -> str:
         text = value.strip()
         if not text:
-            raise ValueError("字符串字段不能为空")
+            raise ValueError("string field cannot be empty")
         return text
 
     @field_validator("evidence")
     @classmethod
     def validate_evidence(cls, value: list[EvidenceSpan]) -> list[EvidenceSpan]:
         if not value:
-            raise ValueError("KnowledgeUnit 至少需要一个 evidence")
+            raise ValueError("KnowledgeUnit requires at least one evidence span")
         return value
 
     @field_validator("entities")
     @classmethod
     def validate_entities(cls, value: list[EntityRef]) -> list[EntityRef]:
         if not value:
-            raise ValueError("KnowledgeUnit 至少需要一个实体 mention")
+            raise ValueError("KnowledgeUnit requires at least one entity mention")
         return value
 
     @model_validator(mode="after")
@@ -184,8 +172,18 @@ class KnowledgeUnit(BaseModel):
         return self
 
 
+class KnowledgeUnitEmbedding(BaseModel):
+    """Stored vector index entry for one knowledge unit."""
+
+    ku_id: str
+    embedding_model: str
+    embedding_dim: int
+    embedding: list[float]
+    updated_at: datetime
+
+
 def ensure_datetime(value: str | datetime) -> datetime:
-    """将字符串或 datetime 统一转为 timezone-aware datetime。"""
+    """Normalize a string or datetime into a timezone-aware datetime."""
     if isinstance(value, datetime):
         if value.tzinfo is None:
             return value.replace(tzinfo=UTC)
@@ -201,13 +199,54 @@ def ensure_datetime(value: str | datetime) -> datetime:
 
 
 def compute_slice_window_from_datetime(value: datetime) -> str:
-    """按 ISO 周计算切片窗口。"""
+    """Build an ISO-week slice window string."""
     iso_cal = value.isocalendar()
     return f"{iso_cal[0]}-W{iso_cal[1]:02d}"
 
 
+def _dedupe_strings(values: Sequence[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for value in values:
+        text = value.strip()
+        if not text or text in seen:
+            continue
+        deduped.append(text)
+        seen.add(text)
+    return deduped
+
+
+def build_knowledge_unit_search_sections(
+    unit: KnowledgeUnit,
+    entity_names: Sequence[str] | None = None,
+) -> dict[str, str]:
+    """Build canonical search/index text sections for one knowledge unit."""
+    mentions = _dedupe_strings([entity.mention for entity in unit.entities])
+    names = _dedupe_strings(list(entity_names or mentions))
+    evidence = _dedupe_strings([span.text for span in unit.evidence])
+    tags = _dedupe_strings(unit.tags)
+    return {
+        "summary": unit.summary,
+        "unit_type": unit.unit_type,
+        "source_name": unit.source.source_name,
+        "evidence_text": " ".join(evidence),
+        "entity_mentions": " ".join(mentions),
+        "entity_names": " ".join(names),
+        "tags": " ".join(tags),
+    }
+
+
+def build_knowledge_unit_search_text(
+    unit: KnowledgeUnit,
+    entity_names: Sequence[str] | None = None,
+) -> str:
+    """Flatten search sections into one text payload."""
+    sections = build_knowledge_unit_search_sections(unit, entity_names=entity_names)
+    return " ".join(value for value in sections.values() if value).strip()
+
+
 def adapt_article_to_raw_document(article: dict) -> RawDocument:
-    """将 news_articles 记录适配为 RawDocument。"""
+    """Adapt a `news_articles` record into RawDocument."""
     published_at = ensure_datetime(article["publish_time"])
     ingested_at = ensure_datetime(article.get("created_at") or datetime.now(UTC))
     return RawDocument(
@@ -227,95 +266,8 @@ def adapt_article_to_raw_document(article: dict) -> RawDocument:
     )
 
 
-def _map_unit_type_to_event_type(unit_type: str, summary: str) -> EventType | None:
-    normalized_unit_type = unit_type.strip().lower()
-    unit_type_mapping = {
-        "lawsuit": EventType.LEGAL_SUIT,
-        "legal_suit": EventType.LEGAL_SUIT,
-        "equity_pledge": EventType.EQUITY_PLEDGE,
-        "debt_default": EventType.DEBT_DEFAULT,
-        "control_change": EventType.REAL_CONTROL_CHANGE,
-        "real_control_change": EventType.REAL_CONTROL_CHANGE,
-        "policy_sanction": EventType.POLICY_SANCTION,
-        "restructuring": EventType.RESTRUCTURING,
-    }
-    if normalized_unit_type in unit_type_mapping:
-        return unit_type_mapping[normalized_unit_type]
-
-    text = f"{unit_type} {summary}"
-    if any(keyword in text for keyword in ("诉讼", "司法", "仲裁")):
-        return EventType.LEGAL_SUIT
-    if any(keyword in text for keyword in ("质押",)):
-        return EventType.EQUITY_PLEDGE
-    if any(keyword in text for keyword in ("违约", "逾期", "债务")):
-        return EventType.DEBT_DEFAULT
-    if any(keyword in text for keyword in ("实控", "控制权", "董事长变更")):
-        return EventType.REAL_CONTROL_CHANGE
-    if any(keyword in text for keyword in ("制裁", "处罚", "监管", "政策")):
-        return EventType.POLICY_SANCTION
-    if any(keyword in text for keyword in ("閲嶇粍", "骞惰喘", "鏀惰喘", "鍊哄姟閲嶇粍")):
-        return EventType.RESTRUCTURING
-    return None
-
-
-def _infer_risk_level(unit: KnowledgeUnit) -> RiskLevel:
-    if unit.conflict_status == "confirmed":
-        return RiskLevel.HIGH
-    if unit.confidence >= 0.9:
-        return RiskLevel.MEDIUM
-    return RiskLevel.LOW
-
-
-class KnowledgeToLegacyParticleAdapter:
-    """KnowledgeUnit 到 legacy IntelligenceParticle 的显式适配层。"""
-
-    def _resolve_legacy_event_type(self, unit: KnowledgeUnit) -> EventType | None:
-        return _map_unit_type_to_event_type(unit.unit_type, unit.summary)
-
-    def to_legacy_row(self, unit: KnowledgeUnit) -> dict[str, object] | None:
-        event_type = self._resolve_legacy_event_type(unit)
-        if event_type is None:
-            return None
-        slice_window = compute_slice_window_from_datetime(unit.time.published_at)
-        entities = [entity.mention for entity in unit.entities]
-        return {
-            "particle_id": unit.ku_id,
-            "slice_window": slice_window,
-            "event_type": event_type.value,
-            "event_summary": unit.summary,
-            "entities": entities,
-            "source_doc_ids": [unit.source.doc_id],
-        }
-
-    def to_legacy_particle(self, unit: KnowledgeUnit) -> IntelligenceParticle | None:
-        event_type = self._resolve_legacy_event_type(unit)
-        if event_type is None:
-            return None
-        risk_level = _infer_risk_level(unit)
-        source_name = unit.source.url or unit.source.source_name
-        event_time = unit.time.event_time or unit.time.published_at
-        return IntelligenceParticle(
-            id=unit.ku_id or f"evt_{uuid4().hex[:12]}",
-            metadata=Metadata(
-                source=source_name,
-                event_time=event_time.date(),
-                reliability=unit.confidence,
-            ),
-            risk_signal=RiskSignal(
-                type=event_type,
-                level=risk_level,
-                description=unit.summary,
-            ),
-            graph_updates=GraphUpdates(),
-            traceability=Traceability(
-                source_doc_ids=[unit.source.doc_id],
-                is_contradictory=unit.conflict_status != "none",
-            ),
-        )
-
-
 class _SQLiteRepository:
-    """共享 SQLite 基础设施。"""
+    """Shared SQLite helpers."""
 
     def __init__(self, db_path: str = "data/news.db"):
         self.db_path = Path(db_path)
@@ -328,7 +280,7 @@ class _SQLiteRepository:
 
 
 class RawDocumentRepository:
-    """RawDocument 适配仓储。"""
+    """RawDocument adapter repository."""
 
     def __init__(self, db_path: str = "data/news.db"):
         self.db = Database(db_path)
@@ -348,7 +300,8 @@ class RawDocumentRepository:
 
         if time_window:
             documents = [
-                doc for doc in documents
+                doc
+                for doc in documents
                 if compute_slice_window_from_datetime(doc.published_at) == time_window
             ]
 
@@ -357,7 +310,7 @@ class RawDocumentRepository:
 
 
 class KnowledgeUnitRepository(_SQLiteRepository):
-    """KnowledgeUnit 仓储。"""
+    """KnowledgeUnit repository."""
 
     def __init__(self, db_path: str = "data/news.db"):
         super().__init__(db_path)
@@ -374,6 +327,7 @@ class KnowledgeUnitRepository(_SQLiteRepository):
                     unit_type TEXT NOT NULL,
                     summary TEXT NOT NULL,
                     primary_mentions TEXT NOT NULL,
+                    entity_ids TEXT NOT NULL DEFAULT '[]',
                     event_time TEXT,
                     published_at TEXT NOT NULL,
                     cluster_id TEXT,
@@ -384,13 +338,63 @@ class KnowledgeUnitRepository(_SQLiteRepository):
                 )
                 """
             )
+            self._ensure_column(
+                connection,
+                "knowledge_units",
+                "entity_ids",
+                "TEXT NOT NULL DEFAULT '[]'",
+            )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_knowledge_units_doc_id ON knowledge_units(doc_id)"
             )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_knowledge_units_cluster_id ON knowledge_units(cluster_id)"
             )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_knowledge_units_unit_type ON knowledge_units(unit_type)"
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS knowledge_unit_embeddings (
+                    ku_id TEXT PRIMARY KEY,
+                    embedding_model TEXT NOT NULL,
+                    embedding_dim INTEGER NOT NULL,
+                    embedding_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_units_fts USING fts5(
+                    ku_id UNINDEXED,
+                    summary,
+                    unit_type,
+                    source_name,
+                    evidence_text,
+                    entity_mentions,
+                    entity_names,
+                    tags
+                )
+                """
+            )
             connection.commit()
+
+    def _ensure_column(
+        self,
+        connection: sqlite3.Connection,
+        table_name: str,
+        column_name: str,
+        definition: str,
+    ) -> None:
+        columns = {
+            row["name"]
+            for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+        }
+        if column_name not in columns:
+            connection.execute(
+                f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}"
+            )
 
     def save_batch(self, units: list[KnowledgeUnit]) -> int:
         if not units:
@@ -403,6 +407,10 @@ class KnowledgeUnitRepository(_SQLiteRepository):
                 unit.unit_type,
                 unit.summary,
                 json.dumps([entity.mention for entity in unit.entities], ensure_ascii=False),
+                json.dumps(
+                    [entity.entity_id for entity in unit.entities if entity.entity_id],
+                    ensure_ascii=False,
+                ),
                 unit.time.event_time.isoformat() if unit.time.event_time else None,
                 unit.time.published_at.isoformat(),
                 unit.cluster_id,
@@ -416,16 +424,17 @@ class KnowledgeUnitRepository(_SQLiteRepository):
             connection.executemany(
                 """
                 INSERT INTO knowledge_units (
-                    ku_id, doc_id, unit_kind, unit_type, summary, primary_mentions,
+                    ku_id, doc_id, unit_kind, unit_type, summary, primary_mentions, entity_ids,
                     event_time, published_at, cluster_id, conflict_status, status, payload
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(ku_id) DO UPDATE SET
                     doc_id = excluded.doc_id,
                     unit_kind = excluded.unit_kind,
                     unit_type = excluded.unit_type,
                     summary = excluded.summary,
                     primary_mentions = excluded.primary_mentions,
+                    entity_ids = excluded.entity_ids,
                     event_time = excluded.event_time,
                     published_at = excluded.published_at,
                     cluster_id = excluded.cluster_id,
@@ -436,8 +445,47 @@ class KnowledgeUnitRepository(_SQLiteRepository):
                 """,
                 rows,
             )
+            self._sync_fts_rows(connection, units)
             connection.commit()
         return len(units)
+
+    def _sync_fts_rows(
+        self,
+        connection: sqlite3.Connection,
+        units: Sequence[KnowledgeUnit],
+    ) -> None:
+        delete_rows = [(unit.ku_id,) for unit in units]
+        if delete_rows:
+            connection.executemany(
+                "DELETE FROM knowledge_units_fts WHERE ku_id = ?",
+                delete_rows,
+            )
+        insert_rows = []
+        for unit in units:
+            sections = build_knowledge_unit_search_sections(unit)
+            insert_rows.append(
+                (
+                    unit.ku_id,
+                    sections["summary"],
+                    sections["unit_type"],
+                    sections["source_name"],
+                    sections["evidence_text"],
+                    sections["entity_mentions"],
+                    sections["entity_names"],
+                    sections["tags"],
+                )
+            )
+        if insert_rows:
+            connection.executemany(
+                """
+                INSERT INTO knowledge_units_fts (
+                    ku_id, summary, unit_type, source_name, evidence_text,
+                    entity_mentions, entity_names, tags
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                insert_rows,
+            )
 
     def get_all(self) -> list[KnowledgeUnit]:
         with self._connect() as connection:
@@ -446,9 +494,165 @@ class KnowledgeUnitRepository(_SQLiteRepository):
             ).fetchall()
         return [KnowledgeUnit.model_validate(json.loads(row["payload"])) for row in rows]
 
+    def get_by_ids(self, ku_ids: Sequence[str]) -> list[KnowledgeUnit]:
+        if not ku_ids:
+            return []
+        placeholders = ", ".join("?" for _ in ku_ids)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"SELECT payload FROM knowledge_units WHERE ku_id IN ({placeholders})",
+                list(ku_ids),
+            ).fetchall()
+        return [KnowledgeUnit.model_validate(json.loads(row["payload"])) for row in rows]
+
+    def search_bm25(
+        self,
+        match_query: str,
+        *,
+        top_k: int,
+        time_range: tuple[str, str] | None = None,
+        event_types: Sequence[str] | None = None,
+        entity_ids: Sequence[str] | None = None,
+    ) -> list[tuple[str, float]]:
+        if not match_query.strip():
+            return []
+        where_clauses = ["knowledge_units_fts MATCH ?"]
+        params: list[Any] = [match_query]
+        self._append_filter_clauses(
+            where_clauses,
+            params,
+            alias="ku",
+            time_range=time_range,
+            event_types=event_types,
+            entity_ids=entity_ids,
+        )
+        sql = f"""
+            SELECT ku.ku_id, bm25(knowledge_units_fts) AS bm25_score
+            FROM knowledge_units_fts
+            JOIN knowledge_units AS ku ON ku.ku_id = knowledge_units_fts.ku_id
+            WHERE {' AND '.join(where_clauses)}
+            ORDER BY bm25_score ASC
+            LIMIT ?
+        """
+        params.append(top_k)
+        with self._connect() as connection:
+            rows = connection.execute(sql, params).fetchall()
+        return [(row["ku_id"], float(row["bm25_score"])) for row in rows]
+
+    def save_embeddings(self, entries: Sequence[KnowledgeUnitEmbedding]) -> int:
+        if not entries:
+            return 0
+        rows = [
+            (
+                entry.ku_id,
+                entry.embedding_model,
+                entry.embedding_dim,
+                json.dumps(entry.embedding, ensure_ascii=False),
+                entry.updated_at.isoformat(),
+            )
+            for entry in entries
+        ]
+        with self._connect() as connection:
+            connection.executemany(
+                """
+                INSERT INTO knowledge_unit_embeddings (
+                    ku_id, embedding_model, embedding_dim, embedding_json, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(ku_id) DO UPDATE SET
+                    embedding_model = excluded.embedding_model,
+                    embedding_dim = excluded.embedding_dim,
+                    embedding_json = excluded.embedding_json,
+                    updated_at = excluded.updated_at
+                """,
+                rows,
+            )
+            connection.commit()
+        return len(entries)
+
+    def get_embeddings(
+        self,
+        *,
+        time_range: tuple[str, str] | None = None,
+        event_types: Sequence[str] | None = None,
+        entity_ids: Sequence[str] | None = None,
+        ku_ids: Sequence[str] | None = None,
+        embedding_model: str | None = None,
+    ) -> list[KnowledgeUnitEmbedding]:
+        where_clauses: list[str] = []
+        params: list[Any] = []
+        self._append_filter_clauses(
+            where_clauses,
+            params,
+            alias="ku",
+            time_range=time_range,
+            event_types=event_types,
+            entity_ids=entity_ids,
+            ku_ids=ku_ids,
+        )
+        if embedding_model:
+            where_clauses.append("emb.embedding_model = ?")
+            params.append(embedding_model)
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        sql = f"""
+            SELECT emb.ku_id, emb.embedding_model, emb.embedding_dim, emb.embedding_json, emb.updated_at
+            FROM knowledge_unit_embeddings AS emb
+            JOIN knowledge_units AS ku ON ku.ku_id = emb.ku_id
+            {where_sql}
+        """
+        with self._connect() as connection:
+            rows = connection.execute(sql, params).fetchall()
+        return [
+            KnowledgeUnitEmbedding(
+                ku_id=row["ku_id"],
+                embedding_model=row["embedding_model"],
+                embedding_dim=int(row["embedding_dim"]),
+                embedding=json.loads(row["embedding_json"]),
+                updated_at=ensure_datetime(row["updated_at"]),
+            )
+            for row in rows
+        ]
+
+    def rebuild_fts_index(self) -> int:
+        units = self.get_all()
+        with self._connect() as connection:
+            connection.execute("DELETE FROM knowledge_units_fts")
+            self._sync_fts_rows(connection, units)
+            connection.commit()
+        return len(units)
+
+    def _append_filter_clauses(
+        self,
+        where_clauses: list[str],
+        params: list[Any],
+        *,
+        alias: str,
+        time_range: tuple[str, str] | None = None,
+        event_types: Sequence[str] | None = None,
+        entity_ids: Sequence[str] | None = None,
+        ku_ids: Sequence[str] | None = None,
+    ) -> None:
+        if time_range is not None:
+            where_clauses.append(
+                f"substr(COALESCE({alias}.event_time, {alias}.published_at), 1, 10) BETWEEN ? AND ?"
+            )
+            params.extend(time_range)
+        if event_types:
+            placeholders = ", ".join("?" for _ in event_types)
+            where_clauses.append(f"{alias}.unit_type IN ({placeholders})")
+            params.extend(event_types)
+        if entity_ids:
+            entity_conditions = [f"{alias}.entity_ids LIKE ?" for _ in entity_ids]
+            where_clauses.append(f"({' OR '.join(entity_conditions)})")
+            params.extend([f'%"{entity_id}"%' for entity_id in entity_ids])
+        if ku_ids:
+            placeholders = ", ".join("?" for _ in ku_ids)
+            where_clauses.append(f"{alias}.ku_id IN ({placeholders})")
+            params.extend(ku_ids)
+
 
 class KnowledgeProcessingLogRepository(_SQLiteRepository):
-    """离线知识化处理日志。"""
+    """Offline knowledge-processing log repository."""
 
     def __init__(self, db_path: str = "data/news.db"):
         super().__init__(db_path)

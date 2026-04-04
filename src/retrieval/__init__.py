@@ -1,26 +1,29 @@
 """
-检索层
-
-提供两种检索模式：
-1. HybridSearcher - 文章检索（持续运行模式）
-2. ParticleSearcher - 情报微粒检索（任务驱动模式）
+Retrieval layer exports.
 """
 
+from src.retrieval.embedding_client import OpenAIEmbeddingClient
 from src.retrieval.hybrid_search import HybridSearcher
-from src.retrieval.particle_search import ParticleSearcher
+from src.retrieval.indexing import KnowledgeIndexBuilder, rebuild_knowledge_indexes
+from src.retrieval.knowledge_search import (
+    KnowledgeSearchRequest,
+    KnowledgeSearchResult,
+    KnowledgeSearcher,
+)
 from src.retrieval.models import (
-    ParticleRetrievalRequest,
-    ParticleRetrievalResult,
     RetrievalRequest,
     RetrievalResult,
     SearchResult,
 )
 
 __all__ = [
+    "KnowledgeIndexBuilder",
     "HybridSearcher",
-    "ParticleSearcher",
-    "ParticleRetrievalRequest",
-    "ParticleRetrievalResult",
+    "OpenAIEmbeddingClient",
+    "KnowledgeSearcher",
+    "KnowledgeSearchRequest",
+    "KnowledgeSearchResult",
+    "rebuild_knowledge_indexes",
     "RetrievalRequest",
     "RetrievalResult",
     "SearchResult",
