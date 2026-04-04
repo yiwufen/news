@@ -13,6 +13,9 @@ __pycache__/
 .venv/
 venv/
 
+# uv 本地缓存
+.uv-cache/
+
 # IDE
 .vscode/
 .idea/

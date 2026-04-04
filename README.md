@@ -40,6 +40,9 @@ uv run pytest
 uv run pyright .
 ```
 
+说明：
+- 仓库通过 `uv.toml` 将 `uv` 缓存固定到项目内的 `.uv-cache/`，避免依赖用户目录下的全局缓存初始化。
+
 ## 当前入口
 
 ### 持续运行模式
