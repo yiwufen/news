@@ -19,3 +19,4 @@ venv/
 # IDE
 .vscode/
 .idea/
+uv.lock
