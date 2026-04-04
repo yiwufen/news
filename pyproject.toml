@@ -18,3 +18,8 @@ dev = [
     "pyright>=1.1.408",
     "pytest>=9.0.2",
 ]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.13"

@@ -1,16 +1,26 @@
 """
-持续运行模式入口
+持续运行模式入口。
 
-完整的持续运行流程：新闻 → 情报微粒 → 图谱同步
+完整的持续运行流程：
+原始文档 -> KnowledgeUnit -> Entity/EventCluster -> 图谱同步 -> legacy 回填
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
-from src.agents.integrator import IntegratorAgent
-from src.agents.worker import WorkerAgent
+from collectors.database import Database
+from src.entities_v2 import EntityResolver, EntityRepository
+from src.event_clustering import EventClusterRepository, EventClusterer
+from src.knowledge_base import (
+    KnowledgeProcessingLogRepository,
+    KnowledgeToLegacyParticleAdapter,
+    KnowledgeUnit,
+    KnowledgeUnitRepository,
+    RawDocumentRepository,
+)
+from src.knowledge_extractor import KnowledgeExtractor
+from src.knowledge_graph_sync import KnowledgeGraphSync
 from src.schemas import IntelligenceParticle
 
 
@@ -24,6 +34,10 @@ class ContinuousRunResult:
     edges_created: int
     errors: list[str]
     particles: list[IntelligenceParticle]
+    knowledge_units_extracted: int = 0
+    knowledge_units_saved: int = 0
+    entities_saved: int = 0
+    clusters_saved: int = 0
 
 
 class ContinuousPipeline:
@@ -45,6 +59,8 @@ class ContinuousPipeline:
         batch_size: int = 10,
         graph_enabled: bool = True,
         incremental: bool = True,
+        db_path: str = "data/news.db",
+        extractor: KnowledgeExtractor | None = None,
     ):
         """初始化持续运行流水线
 
@@ -56,9 +72,17 @@ class ContinuousPipeline:
         self.batch_size = batch_size
         self.graph_enabled = graph_enabled
         self.incremental = incremental
-
-        self.worker = WorkerAgent()
-        self.integrator = IntegratorAgent(graph_enabled=graph_enabled)
+        self.db = Database(db_path)
+        self.raw_documents = RawDocumentRepository(db_path)
+        self.knowledge_units = KnowledgeUnitRepository(db_path)
+        self.entity_repo = EntityRepository(db_path)
+        self.cluster_repo = EventClusterRepository(db_path)
+        self.log_repo = KnowledgeProcessingLogRepository(db_path)
+        self.extractor = extractor or KnowledgeExtractor()
+        self.entity_resolver = EntityResolver(self.entity_repo)
+        self.clusterer = EventClusterer(self.cluster_repo)
+        self.graph_sync = KnowledgeGraphSync() if graph_enabled else None
+        self.legacy_adapter = KnowledgeToLegacyParticleAdapter()
 
     def run(
         self,
@@ -76,56 +100,105 @@ class ContinuousPipeline:
         """
         errors: list[str] = []
         all_particles: list[IntelligenceParticle] = []
+        all_units: list[KnowledgeUnit] = []
         total_nodes = 0
         total_edges = 0
+        total_entities_saved = 0
+        total_clusters_saved = 0
 
-        # 1. 迭代处理文章批次
-        for batch in self.worker.iter_articles(
+        for batch in self.raw_documents.iter_documents(
             batch_size=self.batch_size,
             time_window=time_window,
             incremental=self.incremental,
         ):
-            # 2. Worker Agent 提取情报微粒
-            results = self.worker.extract_batch(batch, merge_same_event=False)
+            batch_units: list[KnowledgeUnit] = []
+            batch_log_records: list[dict[str, object]] = []
+            extracted_by_doc: dict[str, list[KnowledgeUnit]] = {}
 
-            success_particles: list[IntelligenceParticle] = []
-            log_records: list[dict[str, Any]] = []
+            for document in batch:
+                try:
+                    units = self.extractor.extract(document)
+                    extracted_by_doc[document.doc_id] = units
+                    batch_units.extend(units)
+                    all_units.extend(units)
+                except Exception as exc:
+                    errors.append(f"[{document.doc_id}] KnowledgeUnit 提取失败: {exc}")
+                    batch_log_records.append(
+                        {
+                            "doc_id": document.doc_id,
+                            "status": "failed",
+                            "error_message": str(exc),
+                        }
+                    )
 
-            for article, result in zip(batch, results):
-                if result.success and result.particle:
-                    success_particles.append(result.particle)
-                    all_particles.append(result.particle)
-                    log_records.append({
-                        "doc_id": article["doc_id"],
-                        "status": "success",
-                        "particle_id": result.particle.id,
-                    })
-                else:
-                    log_records.append({
-                        "doc_id": article["doc_id"],
-                        "status": "failed",
-                        "error_message": result.error_message or "未知错误",
-                    })
-                    errors.append(f"[{article['doc_id']}] 提取失败: {result.error_message}")
-
-            if dry_run:
+            if not batch_units:
+                if not dry_run and batch_log_records:
+                    self.log_repo.log_batch(batch_log_records)
                 continue
 
-            # 3. 保存情报微粒到 SQLite
-            if success_particles:
-                self.worker.db.insert_particles_batch(
-                    [p.model_dump() for p in success_particles]
+            resolved_units, resolved_entities = self.entity_resolver.resolve_units(
+                batch_units,
+                persist=not dry_run,
+            )
+            clustered_units, clusters = self.clusterer.assign_clusters(
+                resolved_units,
+                persist=not dry_run,
+            )
+            legacy_particles: list[IntelligenceParticle] = []
+            legacy_rows: list[dict[str, object]] = []
+            for unit in clustered_units:
+                legacy_particle = self.legacy_adapter.to_legacy_particle(unit)
+                legacy_row = self.legacy_adapter.to_legacy_row(unit)
+                if legacy_particle is None or legacy_row is None:
+                    continue
+                legacy_particles.append(legacy_particle)
+                legacy_rows.append(legacy_row)
+            all_particles.extend(legacy_particles)
+
+            graph_sync_error_message: str | None = None
+            if not dry_run:
+                self.knowledge_units.save_batch(clustered_units)
+                if legacy_rows:
+                    self.db.insert_particles_batch(legacy_rows)
+
+                if self.graph_enabled and self.graph_sync:
+                    sync_result = self.graph_sync.sync(resolved_entities, clusters)
+                    total_nodes += sync_result["entities_created"] + sync_result["clusters_created"]
+                    total_edges += sync_result["edges_created"]
+                    errors.extend(sync_result["errors"])
+                    if sync_result["errors"]:
+                        graph_sync_error_message = "; ".join(sync_result["errors"])
+
+            total_entities_saved += len(resolved_entities)
+            total_clusters_saved += len(clusters)
+
+            entities_by_doc: dict[str, set[str]] = {doc.doc_id: set() for doc in batch}
+            clusters_by_doc: dict[str, set[str]] = {doc.doc_id: set() for doc in batch}
+            for unit in clustered_units:
+                entities_by_doc.setdefault(unit.source.doc_id, set()).update(
+                    entity.entity_id for entity in unit.entities if entity.entity_id
+                )
+                if unit.cluster_id:
+                    clusters_by_doc.setdefault(unit.source.doc_id, set()).add(unit.cluster_id)
+
+            for document in batch:
+                if any(record["doc_id"] == document.doc_id for record in batch_log_records):
+                    continue
+                doc_units = extracted_by_doc.get(document.doc_id, [])
+                status = "failed" if graph_sync_error_message else "success"
+                batch_log_records.append(
+                    {
+                        "doc_id": document.doc_id,
+                        "status": status,
+                        "knowledge_units_count": len(doc_units),
+                        "entities_count": len(entities_by_doc.get(document.doc_id, set())),
+                        "clusters_count": len(clusters_by_doc.get(document.doc_id, set())),
+                        "error_message": graph_sync_error_message,
+                    }
                 )
 
-            # 4. 记录处理状态
-            self.worker.db.log_processing_batch(log_records)
-
-            # 5. 图谱同步
-            if success_particles and self.graph_enabled:
-                sync_result = self.integrator.run(success_particles)
-                total_nodes += sync_result.get("entities_created", 0) + sync_result.get("entities_merged", 0)
-                total_edges += sync_result.get("edges_created", 0)
-                errors.extend(sync_result.get("errors", []))
+            if not dry_run:
+                self.log_repo.log_batch(batch_log_records)
 
         return ContinuousRunResult(
             particles_extracted=len(all_particles),
@@ -134,6 +207,10 @@ class ContinuousPipeline:
             edges_created=total_edges,
             errors=errors,
             particles=all_particles,
+            knowledge_units_extracted=len(all_units),
+            knowledge_units_saved=len(all_units) if not dry_run else 0,
+            entities_saved=total_entities_saved if not dry_run else 0,
+            clusters_saved=total_clusters_saved if not dry_run else 0,
         )
 
     def run_once(self, limit: int = 10) -> ContinuousRunResult:

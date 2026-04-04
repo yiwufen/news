@@ -38,6 +38,7 @@ class TestQueryInput:
 
         assert inp.raw_query == "查看小米过去一年的政策风险"
         assert inp.entities == ["小米集团"]
+        assert inp.time_range is not None
         assert inp.time_range.start == date(2025, 1, 1)
         assert inp.intent == IntentType.ENTITY_TIMELINE
         assert inp.filters.event_types == ["POLICY_SANCTION"]

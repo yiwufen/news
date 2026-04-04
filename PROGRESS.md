@@ -20,10 +20,10 @@
 | 层级 | 状态 | 完成度 | 说明 |
 |------|------|--------|------|
 | 1. 原始文档接入 | ✅ 已完成 | 100% | SQLite 文档存储、测试数据与增量读取已具备 |
-| 2. 文档知识化抽取 | ⚠️ 迁移中 | 45% | 现有 `IntelligenceParticle` 能跑通，但仍强绑定风险语义 |
-| 3. 实体与事件归一 | ⚠️ 待增强 | 35% | 有基础图谱同步能力，但尚未围绕 `Entity + EventCluster` 统一建模 |
+| 2. 文档知识化抽取 | ⚠️ 迁移中 | 70% | `run_continuous()` 已切到 `RawDocument -> KnowledgeUnit` 新主线，抽取仍以启发式/最小 LLM 契约为主 |
+| 3. 实体与事件归一 | ⚠️ 迁移中 | 65% | 已新增 `Entity` / `EventCluster` 保守归一与归并，但规则仍需继续增强 |
 | 4. 检索层 | ⚠️ 部分实现 | 40% | 基础过滤和回退已实现，正式 BM25/向量/统一重排仍缺失 |
-| 5. 图谱层 | ⚠️ 迁移中 | 50% | Neo4j 已接入，但当前查询与 schema 仍偏风险穿透 |
+| 5. 图谱层 | ⚠️ 迁移中 | 65% | 新离线路径已同步 `Entity + EventCluster + INVOLVED_IN`，旧查询层仍保留风险导向实现 |
 | 6. 任务消费层 | ⚠️ 暂保留 | 30% | 现有 `run_pipeline()` 可运行，但属于旧风险导向消费逻辑 |
 
 ---
@@ -83,20 +83,21 @@
 - [x] 在共享规范中定义 `Entity v1`
 - [x] 在共享规范中明确 `KnowledgeUnit -> EventCluster` 保守归并规则
 - [x] 在共享规范和入口文档中明确 legacy 隔离规则，避免新实现继续被旧风险代码带偏
-- [ ] 在代码中落地 `RawDocument` / `KnowledgeUnit` / `EventCluster` / `Entity` 模型
-- [ ] 设计并执行存储层迁移方案
+- [x] 在代码中落地 `RawDocument` / `KnowledgeUnit` / `EventCluster` / `Entity` 模型
+- [x] 设计并执行首批 SQLite 存储层迁移方案（`knowledge_units` / `entities` / `event_clusters` / `knowledge_processing_log`）
 
 ### 离线知识化流水线
-- [ ] 将 Worker 输出从 `IntelligenceParticle` 迁移到 `KnowledgeUnit`
-- [ ] 将 Integrator 职责迁移为实体标准化、事件归并、图谱更新
+- [x] 将 `run_continuous()` 主线输出从 `IntelligenceParticle` 迁移到 `KnowledgeUnit`
+- [x] 将新离线路径的 Integrator 职责迁移为实体标准化、事件归并、图谱更新
 - [ ] 建立冲突保留与多来源聚合逻辑
-- [ ] 建立可追踪的离线知识化状态记录
+- [x] 建立可追踪的离线知识化状态记录
+- [x] 修复知识化主线稳定性问题：`ku_id` 可重放、图同步失败可重试、legacy 回填仅保留明确可映射事件
 
 ### 图谱与 GraphRAG
-- [ ] 按 `Entity + EventCluster` 重构图谱主模型
-- [ ] 定义节点、边与溯源约束
+- [x] 按 `Entity + EventCluster` 重构新离线路径图谱主模型
+- [x] 定义节点、边与溯源约束
 - [ ] 让图谱成为正式可检索产物
-- [ ] 保证图结果可回溯到底层 `KnowledgeUnit`
+- [x] 保证图结果可回溯到底层 `KnowledgeUnit`
 
 ### 检索系统
 - [ ] 建立 `KnowledgeUnit` 稀疏索引
