@@ -1,15 +1,17 @@
 # 项目开发进度
 
-## 双模式架构
+## 当前定位
 
-系统采用"生产-消费"双模式架构：
+项目已从“金融风险研判 Agent”重定位为“金融知识检索底座”。
 
-| 模式 | 目标 | 入口 | 数据流向 |
-|------|------|------|----------|
-| **持续运行** | 新闻 → 情报微粒 | `WorkerAgent.run()` | 生产数据 |
-| **任务驱动** | 用户查询 → 分析报告 | `run_pipeline()` | 消费数据 |
+当前阶段目标：
 
-**关键设计**：任务驱动模式直接检索持续运行模式产出的情报微粒，无需重新提取。
+- 把原始消息加工为可检索状态
+- 建立 `KnowledgeUnit` / `EventCluster` / `Entity` 三层知识结构
+- 构建文本、语义、图谱三类正式索引
+- 为后续 skill 驱动的分析 agent 提供统一知识底座
+
+风险分析、时间线、主题研究、关系扩展等能力均视为后续消费该底座的 skill。
 
 ---
 
@@ -17,185 +19,131 @@
 
 | 层级 | 状态 | 完成度 | 说明 |
 |------|------|--------|------|
-| 2.0 意图解析层 | ✅ 已完成 | 100% | IntentClassifier、时间解析、实体提取均已实现 |
-| 2.1 检索层 | ⚠️ 部分实现 | 50% | 元数据过滤已实现，BM25/向量检索为预留接口 |
-| 2.2 并行提炼层 | ✅ 已完成 | 100% | Worker Agent 可运行 |
-| 2.3 动态记忆层 | ✅ 已完成 | 100% | SQLite + Neo4j 均已实现 |
-| 2.4 宏观研判层 | ✅ 已完成 | 100% | Master/Critic Agent 可运行 |
-| 2.5 编排调度层 | ✅ 已完成 | 100% | LangGraph 状态机已实现，支持按意图路由 |
+| 1. 原始文档接入 | ✅ 已完成 | 100% | SQLite 文档存储、测试数据与增量读取已具备 |
+| 2. 文档知识化抽取 | ⚠️ 迁移中 | 45% | 现有 `IntelligenceParticle` 能跑通，但仍强绑定风险语义 |
+| 3. 实体与事件归一 | ⚠️ 待增强 | 35% | 有基础图谱同步能力，但尚未围绕 `Entity + EventCluster` 统一建模 |
+| 4. 检索层 | ⚠️ 部分实现 | 40% | 基础过滤和回退已实现，正式 BM25/向量/统一重排仍缺失 |
+| 5. 图谱层 | ⚠️ 迁移中 | 50% | Neo4j 已接入，但当前查询与 schema 仍偏风险穿透 |
+| 6. 任务消费层 | ⚠️ 暂保留 | 30% | 现有 `run_pipeline()` 可运行，但属于旧风险导向消费逻辑 |
 
 ---
 
-## 已实现功能
+## 已有基础能力
 
-### 意图解析层
-- [x] IntentType 枚举定义 (`src/intent/models.py`)
-- [x] StructuredQuery 数据模型
-- [x] TimeRange 时间范围解析
-- [x] QueryFilters 过滤条件
-- [x] IntentClassifier 意图分类器 (`src/intent/classifier.py`)
-- [x] LLM 驱动的意图解析
-- [x] 相对/绝对时间表达式解析
-
-### 检索层
-- [x] ParticleSearcher 情报微粒检索器 (`src/retrieval/particle_search.py`)
-- [x] HybridSearcher 文章检索器 (`src/retrieval/hybrid_search.py`)
-- [x] 元数据过滤 (时间范围、实体、事件类型)
-- [x] 实体关键词过滤
-- [x] 检索节点回退机制 (微粒 → 文章)
-
-### 持续运行模式入口
-- [x] ContinuousPipeline 完整流水线 (`src/pipeline/continuous.py`)
-- [x] Worker Agent 提取情报微粒
-- [x] Integrator Agent 图谱同步
-- [x] 处理状态追踪
-- [ ] BM25 检索 (预留接口)
-- [ ] 向量检索 (预留接口)
-- [ ] RRF 融合 (待实现)
-
-### 数据采集与存储
+### 数据接入与存储
 - [x] SQLite 数据库管理 (`collectors/database.py`)
-- [x] 新闻文章存储 (80 篇测试数据)
-- [x] 情报微粒存储
+- [x] 新闻文章存储
 - [x] 处理状态追踪
+- [x] 增量批处理入口
 
-### Worker Agent
-- [x] 单篇/批量情报提取 (`src/agents/worker/agent.py`)
-- [x] LLM Tool Use 结构化输出
-- [x] 嵌套 JSON 解析修复 (兼容百度千帆 API)
-- [x] 增量处理支持
-- [x] 时间切片分组
+### 双模式骨架
+- [x] `run_continuous()` 离线流水线入口
+- [x] `run_pipeline()` 任务入口
+- [x] LangGraph 编排骨架
+- [x] 阶段状态与错误追踪
 
-### 风险计算引擎
-- [x] 风险传导公式实现 (`src/risk/calculator.py`)
-- [x] 时间衰减计算
-- [x] 路径权重计算
-- [x] 风险评估模型
+### 抽取与图谱基础设施
+- [x] Worker Agent 结构化抽取能力
+- [x] Integrator Agent 图谱同步能力
+- [x] Neo4j 连接管理
+- [x] 基础 Cypher 查询模板
 
-### 图谱模块
-- [x] Neo4j 连接管理 (`src/graph/connection.py`)
-- [x] Cypher 查询模板 (`src/graph/queries.py`)
-- [x] 风险穿透查询
-- [x] 特殊风险模式检测 (环形担保、链式担保)
+### 基础检索
+- [x] 文章检索器骨架
+- [x] 结构化过滤基础能力
+- [x] 微粒到文章的回退机制
 
-### Agent 编排
-- [x] LangGraph 状态图 (`src/orchestration/graph.py`)
-- [x] 节点函数封装 (`src/orchestration/nodes.py`)
-- [x] 状态定义 - PipelineContext 上下文对象 (`src/orchestration/state.py`)
-- [x] Pipeline 入口 - `run_pipeline()` 函数
-
-### 意图路由
-- [x] 5 种意图路径：ENTITY_TIMELINE, RISK_ASSESSMENT, RELATIONSHIP_QUERY, COMPARATIVE_ANALYSIS, EVENT_IMPACT
-- [x] `comparative_analysis_node` 多实体对比分析
-- [x] `event_impact_node` 事件影响分析
-- [x] 单元测试 + 集成测试 (38 个测试)
+### 测试与工程
+- [x] 单元测试与集成测试骨架
+- [x] `uv` 环境与依赖管理
+- [x] `pyright` 类型检查接入
 
 ---
 
-## 待开发功能
+## 明确需要迁移或降级的旧设计
 
-### 优先级 P0：检索层增强
+以下内容仍存在于代码中，但不再代表目标架构：
 
-- [ ] 实现真正的 BM25 检索 (当前为简单关键词匹配)
-- [ ] 实现向量检索
-- [ ] 实现 RRF 融合算法
-- [ ] 建立实体别名词典
+- [ ] `IntelligenceParticle` 作为核心数据契约
+- [ ] `risk_signal` 作为抽取层强制中心字段
+- [ ] `RiskReport` 作为默认终点产物
+- [ ] “风险研判系统”作为项目定位
+- [ ] 以风险传导为中心的图查询语义
 
-### 基础设施
-
-- [x] Neo4j 实例部署
-- [ ] 配置向量数据库
-- [ ] 创建文章嵌入索引
-- [ ] 批量向量化历史文章
-
-### 优先级 P2：增强功能
-
-- [ ] 重排序模型 (Cross-Encoder)
-- [ ] 多轮对话支持
-- [ ] 报告导出 (PDF/Markdown)
-- [ ] API 接口封装
+这些能力后续应降级为某些 skill 的消费逻辑，而不是知识底座本身。
 
 ---
 
-## 技术选型建议
+## P0 重点任务
 
-### 向量数据库
-| 选项 | 优点 | 缺点 |
-|------|------|------|
-| Qdrant | 高性能、支持过滤、云原生 | 需要部署 |
-| Milvus | 分布式、企业级 | 较重 |
-| FAISS | 本地运行、简单 | 不支持过滤 |
+### 数据契约重构
+- [x] 在共享规范中定义 `RawDocument` 规范
+- [x] 在共享规范中定义 statement-level `KnowledgeUnit v1`
+- [x] 在共享规范中定义 `EventCluster v1`
+- [x] 在共享规范中定义 `Entity v1`
+- [x] 在共享规范中明确 `KnowledgeUnit -> EventCluster` 保守归并规则
+- [x] 在共享规范和入口文档中明确 legacy 隔离规则，避免新实现继续被旧风险代码带偏
+- [ ] 在代码中落地 `RawDocument` / `KnowledgeUnit` / `EventCluster` / `Entity` 模型
+- [ ] 设计并执行存储层迁移方案
 
-**建议**：开发阶段使用 FAISS，生产环境迁移 Qdrant。
+### 离线知识化流水线
+- [ ] 将 Worker 输出从 `IntelligenceParticle` 迁移到 `KnowledgeUnit`
+- [ ] 将 Integrator 职责迁移为实体标准化、事件归并、图谱更新
+- [ ] 建立冲突保留与多来源聚合逻辑
+- [ ] 建立可追踪的离线知识化状态记录
 
-### BM25 引擎
-| 选项 | 优点 | 缺点 |
-|------|------|------|
-| rank_bm25 | 纯 Python、简单 | 不支持持久化 |
-| Elasticsearch | 企业级、分布式 | 需要部署 |
+### 图谱与 GraphRAG
+- [ ] 按 `Entity + EventCluster` 重构图谱主模型
+- [ ] 定义节点、边与溯源约束
+- [ ] 让图谱成为正式可检索产物
+- [ ] 保证图结果可回溯到底层 `KnowledgeUnit`
 
-**建议**：开发阶段使用 rank_bm25 + SQLite 全文搜索。
-
----
-
-## 测试数据状态
-
-```
-数据库: data/news.db
-├── 文章数: 80
-├── 情报微粒数: 4
-├── 处理成功: 4
-└── 处理失败: 32 (需重新处理)
-
-时间范围: 2026-01-02 ~ 2026-03-30
-分类分布:
-  - SUPPLY_CHAIN: 20
-  - CORPORATE_MERGER: 17
-  - FINANCIAL_EARNINGS: 14
-  - POLICY_SANCTION: 10
-  - TARIFF_TRADE: 7
-  - REGULATORY_ACTION: 5
-  - MARKET_VOLATILITY: 6
-```
+### 检索系统
+- [ ] 建立 `KnowledgeUnit` 稀疏索引
+- [ ] 建立 `KnowledgeUnit` 向量索引
+- [ ] 建立 `Entity` 与 `EventCluster` 检索入口
+- [ ] 定义统一检索返回契约
+- [ ] 实现 BM25 / 向量检索 / 融合排序
 
 ---
 
-## 运行方式
+## P1 后续任务
 
-### 模式一：持续运行模式
+- [ ] 设计面向 skill 的统一检索接口
+- [ ] 将风险分析改造为消费知识底座的 skill
+- [ ] 将时间线生成功能改造为消费知识底座的 skill
+- [ ] 支持主题研究、关系扩展、事件影响分析 skill
+- [ ] 设计多轮任务消费层
+- [ ] 提供 API 封装
+
+---
+
+## 当前建议的迁移顺序
+
+1. 重写共享规范与进度文档
+2. 定义 `KnowledgeUnit v1` / `EventCluster v1` / `Entity v1`
+3. 重构离线流水线输出与图谱更新逻辑
+4. 建立正式多索引
+5. 最后再重构任务消费层
+
+---
+
+## 运行说明
+
+### 当前可用入口
 
 ```bash
-# 完整流程：新闻 → 情报微粒 → 图谱同步
-uv run python -c "
-from dotenv import load_dotenv
-load_dotenv()
-from src.pipeline import run_continuous
-
-result = run_continuous(
-    batch_size=10,
-    graph_enabled=True,   # 启用图谱同步
-    incremental=True,     # 只处理未处理的文章
-)
-print(f'情报微粒: {result.particles_extracted}')
-print(f'图谱节点: {result.nodes_created}')
-print(f'图谱关系: {result.edges_created}')
-"
-
-# 无 Neo4j 环境时，可禁用图谱同步
 uv run python -c "
 from dotenv import load_dotenv
 load_dotenv()
 from src.pipeline import run_continuous
 
 result = run_continuous(graph_enabled=False)
-print(f'情报微粒: {result.particles_extracted}')
+print(result)
 "
 ```
 
-### 模式二：任务驱动模式
-
 ```bash
-# 自然语言查询 → 检索情报微粒 → 生成报告
 uv run python -c "
 from dotenv import load_dotenv
 load_dotenv()
@@ -203,64 +151,25 @@ from src.orchestration import run_pipeline
 
 result = run_pipeline(
     raw_query='查看小米集团过去一年做的事情',
-    graph_enabled=False  # 无图谱模式
+    graph_enabled=False,
 )
 print(result)
 "
 ```
 
-### 其他测试
+说明：
 
-```bash
-# 测试意图解析
-uv run python -c "
-from dotenv import load_dotenv
-load_dotenv()
-from src.intent import IntentClassifier
-
-classifier = IntentClassifier()
-query = classifier.parse('查看小米集团过去一年做的事情')
-print(query.to_dict())
-"
-
-# 测试情报微粒检索
-uv run python -c "
-from dotenv import load_dotenv
-load_dotenv()
-from src.retrieval import ParticleSearcher, ParticleRetrievalRequest
-from src.intent.models import StructuredQuery, IntentType
-
-searcher = ParticleSearcher()
-result = searcher.search(ParticleRetrievalRequest(
-    structured_query=StructuredQuery(
-        intent=IntentType.ENTITY_TIMELINE,
-        entities=['小米集团'],
-    ),
-))
-print(f'检索到 {result.total_count} 个情报微粒')
-"
-```
-
-### 注意事项
-
-- 持续运行模式需要先运行，产出情报微粒后任务驱动模式才能检索
-- 若无情报微粒，任务驱动模式会回退到原始文章检索
-- 完整流水线需要配置 LLM API (百度千帆或 Anthropic)
+- 上述入口当前仍可运行
+- 但 `run_pipeline()` 代表的是迁移期旧消费层，不代表项目最终目标形态
+- 当前研发重点应优先放在 `run_continuous()` 驱动的离线知识化建库
 
 ---
 
 ## 相关文档
 
 - [docs/SHARED_RULES.md](docs/SHARED_RULES.md) - 项目共享规范真源
+- [README.md](README.md) - 项目入口说明
 - [AGENTS.md](AGENTS.md) - Codex 入口
 - [CLAUDE.md](CLAUDE.md) - Claude Code 入口
-- [.claude/rules/01-taxonomy.md](.claude/rules/01-taxonomy.md) - 金融语义标准
-- [.claude/rules/02-prompts.md](.claude/rules/02-prompts.md) - Agent Prompt 模板
-- [.claude/rules/03-risk-logic.md](.claude/rules/03-risk-logic.md) - 风险传导算法
-- [.claude/rules/04-intent-retrieval.md](.claude/rules/04-intent-retrieval.md) - 意图解析与检索规范
 
-## 规范入口说明
-
-- 项目级规则统一以 `docs/SHARED_RULES.md` 为准
-- `AGENTS.md` 和 `CLAUDE.md` 仅作为各自 agent 的入口文件，不再重复维护完整项目规范
-- 共享规范已补充图谱关系边 `valid_from` 时间戳约束，继续与现有实现保持一致
+项目级规则统一以 `docs/SHARED_RULES.md` 为准。

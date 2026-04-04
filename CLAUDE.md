@@ -11,14 +11,13 @@
 
 ## Claude 专属规则入口
 
-- `.claude/rules/01-taxonomy.md`：金融语义与枚举标准
-- `.claude/rules/02-prompts.md`：Agent Prompt 模板
-- `.claude/rules/03-risk-logic.md`：风险传导算法
-- `.claude/rules/04-intent-retrieval.md`：意图解析与检索规范
 - `.claude/rules/python.md`：Python 开发规则
+
+其余历史规则文件已删除，避免旧的风险研判设计继续干扰当前“金融知识检索底座”方向。
 
 ## 维护原则
 
 - 项目目标、系统架构、核心数据契约、开发 guardrails 一律回写到 `docs/SHARED_RULES.md`
-- `.claude/rules/` 仅保留 Claude 机制需要的规则文件或对共享规范的补充
+- `.claude/rules/` 仅保留 Claude 机制需要的最小规则文件
+- 迁移阶段默认把旧风险导向实现视为 `legacy`，新实现不得继续以其为核心扩展
 - 若 `CLAUDE.md` 与共享规范不一致，以共享规范为准
