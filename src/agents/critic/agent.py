@@ -5,14 +5,12 @@ Critic Agent - 事实核查
 """
 
 import json
-import os
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable
-
-from anthropic import Anthropic
+from typing import Any
 
 from src.agents.critic.prompts import SYSTEM_PROMPT, build_verification_prompt
+from src.llm import create_llm_client, extract_text_from_response, parse_json_from_text, DEFAULT_MAX_TOKENS
 from src.schemas import IntelligenceParticle
 
 
@@ -67,23 +65,10 @@ class CriticAgent:
     职责：
     1. 验证报告的准确性
     2. 驳回无依据的"幻觉"结论
-    3. 实现死循环熔断（max_retries=2）
     """
 
-    MAX_RETRIES = 2  # 按 CLAUDE.md 规定的熔断上限
-
     def __init__(self):
-        self._init_llm_client()
-
-    def _init_llm_client(self) -> None:
-        """初始化 LLM 客户端"""
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise ValueError("ANTHROPIC_API_KEY 环境变量未设置")
-
-        base_url = os.environ.get("ANTHROPIC_API_BASE_URL")
-        self.client = Anthropic(api_key=api_key, base_url=base_url)
-        self.model = os.environ.get("ANTHROPIC_MODEL") or "glm-5"
+        self.client, self.model = create_llm_client()
         self.max_tokens = 2048
 
     def verify(
@@ -114,22 +99,8 @@ class CriticAgent:
         )
 
         # 解析响应
-        content = ""
-        if response.content:
-            for block in response.content:
-                text = getattr(block, "text", None)
-                if text:
-                    content += text
-
-        try:
-            result = json.loads(content) if content else {}
-        except json.JSONDecodeError:
-            # 解析失败，默认通过
-            return VerificationResult(
-                passed=True,
-                issues=[],
-                suggestions=["核查结果解析失败，默认通过"],
-            )
+        content = extract_text_from_response(response)
+        result = parse_json_from_text(content, default={"passed": True})
 
         # 构建问题列表
         issues: list[VerificationIssue] = []
@@ -152,54 +123,6 @@ class CriticAgent:
             passed=result.get("passed", True),
             issues=issues,
             suggestions=result.get("suggestions", []),
-        )
-
-    def verify_with_retry(
-        self,
-        report: dict,
-        particles: list[IntelligenceParticle],
-        on_retry: "Callable[[VerificationResult], dict | None] | None" = None,
-    ) -> VerificationResult:
-        """带熔断机制的核查
-
-        最多重试 MAX_RETRIES 次（默认 2 次）。
-        超过次数依然不通过的，按"置信度不足"降级输出。
-
-        Args:
-            report: 待核查的报告
-            particles: 原始情报微粒
-            on_retry: 重试回调函数
-
-        Returns:
-            核查结果
-        """
-        result: VerificationResult | None = None
-
-        for retry_count in range(self.MAX_RETRIES + 1):
-            result = self.verify(report, particles)
-            result.retry_count = retry_count
-
-            if result.passed:
-                return result
-
-            # 未通过，检查是否需要重试
-            if retry_count < self.MAX_RETRIES and on_retry:
-                # 调用回调进行修正
-                new_report = on_retry(result)
-                if new_report is None:
-                    break
-                report = new_report
-
-        # 超过重试次数，降级输出
-        if result and not result.passed:
-            result.suggestions.append(
-                f"已达到最大重试次数 ({self.MAX_RETRIES})，按置信度不足降级输出"
-            )
-
-        return result or VerificationResult(
-            passed=True,
-            issues=[],
-            suggestions=["核查流程异常，默认通过"],
         )
 
     def check_hallucination(

@@ -5,6 +5,8 @@
 严格按照 CLAUDE.md 和规则文件定义。
 """
 
+from __future__ import annotations
+
 from datetime import date, datetime
 from typing import Any
 from uuid import uuid4
@@ -142,6 +144,64 @@ class IntelligenceParticle(BaseModel):
     def event_time(self) -> date:
         """获取事件时间"""
         return self.metadata.event_time
+
+    # === 工厂方法 ===
+
+    @classmethod
+    def from_db_dict(cls, data: dict[str, Any]) -> IntelligenceParticle | None:
+        """从数据库字典创建 IntelligenceParticle
+
+        处理数据库存储格式与 Schema 的差异。
+
+        Args:
+            data: 数据库中存储的微粒字典
+
+        Returns:
+            IntelligenceParticle 对象，转换失败返回 None
+        """
+        try:
+            # 解析事件时间
+            event_time_str = data.get("event_time")
+            if event_time_str:
+                try:
+                    event_time = date.fromisoformat(event_time_str)
+                except ValueError:
+                    event_time = date.today()
+            else:
+                event_time = date.today()
+
+            # 解析事件类型
+            event_type_str = data.get("event_type", "RESTRUCTURING")
+            try:
+                event_type = EventType(event_type_str)
+            except ValueError:
+                event_type = EventType.RESTRUCTURING
+
+            # 解析风险等级
+            risk_level_str = data.get("risk_level", "MEDIUM")
+            try:
+                risk_level = RiskLevel(risk_level_str)
+            except ValueError:
+                risk_level = RiskLevel.MEDIUM
+
+            return cls(
+                id=data.get("particle_id", data.get("id", "")),
+                metadata=Metadata(
+                    source=data.get("source", "unknown"),
+                    event_time=event_time,
+                    reliability=float(data.get("reliability", 0.8)),
+                ),
+                risk_signal=RiskSignal(
+                    type=event_type,
+                    level=risk_level,
+                    description=data.get("event_summary", ""),
+                ),
+                traceability=Traceability(
+                    source_doc_ids=data.get("source_doc_ids", []),
+                ),
+            )
+        except Exception:
+            return None
 
 
 class ExtractionResult(BaseModel):

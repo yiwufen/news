@@ -10,9 +10,11 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "neo4j>=5.0.0",
     "langgraph>=0.2.0",
+    "python-dateutil>=2.9.0.post0",
 ]
 
 [dependency-groups]
 dev = [
     "pyright>=1.1.408",
+    "pytest>=9.0.2",
 ]

@@ -31,35 +31,141 @@
 
 ---
 
+## 双模式架构 (Dual-Mode Architecture)
+
+系统采用"生产-消费"双模式架构，持续运行模式为任务驱动模式提供数据基础。
+
+### 模式一：持续运行模式 (Continuous Mode)
+
+**目标**：将非结构化新闻转化为可查询的结构化情报。
+
+```
+┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐
+│ 新闻入库  │ →  │ Worker   │ →  │ 情报微粒  │ →  │ 图谱同步  │
+│          │    │ Agent    │    │  SQLite   │    │  Neo4j   │
+└──────────┘    └──────────┘    └──────────┘    └──────────┘
+```
+
+**特点**：
+- 后台持续运行，增量处理新数据
+- 产出：情报微粒 (SQLite) + 知识图谱 (Neo4j)
+- 图谱同步是标准步骤，仅在无 Neo4j 环境时可禁用
+- 无需用户触发
+
+**入口**：`run_continuous(graph_enabled=True)`
+
+### 模式二：任务驱动模式 (Task-Driven Mode)
+
+**目标**：回答用户的具体问题，直接检索已产出的情报微粒。
+
+```
+┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐
+│ 用户查询  │ →  │ 意图解析  │ →  │ 微粒检索  │ →  │  分析    │
+│          │    │          │    │ (已存储)  │    │ Master   │
+└──────────┘    └──────────┘    └──────────┘    └──────────┘
+```
+
+**特点**：
+- 用户触发，按需检索
+- 直接检索已提取的情报微粒，无需重新提取
+- 回退机制：若无情报微粒，回退到原始文章检索
+
+**入口**：`run_pipeline(raw_query="...")`
+
+### 数据流向关系
+
+```
+持续运行模式                              任务驱动模式
+    │                                        │
+    ▼                                        │
+┌─────────────┐                              │
+│ 原始新闻    │                              │
+└─────────────┘                              │
+    │                                        │
+    ▼                                        │
+┌─────────────┐                              │
+│ Worker Agent│                              │
+└─────────────┘                              │
+    │                                        │
+    ▼                                        │
+┌─────────────┐     直接检索       ┌─────────────┐
+│ 情报微粒    │ ────────────────────→ │ Particle    │
+│ (SQLite)    │                      │ Searcher    │
+└─────────────┘                      └─────────────┘
+    │                                        │
+    ▼                                        ▼
+┌─────────────┐                      ┌─────────────┐
+│ Neo4j 图谱  │                      │ Master Agent│
+└─────────────┘                      └─────────────┘
+```
+
+---
+
 ## 系统分层架构 (System Architecture Layers)
 
-系统通过状态机（State Machine）框架进行编排，分为四个解耦的层级：
+系统通过状态机（State Machine）框架进行编排，分为 **六个** 解耦的层级：
 
-### 2.1 任务接入与预过滤层 (Ingestion & Pre-filtering)
-**职责：** 接收自然语言任务，执行粗筛，生成"任务专属数据池"。
-* **Query Rewrite (查询重写)：** 将用户输入转化为实体词典和多维度检索式（同义词、行业黑话扩展）。
-* **Hybrid Search (混合检索)：**
-    * **向量检索 (Dense)：** 捕获语义相关性（如："打压"与"制裁"对齐）。
-    * **字面检索 (Sparse/BM25)：** 强制精确匹配实体代号（如："Project X-99"）。
-* **Metadata Filtering (元数据硬过滤)：** 根据时间戳、信息源可靠度、实体标签进行前置 SQL/DSL 过滤。
+### 2.0 意图解析层 (Intent Parsing) - ✅ 已实现
+**职责：** 将用户自然语言指令转化为结构化查询。
+* **Intent Classifier (意图分类)：** 识别用户意图类型
+    * `ENTITY_TIMELINE`: 查看某实体的历史行为时间线
+    * `RISK_ASSESSMENT`: 评估某实体的风险暴露
+    * `RELATIONSHIP_QUERY`: 查询实体间的关系路径
+    * `COMPARATIVE_ANALYSIS`: 多实体对比分析
+* **Entity Extractor (实体提取)：** 从查询中提取目标实体名称
+* **Time Range Parser (时间解析)：** 解析相对时间表达式
+    * "过去一年" → `{start: today-365d, end: today}`
+    * "2025年Q3" → `{start: 2025-07-01, end: 2025-09-30}`
+    * "最近三个月" → `{start: today-90d, end: today}`
 
-### 2.2 并行提炼层 (Map Layer - The Workers)
+**输出 Schema：**
+```json
+{
+  "intent": "ENTITY_TIMELINE",
+  "entities": ["小米集团"],
+  "time_range": {
+    "start": "2025-04-03",
+    "end": "2026-04-03"
+  },
+  "filters": {
+    "event_types": ["POLICY_SANCTION", "INVESTMENT", "COOPERATION"],
+    "risk_levels": ["HIGH", "CRITICAL"]
+  },
+  "original_query": "查看小米集团过去一年做的事情"
+}
+```
+
+### 2.1 检索层 (Retrieval) - ⚠️ 部分实现
+**职责：** 从已存储的情报微粒或原始文章中检索相关数据。
+* **ParticleSearcher (情报微粒检索)：** 任务驱动模式优先使用，直接检索已提取的情报微粒。
+* **HybridSearcher (文章检索)：** 持续运行模式使用，或任务驱动模式回退时使用。
+* **Metadata Filtering (元数据硬过滤)：** 根据时间戳、实体名称、事件类型进行过滤。
+
+**输出：** 情报微粒列表或候选文章池 (Top-K)
+
+### 2.2 并行提炼层 (Map Layer - The Workers) - ✅ 已实现
 **职责：** 并行处理切片数据，执行信息抽取（Information Extraction, IE）。
 * **Time-Window Slicer：** 将召回的数千篇候选池文档，严格按时间窗口（如按周、按月）切片。
 * **Worker Agent 集群：** 为每个时间切片分配独立的 Agent 实例。
     * *输入：* 单个时间切片内的 50-100 篇新闻。
     * *输出：* 强制结构化输出"情报微粒（Intelligence Particle）"。
 
-### 2.3 动态记忆层 (Memory & Persistence)
+### 2.3 动态记忆层 (Memory & Persistence) - ✅ 已实现
 **职责：** 系统的"公共白板"，存储高度压缩后的结构化情报。
-* **结构化存储：** 采用 PostgreSQL (JSONB) 存储情报微粒，按时间序列存储。
+* **结构化存储：** 采用 SQLite/PostgreSQL (JSONB) 存储情报微粒，按时间序列存储。
 * **图谱映射准备：** 存储提取出的 `主-谓-宾` 三元组，为 GraphRAG 提供底层数据支撑。
 
-### 2.4 宏观研判层 (Reduce Layer - The Master)
+### 2.4 宏观研判层 (Reduce Layer - The Master) - ✅ 已实现
 **职责：** 全局推理、防幻觉校验与报告渲染。
 * **Master Analyst Agent：** 按时间序列读取数据库中的"情报微粒"，进行跨周期逻辑推理。
 * **Critic Agent (红蓝对抗)：** 事实核查员，对比最终报告与原始情报微粒，驳回无引用依据的"幻觉"结论。
 * **Citation Engine (溯源引擎)：** 强制在最终报告的每一句断言后附带原始 `doc_id` 锚点。
+
+### 2.5 编排调度层 (Orchestration) - ✅ 已实现
+**职责：** 统一调度各 Agent 节点，管理状态流转。
+* **LangGraph StateGraph：** 定义状态机流程和条件跳转
+* **PipelineContext：** 流水线上下文，在节点间传递
+* **Retry Policy：** Critic 打回重试策略 (max_retries=2)
 
 ---
 
@@ -139,17 +245,25 @@
 
 ## 规则文件索引 (Rules Index)
 
-以下规则文件位于 `.cursor/rules/` 目录，按场景自动关联：
+以下规则文件位于 `.claude/rules/` 目录，按场景自动关联：
 
 | 文件 | 用途 | 关联场景 |
 |------|------|----------|
 | [01-taxonomy.md](.claude/rules/01-taxonomy.md) | 金融语义与枚举标准 | 事件分类、关系定义、风险等级 |
 | [02-prompts.md](.claude/rules/02-prompts.md) | Agent System Prompt 模板 | Worker/Integrator/Master/Critic Agent |
 | [03-risk-logic.md](.claude/rules/03-risk-logic.md) | 风险传导算法与数学公式 | 风险计算、路径搜索、Cypher 查询 |
+| [04-intent-retrieval.md](.claude/rules/04-intent-retrieval.md) | 意图解析与检索层规范 | 意图分类、实体提取、混合检索、RRF 融合 |
 
 ---
 
 ## 开发约束与规则 (Guardrails)
+
+### 项目进度维护
+
+完成任何功能开发后，必须即时更新 [PROGRESS.md](PROGRESS.md)：
+- 更新层级完成状态和百分比
+- 勾选已完成的功能项
+- 移动已完成项到"已实现功能"章节
 
 ### 环境管理
 

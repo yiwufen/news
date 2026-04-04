@@ -2,19 +2,19 @@
 Master Agent - 风险穿透分析
 
 按 .claude/rules/02-prompts.md 定义的 Master Agent 规范。
+支持可选的图谱依赖。
 """
 
-import json
-import os
-from typing import Any
-
-from anthropic import Anthropic
+from datetime import date
 
 from src.agents.master.prompts import SYSTEM_PROMPT, build_analysis_prompt
 from src.agents.master.report import ReportGenerator, RiskReport
 from src.graph import GraphQueries
+from src.llm import create_llm_client, extract_text_from_response, parse_json_from_text, DEFAULT_MAX_TOKENS
 from src.risk import RiskCalculator, RiskPath
+from src.risk.weights import calculate_path_weight, get_risk_level
 from src.schemas import IntelligenceParticle
+from src.schemas.enums import RelationType, RiskLevel
 
 
 class MasterAgent:
@@ -22,28 +22,108 @@ class MasterAgent:
 
     职责：
     1. 接收分析师查询
-    2. 执行 Cypher 查询，向下搜索 3 层关系路径
+    2. 执行 Cypher 查询，向下搜索 3 层关系路径（可选）
     3. 计算风险传导分值
     4. 生成带溯源的分析报告
+    5. 生成实体时间线（无图谱模式）
     """
 
     def __init__(
         self,
         graph_queries: GraphQueries | None = None,
+        graph_enabled: bool = True,
     ):
-        self.graph_queries = graph_queries or GraphQueries()
-        self._init_llm_client()
+        """初始化 Master Agent
 
-    def _init_llm_client(self) -> None:
-        """初始化 LLM 客户端"""
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise ValueError("ANTHROPIC_API_KEY 环境变量未设置")
+        Args:
+            graph_queries: 图谱查询器（可选）
+            graph_enabled: 是否启用图谱查询
+        """
+        self.graph_enabled = graph_enabled
 
-        base_url = os.environ.get("ANTHROPIC_API_BASE_URL")
-        self.client = Anthropic(api_key=api_key, base_url=base_url)
-        self.model = os.environ.get("ANTHROPIC_MODEL") or "glm-5"
-        self.max_tokens = 4096
+        if graph_enabled:
+            self.graph_queries = graph_queries or GraphQueries()
+        else:
+            self.graph_queries = None
+
+        self.client, self.model = create_llm_client()
+        self.max_tokens = DEFAULT_MAX_TOKENS
+
+    def generate_timeline(
+        self,
+        entity: str,
+        particles: list[IntelligenceParticle],
+    ) -> dict:
+        """生成实体时间线
+
+        不依赖图谱，仅基于情报微粒生成时间线。
+
+        Args:
+            entity: 目标实体
+            particles: 相关情报微粒
+
+        Returns:
+            时间线数据
+        """
+        # 标准化 particles
+        particles = particles or []
+
+        # 按时间排序情报微粒
+        sorted_particles = sorted(
+            particles,
+            key=lambda p: p.event_time,
+            reverse=True,
+        )
+
+        # 提取与实体相关的事件
+        timeline_events = []
+        for p in sorted_particles:
+            if self._particle_mentions_entity(p, entity):
+                timeline_events.append({
+                    "date": p.event_time.isoformat(),
+                    "event_type": p.event_type.value,
+                    "description": p.risk_signal.description,
+                    "risk_level": p.risk_level.value,
+                    "source_ids": p.source_doc_ids,
+                    "particle_id": p.id,
+                })
+
+        return {
+            "entity": entity,
+            "events": timeline_events,
+            "total_events": len(timeline_events),
+            "time_range": {
+                "start": timeline_events[-1]["date"] if timeline_events else None,
+                "end": timeline_events[0]["date"] if timeline_events else None,
+            },
+        }
+
+    def _particle_mentions_entity(
+        self,
+        particle: IntelligenceParticle,
+        entity: str,
+    ) -> bool:
+        """检查情报微粒是否提及实体
+
+        Args:
+            particle: 情报微粒
+            entity: 实体名称
+
+        Returns:
+            是否提及
+        """
+        entity_lower = entity.lower()
+
+        # 检查图谱节点
+        for node in particle.graph_updates.nodes:
+            if entity_lower in node.label.lower():
+                return True
+
+        # 检查描述
+        if entity_lower in particle.risk_signal.description.lower():
+            return True
+
+        return False
 
     def analyze(
         self,
@@ -61,27 +141,30 @@ class MasterAgent:
         Returns:
             风险分析报告
         """
-        # 1. 执行图谱查询
-        risk_paths_data = self.graph_queries.risk_penetration(
-            company_name=target_entity,
-            max_depth=max_depth,
-        )
+        particles = particles or []
 
-        # 2. 计算风险传导
+        if self.graph_enabled and self.graph_queries:
+            try:
+                risk_paths_data = self.graph_queries.risk_penetration(
+                    company_name=target_entity,
+                    max_depth=max_depth,
+                )
+            except Exception:
+                risk_paths_data = self._build_paths_from_particles(target_entity, particles)
+        else:
+            risk_paths_data = self._build_paths_from_particles(target_entity, particles)
+
         risk_paths = self._calculate_risk_paths(risk_paths_data)
         total_risk = RiskCalculator.calculate_target_risk(risk_paths)
-        from src.risk.weights import get_risk_level
         risk_level = get_risk_level(total_risk)
 
-        # 3. 生成 LLM 分析
-        particles_data = [p.model_dump() for p in (particles or [])]
+        particles_data = [p.model_dump() for p in particles]
         analysis_result = self._generate_analysis(
             target_entity=target_entity,
             risk_paths=risk_paths_data,
             particles=particles_data,
         )
 
-        # 4. 构建报告
         report = ReportGenerator.generate(
             target_entity=target_entity,
             risk_level=risk_level,
@@ -95,10 +178,41 @@ class MasterAgent:
                 }
                 for p in risk_paths_data
             ],
-            source_particles=[p.id for p in (particles or [])],
+            source_particles=[p.id for p in particles],
         )
 
         return report
+
+    def _build_paths_from_particles(
+        self,
+        entity: str,
+        particles: list[IntelligenceParticle],
+    ) -> list[dict]:
+        """从情报微粒构建风险路径（无图谱模式）
+
+        Args:
+            entity: 目标实体
+            particles: 情报微粒列表
+
+        Returns:
+            风险路径列表
+        """
+        paths = []
+
+        for p in particles:
+            if self._particle_mentions_entity(p, entity):
+                # 根据风险等级确定分值
+                high_risk_levels = {RiskLevel.HIGH, RiskLevel.CRITICAL}
+                risk_score = 0.7 if p.risk_level in high_risk_levels else 0.4
+
+                paths.append({
+                    "nodes": [{"id": n.id, "name": n.label} for n in p.graph_updates.nodes],
+                    "edges": [{"type": e.relation.value} for e in p.graph_updates.edges],
+                    "cumulative_risk": risk_score,
+                    "source_particle": p.id,
+                })
+
+        return paths
 
     def _calculate_risk_paths(
         self,
@@ -112,24 +226,19 @@ class MasterAgent:
         Returns:
             风险路径列表
         """
-        from datetime import date
-
         risk_paths: list[RiskPath] = []
 
         for path_data in risk_paths_data:
             nodes = path_data.get("nodes", [])
             edges = path_data.get("edges", [])
 
-            if not nodes or not edges:
+            if not nodes:
                 continue
 
             # 构建关系链
             relation_chain = [e.get("type", "UNKNOWN") for e in edges]
 
             # 计算路径权重
-            from src.risk.weights import calculate_path_weight
-            from src.schemas.enums import RelationType
-
             relations = []
             for rel_name in relation_chain:
                 try:
@@ -178,27 +287,11 @@ class MasterAgent:
         )
 
         # 解析响应
-        content = ""
-        if response.content:
-            for block in response.content:
-                text = getattr(block, "text", None)
-                if text:
-                    content += text
-
-        try:
-            return json.loads(content) if content else {}
-        except json.JSONDecodeError:
-            # 如果不是有效 JSON，返回默认结构
-            return {
-                "conclusions": [
-                    {
-                        "conclusion": content,
-                        "source_particle_ids": [],
-                        "confidence": 0.5,
-                    }
-                ],
-                "conflicts": [],
-            }
+        content = extract_text_from_response(response)
+        return parse_json_from_text(content, default={
+            "conclusions": [{"conclusion": content, "source_particle_ids": [], "confidence": 0.5}],
+            "conflicts": [],
+        })
 
     def query_with_cypher(
         self,
@@ -214,6 +307,9 @@ class MasterAgent:
         Returns:
             查询结果
         """
+        if not self.graph_enabled or not self.graph_queries:
+            raise RuntimeError("图谱功能已禁用，无法执行 Cypher 查询")
+
         from src.graph.connection import get_connection
 
         with get_connection().session() as session:

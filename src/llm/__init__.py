@@ -1,0 +1,77 @@
+"""
+LLM 客户端工厂
+
+统一的 LLM 客户端创建和响应处理工具。
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+from typing import Any
+
+from anthropic import Anthropic
+
+
+def create_llm_client() -> tuple[Anthropic, str]:
+    """创建 LLM 客户端
+
+    Returns:
+        (client, model) 元组
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise ValueError("ANTHROPIC_API_KEY 环境变量未设置")
+
+    base_url = os.environ.get("ANTHROPIC_API_BASE_URL")
+    client = Anthropic(api_key=api_key, base_url=base_url)
+    model = os.environ.get("ANTHROPIC_MODEL") or "glm-5"
+
+    return client, model
+
+
+def extract_text_from_response(response: Any) -> str:
+    """从 LLM 响应中提取文本内容
+
+    Args:
+        response: LLM 响应对象
+
+    Returns:
+        提取的文本内容
+    """
+    content = ""
+    if response.content:
+        for block in response.content:
+            text = getattr(block, "text", None)
+            if text:
+                content += text
+    return content
+
+
+def parse_json_from_text(text: str, default: dict | None = None) -> dict:
+    """从文本中解析 JSON
+
+    Args:
+        text: 包含 JSON 的文本
+        default: 解析失败时的默认值
+
+    Returns:
+        解析后的字典
+    """
+    if not text:
+        return default or {}
+
+    try:
+        # 尝试提取 JSON 块
+        json_match = re.search(r"\{[\s\S]*\}", text)
+        if json_match:
+            return json.loads(json_match.group())
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return default or {}
+
+
+# 常量
+DEFAULT_MAX_TOKENS = 4096
+DEFAULT_MODEL = "glm-5"

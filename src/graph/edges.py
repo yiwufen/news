@@ -35,7 +35,7 @@ class EdgeRepository:
         properties: dict[str, Any] | None = None,
         valid_from: date | None = None,
     ) -> bool:
-        """创建关系
+        """创建关系（使用 MERGE 避免重复）
 
         Args:
             source_id: 源节点 ID
@@ -57,16 +57,19 @@ class EdgeRepository:
             props["valid_from"] = date.today().isoformat()
 
         with self.connection.session() as session:
+            # 使用 MERGE 避免重复创建相同的关系
+            # 基于 source, target, relation type 和 valid_from 进行去重
             result = session.run(
                 f"""
                 MATCH (source {{id: $source_id}})
                 MATCH (target {{id: $target_id}})
-                CREATE (source)-[r:{rel_name}]->(target)
-                SET r = $props
+                MERGE (source)-[r:{rel_name} {{valid_from: $valid_from}}]->(target)
+                SET r += $props
                 RETURN type(r) as relation_type
                 """,
                 source_id=source_id,
                 target_id=target_id,
+                valid_from=props["valid_from"],
                 props=props,
             )
             return result.single() is not None

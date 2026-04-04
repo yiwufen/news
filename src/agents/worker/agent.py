@@ -7,17 +7,16 @@ Worker Agent - 情报微粒提取器
 from __future__ import annotations
 
 import json
-import os
 from datetime import date
 from typing import Iterator
 
-from anthropic import Anthropic
 from anthropic.types import Message, ToolUseBlock
 from pydantic import ValidationError
 
 from collectors.database import Database
 from src.agents.worker.prompts import SYSTEM_PROMPT, build_batch_extraction_prompt, build_extraction_prompt
 from src.agents.worker.tools import EXTRACTION_TOOL_SCHEMA
+from src.llm import create_llm_client, DEFAULT_MAX_TOKENS
 from src.schemas import ExtractionResult, IntelligenceParticle
 
 
@@ -26,18 +25,27 @@ class WorkerAgent:
 
     def __init__(self, db_path: str = "data/news.db"):
         self.db = Database(db_path)
-        self._init_llm_client()
+        self.client, self.model = create_llm_client()
+        self.max_tokens = DEFAULT_MAX_TOKENS
 
-    def _init_llm_client(self) -> None:
-        """初始化 LLM 客户端"""
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise ValueError("ANTHROPIC_API_KEY 环境变量未设置")
+    @staticmethod
+    def _parse_nested_json(data):
+        """递归解析嵌套的 JSON 字符串
 
-        base_url = os.environ.get("ANTHROPIC_API_BASE_URL")
-        self.client = Anthropic(api_key=api_key, base_url=base_url)
-        self.model = os.environ.get("ANTHROPIC_MODEL") or "kimi-k2.5"
-        self.max_tokens = 4096
+        某些兼容 API 会将嵌套对象序列化为 JSON 字符串，
+        需要递归解析以恢复正确的对象结构。
+        """
+        if isinstance(data, str):
+            try:
+                parsed = json.loads(data)
+                return WorkerAgent._parse_nested_json(parsed)
+            except (json.JSONDecodeError, TypeError):
+                return data
+        elif isinstance(data, dict):
+            return {k: WorkerAgent._parse_nested_json(v) for k, v in data.items()}
+        elif isinstance(data, list):
+            return [WorkerAgent._parse_nested_json(item) for item in data]
+        return data
 
     def extract_single(self, article: dict) -> ExtractionResult:
         """从单篇文章提取情报微粒"""
@@ -64,6 +72,37 @@ class WorkerAgent:
         else:
             return [self.extract_single(a) for a in articles]
 
+    def extract_from_articles(
+        self,
+        articles: list[dict],
+        merge_same_event: bool = False,
+    ) -> list[IntelligenceParticle]:
+        """从外部传入的文章列表中提取情报微粒
+
+        用于任务驱动架构，接收外部传入的文章数据，
+        不依赖数据库读取。
+
+        Args:
+            articles: 外部传入的文章列表
+            merge_same_event: 是否合并同一事件 (默认 False，保持 1:1 映射)
+
+        Returns:
+            提取的情报微粒列表
+        """
+        particles: list[IntelligenceParticle] = []
+
+        if not articles:
+            return particles
+
+        # 批量提取
+        results = self.extract_batch(articles, merge_same_event=merge_same_event)
+
+        for result in results:
+            if result.success and result.particle:
+                particles.append(result.particle)
+
+        return particles
+
     def _call_llm(
         self,
         user_prompt: str,
@@ -84,7 +123,9 @@ class WorkerAgent:
         for block in response.content:
             if isinstance(block, ToolUseBlock) and block.name == "extract_intelligence_particle":
                 try:
-                    particle = IntelligenceParticle.model_validate(block.input)
+                    # 递归解析嵌套的 JSON 字符串
+                    parsed_input = self._parse_nested_json(block.input)
+                    particle = IntelligenceParticle.model_validate(parsed_input)
                     # 确保 source_doc_ids 包含当前文档
                     if doc_id not in particle.traceability.source_doc_ids:
                         particle.traceability.source_doc_ids.append(doc_id)
@@ -110,7 +151,9 @@ class WorkerAgent:
         for block in response.content:
             if isinstance(block, ToolUseBlock) and block.name == "extract_intelligence_particle":
                 try:
-                    particle = IntelligenceParticle.model_validate(block.input)
+                    # 递归解析嵌套的 JSON 字符串
+                    parsed_input = self._parse_nested_json(block.input)
+                    particle = IntelligenceParticle.model_validate(parsed_input)
                     # 过滤有效的 source_doc_ids
                     valid_ids = [did for did in particle.traceability.source_doc_ids if did in doc_ids]
                     if valid_ids:

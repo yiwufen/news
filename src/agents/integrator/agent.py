@@ -2,6 +2,7 @@
 Integrator Agent - 实体对齐与图谱同步
 
 按 .claude/rules/02-prompts.md 定义的 Integrator Agent 规范。
+支持可选的图谱同步。
 """
 
 from datetime import date
@@ -18,17 +19,32 @@ class IntegratorAgent:
     职责：
     1. 实体对齐：查询数据库中是否存在同名/相似公司
     2. ID 合并：若存在则使用现有 ID，若不存在则创建新 ID
-    3. 图谱写入：将 nodes 和 edges 写入 Neo4j
+    3. 图谱写入：将 nodes 和 edges 写入 Neo4j（可选）
     """
 
     def __init__(
         self,
         node_repo: NodeRepository | None = None,
         threshold: float = 0.9,
+        graph_enabled: bool = True,
     ):
-        self.node_repo = node_repo or NodeRepository()
+        """初始化 Integrator Agent
+
+        Args:
+            node_repo: 节点仓库（可选）
+            threshold: 实体对齐相似度阈值
+            graph_enabled: 是否启用图谱同步
+        """
+        self.graph_enabled = graph_enabled
         self.alignment = EntityAlignment(threshold=threshold)
-        self.synchronizer = GraphSynchronizer()
+
+        # 图谱相关组件仅在启用时初始化
+        if graph_enabled:
+            self.node_repo = node_repo or NodeRepository()
+            self.synchronizer = GraphSynchronizer()
+        else:
+            self.node_repo = None
+            self.synchronizer = None
 
     def process_particle(
         self,
@@ -37,8 +53,8 @@ class IntegratorAgent:
         """处理单个情报微粒
 
         流程：
-        1. 实体对齐
-        2. 图谱同步
+        1. 实体对齐（始终执行）
+        2. 图谱同步（可选）
 
         Args:
             particle: 情报微粒
@@ -54,7 +70,11 @@ class IntegratorAgent:
 
         # 1. 实体对齐
         graph_updates = particle.graph_updates
-        existing_entities = self._get_existing_entities(graph_updates.nodes)
+
+        # 获取现有实体（仅图谱启用时）
+        existing_entities = []
+        if self.graph_enabled and self.node_repo:
+            existing_entities = self._get_existing_entities(graph_updates.nodes)
 
         for node in graph_updates.nodes:
             # 跳过非公司实体（暂不对齐 Person/Asset）
@@ -90,8 +110,18 @@ class IntegratorAgent:
                     alignment_result["matched_id"],
                 )
 
-        # 2. 图谱同步
-        result["sync_result"] = self.synchronizer.sync_particle(particle)
+        # 2. 图谱同步（仅在启用时执行）
+        if self.graph_enabled and self.synchronizer:
+            result["sync_result"] = self.synchronizer.sync_particle(particle)
+        else:
+            # 无图谱模式：返回模拟结果
+            result["sync_result"] = {
+                "nodes_created": len(graph_updates.nodes),
+                "edges_created": len(graph_updates.edges),
+                "errors": [],
+                "skipped": True,
+                "reason": "图谱同步已禁用",
+            }
 
         return result
 
@@ -104,6 +134,9 @@ class IntegratorAgent:
         Returns:
             现有实体列表 [{"name": "xxx", "id": "xxx", "credit_code": "xxx"}, ...]
         """
+        if not self.node_repo:
+            return []
+
         # 提取所有需要查询的名称（仅查询公司类型）
         company_names = [
             node.label for node in nodes
@@ -114,7 +147,11 @@ class IntegratorAgent:
             return []
 
         # 批量查询同名实体
-        found_nodes = self.node_repo.find_nodes_by_names(company_names)
+        try:
+            found_nodes = self.node_repo.find_nodes_by_names(company_names)
+        except Exception:
+            # 图谱不可用时返回空列表
+            return []
 
         return [
             {
@@ -180,6 +217,7 @@ class IntegratorAgent:
             "edges_created": 0,
             "errors": [],
             "details": results,  # 包含详细结果，避免重复调用
+            "graph_enabled": self.graph_enabled,
         }
 
         for result in results:
@@ -193,7 +231,7 @@ class IntegratorAgent:
                     stats["entities_suspected"] += 1
 
             if result["sync_result"]:
-                stats["edges_created"] += result["sync_result"]["edges_created"]
-                stats["errors"].extend(result["sync_result"]["errors"])
+                stats["edges_created"] += result["sync_result"].get("edges_created", 0)
+                stats["errors"].extend(result["sync_result"].get("errors", []))
 
         return stats

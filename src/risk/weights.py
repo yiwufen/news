@@ -4,7 +4,7 @@
 按 .claude/rules/01-taxonomy.md 和 03-risk-logic.md 定义。
 """
 
-from src.schemas.enums import RelationType
+from src.schemas.enums import RelationType, RiskLevel
 
 
 # === 传导权重表 ===
@@ -79,20 +79,18 @@ RISK_LEVEL_THRESHOLDS: dict[str, tuple[float, float]] = {
 def get_risk_level(score: float) -> str:
     """根据分值判定风险等级
 
+    委托给 src.schemas.enums.classify_risk_score 实现，
+    保持向后兼容的字符串返回值。
+
     Args:
         score: 风险分值 (0-1)
 
     Returns:
-        风险等级 (CRITICAL/HIGH/MEDIUM/LOW)
+        风险等级名称 (CRITICAL/HIGH/MEDIUM/LOW)
     """
-    if score >= 0.8:
-        return "CRITICAL"
-    elif score >= 0.6:
-        return "HIGH"
-    elif score >= 0.4:
-        return "MEDIUM"
-    else:
-        return "LOW"
+    from src.schemas.enums import classify_risk_score
+
+    return classify_risk_score(score).name
 
 
 def get_risk_threshold(level: str) -> tuple[float, float]:
