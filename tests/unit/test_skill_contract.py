@@ -33,10 +33,34 @@ def _base_raw_result(*, intent: str, source: str = "knowledge_base") -> dict:
         "graph": {
             "enabled": True,
             "used": source == "knowledge_base",
-            "nodes": [],
-            "edges": [],
-            "paths": [],
-            "summary": {},
+            "nodes": [
+                {"id": "ent-xiaomi", "type": "Entity", "name": "Xiaomi Group"},
+                {"id": "clu-new", "type": "EventCluster", "name": "Newer Xiaomi cluster"},
+                {"id": "ent-partner", "type": "Entity", "name": "Partner Co"},
+            ],
+            "edges": [
+                {"source": "ent-xiaomi", "target": "clu-new", "type": "INVOLVED_IN"},
+                {"source": "ent-partner", "target": "clu-new", "type": "INVOLVED_IN"},
+            ],
+            "paths": [
+                {
+                    "path_type": "Entity->EventCluster->Entity",
+                    "start_entity_id": "ent-xiaomi",
+                    "start_entity_name": "Xiaomi Group",
+                    "cluster_id": "clu-new",
+                    "cluster_title": "Newer Xiaomi cluster",
+                    "cluster_type": "policy_sanction",
+                    "neighbor_entity_id": "ent-partner",
+                    "neighbor_entity_name": "Partner Co",
+                    "member_ku_ids": ["ku-cluster-new"],
+                }
+            ],
+            "summary": {
+                "start_entities": [{"entity_id": "ent-xiaomi", "name": "Xiaomi Group"}],
+                "event_cluster_count": 1,
+                "expanded_entity_count": 1,
+                "expanded": source == "knowledge_base",
+            },
         },
         "knowledge_units": [
             {
@@ -210,16 +234,15 @@ def test_run_skill_query_maps_supported_entity_overview(monkeypatch) -> None:
 
 
 def test_run_skill_query_rejects_unsupported_intents(monkeypatch) -> None:
-    for intent in ("RELATIONSHIP_QUERY", "COMPARATIVE_ANALYSIS"):
-        raw_result = _base_raw_result(intent=intent)
-        monkeypatch.setattr("src.skills.service.run_pipeline", lambda **_: raw_result)
+    raw_result = _base_raw_result(intent="COMPARATIVE_ANALYSIS")
+    monkeypatch.setattr("src.skills.service.run_pipeline", lambda **_: raw_result)
 
-        result = run_skill_query(raw_query="Unsupported query")
+    result = run_skill_query(raw_query="Unsupported query")
 
-        assert result["ok"] is False
-        assert result["skill_type"] is None
-        assert result["payload"] is None
-        assert result["errors"] == [f"unsupported_intent:{intent}"]
+    assert result["ok"] is False
+    assert result["skill_type"] is None
+    assert result["payload"] is None
+    assert result["errors"] == ["unsupported_intent:COMPARATIVE_ANALYSIS"]
 
 
 def test_run_skill_query_sets_capabilities_for_direct_articles(monkeypatch) -> None:
@@ -333,3 +356,95 @@ def test_run_skill_query_preserves_traceable_supporting_evidence(monkeypatch) ->
     assert evidence["evidence"] == [{"text": "Xiaomi Group received a penalty."}]
     assert evidence["confidence"] == 0.95
     assert evidence["conflict_status"] == "possible"
+
+
+def test_run_skill_query_maps_relationship_query_to_relationship_payload(monkeypatch) -> None:
+    raw_result = _base_raw_result(intent="RELATIONSHIP_QUERY")
+    monkeypatch.setattr("src.skills.service.run_pipeline", lambda **_: raw_result)
+
+    result = run_skill_query(raw_query="Show Xiaomi relationships")
+
+    assert result["contract_version"] == "v1"
+    assert result["ok"] is True
+    assert result["skill_type"] == "relationship_query"
+    assert result["capabilities"] == {
+        "graph_supported": True,
+        "graph_used": True,
+        "timeline_supported": False,
+    }
+    assert result["payload"]["target_entity"] == "Xiaomi Group"
+    assert result["payload"]["related_entities"] == [raw_result["entities"][1]]
+    assert [cluster["cluster_id"] for cluster in result["payload"]["related_event_clusters"]] == ["clu-new"]
+    assert result["payload"]["relationship_paths"] == [
+        {
+            "path_type": "Entity->EventCluster->Entity",
+            "start_entity_id": "ent-xiaomi",
+            "start_entity_name": "Xiaomi Group",
+            "cluster_id": "clu-new",
+            "cluster_title": "Newer Xiaomi cluster",
+            "cluster_type": "policy_sanction",
+            "neighbor_entity_id": "ent-partner",
+            "neighbor_entity_name": "Partner Co",
+            "member_ku_ids": ["ku-cluster-new"],
+        }
+    ]
+    assert result["payload"]["graph"] == raw_result["graph"]
+
+
+def test_run_skill_query_keeps_relationship_contract_on_non_blocking_graph_errors(monkeypatch) -> None:
+    raw_result = _base_raw_result(intent="RELATIONSHIP_QUERY")
+    raw_result["errors"] = ["[graph] neo4j unavailable"]
+    raw_result["graph"]["used"] = False
+    raw_result["graph"]["nodes"] = []
+    raw_result["graph"]["edges"] = []
+    raw_result["graph"]["paths"] = []
+    monkeypatch.setattr("src.skills.service.run_pipeline", lambda **_: raw_result)
+
+    result = run_skill_query(raw_query="Show Xiaomi relationships")
+
+    assert result["ok"] is True
+    assert result["skill_type"] == "relationship_query"
+    assert result["payload"]["relationship_paths"] == []
+    assert result["errors"] == ["[graph] neo4j unavailable"]
+
+
+def test_run_skill_query_returns_empty_relationship_matches_without_graph_paths(monkeypatch) -> None:
+    raw_result = _base_raw_result(intent="RELATIONSHIP_QUERY")
+    raw_result["graph"]["paths"] = []
+    monkeypatch.setattr("src.skills.service.run_pipeline", lambda **_: raw_result)
+
+    result = run_skill_query(raw_query="Show Xiaomi relationships")
+
+    assert result["ok"] is True
+    assert result["skill_type"] == "relationship_query"
+    assert result["payload"]["relationship_paths"] == []
+    assert result["payload"]["related_entities"] == []
+    assert result["payload"]["related_event_clusters"] == []
+
+
+def test_run_skill_query_returns_stable_failed_relationship_contract_for_direct_articles(monkeypatch) -> None:
+    raw_result = _base_raw_result(intent="RELATIONSHIP_QUERY", source="direct_articles")
+    raw_result["retrieval"]["graph_used"] = False
+    raw_result["graph"] = {
+        "enabled": True,
+        "used": False,
+        "nodes": [],
+        "edges": [],
+        "paths": [],
+        "summary": {},
+    }
+    raw_result["verification"] = {"passed": False, "retry_count": 0, "issues": []}
+    raw_result["errors"] = ["关系查询当前仅支持 knowledge_base 检索源，不支持 direct articles 输入"]
+    monkeypatch.setattr("src.skills.service.run_pipeline", lambda **_: raw_result)
+
+    result = run_skill_query(raw_query="Show Xiaomi relationships", articles=[{"doc_id": "doc-1"}])
+
+    assert result["ok"] is False
+    assert result["skill_type"] == "relationship_query"
+    assert result["source"] == "direct_articles"
+    assert result["payload"]["related_entities"] == []
+    assert result["payload"]["related_event_clusters"] == []
+    assert result["payload"]["relationship_paths"] == []
+    assert result["payload"]["graph"] == raw_result["graph"]
+    assert len(result["payload"]["supporting_evidence"]) == 3
+    assert result["errors"] == ["关系查询当前仅支持 knowledge_base 检索源，不支持 direct articles 输入"]

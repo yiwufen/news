@@ -20,8 +20,8 @@
 | 层级 | 状态 | 完成度 | 说明 |
 |------|------|--------|------|
 | 1. 原始文档接入 | ✅ 已完成 | 100% | SQLite 文档存储、测试数据与增量读取已具备 |
-| 2. 文档知识化抽取 | ⚠️ 迁移中 | 70% | `run_continuous()` 已切到 `RawDocument -> KnowledgeUnit` 新主线，默认采用 fail-fast 抽取，不再因未配置或异常静默回退到启发式 |
-| 3. 实体与事件归一 | ⚠️ 迁移中 | 80% | 已新增 `Entity` / `EventCluster` 保守归一与归并，并补上事件簇层冲突保留与多来源聚合视图 |
+| 2. 文档知识化抽取 | ✅ 主线可用 | 85% | `run_continuous()` 已切到 `RawDocument -> KnowledgeUnit` 新主线，时间标准化、冲突检测已集成 |
+| 3. 实体与事件归一 | ✅ 主线可用 | 85% | 已新增 `Entity` / `EventCluster` 保守归一与归并，多类型冲突检测与聚合视图已落地 |
 | 4. 检索层 | ✅ 主线可用 | 85% | `run_pipeline()` 已切到混合检索主线，`KnowledgeUnit` FTS + 向量索引、融合排序、统一检索元数据与 `Entity` / `EventCluster` 检索入口已落地 |
 | 5. 图谱层 | ✅ 主线可用 | 90% | 新离线路径已同步 `Entity + EventCluster + INVOLVED_IN`，`run_pipeline()` 已接入正式图谱增强检索、关系结果集与稳定输出契约 |
 | 6. 消费层 | ✅ 已移除旧链路 | 100% | 不再兼容旧风险导向消费链路，入口直接面向知识检索 |
@@ -124,7 +124,8 @@
 - [x] 设计面向 skill 的统一检索接口
 - [ ] 将风险分析改造为消费知识底座的 skill
 - [ ] 将时间线生成功能改造为消费知识底座的 skill
-- [ ] 支持主题研究、关系扩展、事件影响分析 skill
+- [ ] 支持主题研究、事件影响分析 skill
+- [x] 支持关系扩展 skill（`RELATIONSHIP_QUERY`）
 - [ ] 设计多轮任务消费层
 - [ ] 提供 API 封装
 
@@ -327,3 +328,67 @@ Full migration is considered complete under the following acceptance conditions:
   - `uv run pytest tests/unit/test_skill_contract.py`
   - `uv run pytest tests/integration/test_skill_queries.py`
   - `uv run pyright src/skills src/orchestration/__init__.py tests/unit/test_skill_contract.py tests/integration/test_skill_queries.py`
+
+---
+
+## 2026-04-05 Relationship Skill V1 Update
+
+- `run_skill_query()` now formally supports `RELATIONSHIP_QUERY` and returns `skill_type="relationship_query"` instead of treating it as an unsupported intent.
+- Added a dedicated relationship payload that keeps graph evidence intact while exposing normalized `related_entities`, `related_event_clusters`, and `relationship_paths` for skill consumers.
+- Relationship skill behavior remains aligned with the current pipeline constraints:
+  - `run_pipeline()` semantics are unchanged
+  - graph fail-open errors still preserve `ok=true` when they are non-blocking `[graph] ...` errors
+  - `direct_articles + RELATIONSHIP_QUERY` now returns a stable failed contract shape instead of `unsupported_intent`, preserving `verification` and existing error messages
+- Added unit and integration coverage for:
+  - successful `knowledge_base` relationship contracts
+  - non-blocking graph errors
+  - stable failed relationship contracts for `direct_articles`
+
+---
+
+## 2026-04-05 Knowledge Extraction Enhancement Update
+
+### Time Normalization (P0)
+
+- Added `src/time_normalization.py` for event_time standardization:
+  - `TimeNormalizer` class converts relative/fuzzy time expressions to absolute datetime
+  - Supports Chinese relative time: 昨天、上周X、本周X、N天前、上个月、去年
+  - Supports fuzzy time: 近日、近期、今年初、本月末
+  - Returns `TimeNormalizationResult` with resolution type and confidence
+- Extended `TimeRef` model in `src/knowledge_base.py`:
+  - Added `event_time_resolution` field: "absolute" | "relative" | "fuzzy" | "unresolved"
+  - Added `raw_event_time_expression` field for source traceability
+- Integrated time normalization into `KnowledgeExtractor`:
+  - Post-processes LLM-extracted event_time values
+  - Normalizes relative times based on document `published_at`
+
+### Conflict Detection (P1)
+
+- Added `src/conflict_detection.py` for multi-source conflict analysis:
+  - `ConflictDetector` class detects conflicts across KnowledgeUnits
+  - Conflict types: TIME_MISMATCH, AMOUNT_MISMATCH, PARTICIPANT_MISMATCH
+  - Extracts monetary amounts from Chinese text (亿元、万美元、港元)
+  - Returns `ConflictReport` with severity levels
+- Extended `EventCluster` model:
+  - Added `conflict_details` field storing structured conflict information
+- Integrated conflict detection into `build_event_cluster_snapshot()`:
+  - Automatic detection when building cluster aggregates
+  - Backward-compatible `multiple_event_time_values` reason preserved
+
+### Regression Checks
+
+- `uv run pytest` -> 96 passed
+- `uv run pyright .` -> 0 errors
+- New test file: `tests/unit/test_time_normalization.py` (19 tests)
+
+### 2026-04-05 Follow-up Fixes
+
+- `KnowledgeExtractor` now normalizes raw `time.event_time` payloads before `KnowledgeUnit` validation, so relative/fuzzy expressions no longer fail the fail-fast extraction path before normalization can run.
+- `ConflictDetector` now treats only explicit `event_time` values as time-conflict evidence; differing `published_at` dates without explicit event dates no longer create false `multiple_event_time_values` cluster conflicts.
+- Additive participant mentions are no longer treated as relationship conflicts by default; only contradictory participant deltas across multiple sources produce `participant_mismatch`.
+- `run_skill_query()` relationship payloads now return empty `related_entities` / `related_event_clusters` when graph retrieval yields no relationship paths, instead of falling back to unrelated retrieval results.
+- Added regression coverage for:
+  - pre-validation relative-time normalization
+  - no-conflict handling for missing explicit event dates
+  - no-conflict handling for additive participant mentions
+  - empty relationship-path payload behavior

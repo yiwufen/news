@@ -15,12 +15,16 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from src.conflict_detection import ConflictDetector
 from src.knowledge_base import KnowledgeUnit, KnowledgeUnitRepository
 
 
 ConflictStatus = Literal["none", "possible", "confirmed"]
 _SAME_DAY_SIMILARITY_THRESHOLD = 0.85
 _ADJACENT_DAY_SIMILARITY_THRESHOLD = 0.93
+
+# Module-level singleton for conflict detection
+_CONFLICT_DETECTOR = ConflictDetector()
 
 
 class AggregationVariant(BaseModel):
@@ -53,6 +57,7 @@ class EventCluster(BaseModel):
     summary_variants: list[AggregationVariant] = Field(default_factory=list)
     event_time_variants: list[AggregationVariant] = Field(default_factory=list)
     conflict_reasons: list[str] = Field(default_factory=list)
+    conflict_details: list[dict[str, Any]] = Field(default_factory=list)
     updated_at: datetime
 
 
@@ -216,12 +221,39 @@ def build_event_cluster_snapshot(
             explicit_conflict = _merge_conflict_status(explicit_conflict, unit.conflict_status)
     if explicit_conflict != "none":
         conflict_reasons.append("member_conflict_flag")
-    if len(event_time_variants) > 1:
-        conflict_reasons.append("multiple_event_time_values")
 
+    # Run multi-type conflict detection
+    conflict_report = _CONFLICT_DETECTOR.detect_conflicts(deduped_units)
+
+    # Add detected conflict types to reasons
+    for detail in conflict_report.conflict_details:
+        if detail.conflict_type.value == "time_mismatch":
+            # Use legacy name for backward compatibility
+            reason = "multiple_event_time_values"
+        else:
+            reason = f"{detail.conflict_type.value}:{detail.field_name}"
+        if reason not in conflict_reasons:
+            conflict_reasons.append(reason)
+
+    # Determine conflict status
     conflict_status = explicit_conflict
-    if conflict_status == "none" and "multiple_event_time_values" in conflict_reasons:
+    if conflict_status == "none" and conflict_report.has_conflicts:
         conflict_status = "possible"
+    if conflict_report.overall_severity == "high":
+        conflict_status = "confirmed"
+
+    # Serialize conflict details for storage
+    conflict_details = [
+        {
+            "type": detail.conflict_type.value,
+            "field": detail.field_name,
+            "values": detail.values,
+            "sources": detail.sources,
+            "severity": detail.severity,
+            "description": detail.description,
+        }
+        for detail in conflict_report.conflict_details
+    ]
 
     return EventCluster(
         cluster_id=cluster_id or f"clu_{uuid4().hex[:12]}",
@@ -242,6 +274,7 @@ def build_event_cluster_snapshot(
         summary_variants=summary_variants,
         event_time_variants=event_time_variants,
         conflict_reasons=conflict_reasons,
+        conflict_details=conflict_details,
         updated_at=updated_at or datetime.now(UTC),
     )
 

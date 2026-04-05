@@ -89,12 +89,19 @@ class EvidenceSpan(BaseModel):
         return text
 
 
+# Time resolution types for event_time standardization
+TimeResolutionType = Literal["absolute", "relative", "fuzzy", "unresolved"]
+
+
 class TimeRef(BaseModel):
     """Time reference."""
 
     event_time: datetime | None = None
     published_at: datetime
     extracted_at: datetime
+    # Time normalization metadata
+    event_time_resolution: TimeResolutionType | None = None
+    raw_event_time_expression: str | None = None
 
 
 class RelationHint(BaseModel):

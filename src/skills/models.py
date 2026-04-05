@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 
 ContractVersion = Literal["v1"]
-SkillType = Literal["entity_overview", "entity_timeline", "event_analysis"]
+SkillType = Literal["entity_overview", "entity_timeline", "event_analysis", "relationship_query"]
 SkillSource = Literal["knowledge_base", "direct_articles"]
 TimelineEventSource = Literal["event_cluster", "knowledge_unit"]
 
@@ -73,6 +73,42 @@ class EventAnalysisPayload(BaseModel):
     supporting_evidence: list[SupportingEvidence] = Field(default_factory=list)
 
 
+class RelationshipPath(BaseModel):
+    """Normalized graph relationship path exposed to skills."""
+
+    path_type: str
+    start_entity_id: str | None = None
+    start_entity_name: str | None = None
+    cluster_id: str | None = None
+    cluster_title: str | None = None
+    cluster_type: str | None = None
+    neighbor_entity_id: str | None = None
+    neighbor_entity_name: str | None = None
+    member_ku_ids: list[str] = Field(default_factory=list)
+
+
+class RelationshipGraph(BaseModel):
+    """Graph result preserved for relationship-oriented consumers."""
+
+    enabled: bool = False
+    used: bool = False
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    edges: list[dict[str, Any]] = Field(default_factory=list)
+    paths: list[dict[str, Any]] = Field(default_factory=list)
+    summary: dict[str, Any] = Field(default_factory=dict)
+
+
+class RelationshipQueryPayload(BaseModel):
+    """Payload for the relationship query skill."""
+
+    target_entity: str | None = None
+    related_entities: list[dict[str, Any]] = Field(default_factory=list)
+    related_event_clusters: list[dict[str, Any]] = Field(default_factory=list)
+    relationship_paths: list[RelationshipPath] = Field(default_factory=list)
+    graph: RelationshipGraph = Field(default_factory=RelationshipGraph)
+    supporting_evidence: list[SupportingEvidence] = Field(default_factory=list)
+
+
 class SkillSummary(BaseModel):
     """Common aggregate counts for the contract."""
 
@@ -106,6 +142,6 @@ class SkillContract(BaseModel):
             timeline_supported=False,
         )
     )
-    payload: EntityOverviewPayload | EntityTimelinePayload | EventAnalysisPayload | None = None
+    payload: EntityOverviewPayload | EntityTimelinePayload | EventAnalysisPayload | RelationshipQueryPayload | None = None
     verification: dict[str, Any] = Field(default_factory=dict)
     errors: list[str] = Field(default_factory=list)

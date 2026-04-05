@@ -5,12 +5,14 @@ KnowledgeUnit extraction service.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from typing import Any
 
 from anthropic.types import Message, ToolUseBlock
 
 from src.knowledge_base import KnowledgeUnit, RawDocument
 from src.llm import DEFAULT_MAX_TOKENS, create_llm_client
+from src.time_normalization import TimeNormalizationContext, TimeNormalizer
 
 
 SYSTEM_PROMPT = """你是一名金融知识工程助手，负责从新闻文档中抽取可溯源的 statement-level KnowledgeUnit。
@@ -65,6 +67,7 @@ class KnowledgeExtractor:
         self.client = None
         self.model = None
         self.max_tokens = DEFAULT_MAX_TOKENS
+        self._time_normalizer = TimeNormalizer()  # Cache instance
 
     def extract(self, document: RawDocument) -> list[KnowledgeUnit]:
         """Extract KnowledgeUnits for one document."""
@@ -110,6 +113,54 @@ class KnowledgeExtractor:
                 units_payload = payload.get("knowledge_units", [])
                 if not isinstance(units_payload, list):
                     raise ValueError("extract_knowledge_units.knowledge_units must be a list")
-                return [KnowledgeUnit.model_validate(unit) for unit in units_payload]
+                context = self._build_time_normalization_context(document)
+                normalized_units_payload = [
+                    self._normalize_unit_payload_time(unit, context)
+                    for unit in units_payload
+                ]
+                return [
+                    KnowledgeUnit.model_validate(unit)
+                    for unit in normalized_units_payload
+                ]
 
         raise ValueError("LLM did not return extract_knowledge_units")
+
+    def _build_time_normalization_context(
+        self,
+        document: RawDocument,
+    ) -> TimeNormalizationContext:
+        return TimeNormalizationContext(
+            published_at=document.published_at,
+            extracted_at=datetime.now(UTC),
+            document_title=document.title,
+        )
+
+    def _normalize_unit_payload_time(
+        self,
+        unit_payload: Any,
+        context: TimeNormalizationContext,
+    ) -> Any:
+        """Normalize event_time before KnowledgeUnit validation."""
+        if not isinstance(unit_payload, dict):
+            return unit_payload
+
+        time_payload = unit_payload.get("time")
+        if not isinstance(time_payload, dict):
+            return unit_payload
+
+        raw_time = time_payload.get("event_time")
+        if raw_time is None:
+            return unit_payload
+
+        result = self._time_normalizer.normalize_event_time(raw_time, context)
+        normalized_time_payload = dict(time_payload)
+        normalized_time_payload["event_time"] = result.normalized_time
+        normalized_time_payload["event_time_resolution"] = result.resolution_type
+        if result.original_expression is not None:
+            normalized_time_payload["raw_event_time_expression"] = (
+                result.original_expression
+            )
+
+        normalized_unit_payload = dict(unit_payload)
+        normalized_unit_payload["time"] = normalized_time_payload
+        return normalized_unit_payload

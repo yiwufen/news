@@ -7,11 +7,19 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
+from anthropic.types import ToolUseBlock
 
 from src.entities import Entity, EntityRepository, EntityResolver
-from src.event_clustering import EventCluster, EventClusterRepository, EventClusterer
+from src.event_clustering import (
+    EventCluster,
+    EventClusterRepository,
+    EventClusterer,
+    build_event_cluster_snapshot,
+)
 from src.graph.knowledge_retrieval import KnowledgeGraphRetriever
 from src.intent.classifier import IntentClassifier
 from src.intent.models import IntentType, QueryFilters, StructuredQuery, TimeRange
@@ -30,6 +38,7 @@ from src.knowledge_graph_sync import KnowledgeGraphSync
 from src.retrieval.embedding_client import OpenAIEmbeddingClient
 from src.retrieval.indexing import KnowledgeIndexBuilder
 from src.retrieval.knowledge_search import KnowledgeSearchRequest, KnowledgeSearcher
+from src.time_normalization import TimeNormalizationResult
 
 
 def build_unit(
@@ -138,6 +147,70 @@ def test_knowledge_extractor_requires_llm_when_fallback_removed() -> None:
 
     with pytest.raises(RuntimeError, match="heuristic extraction has been removed"):
         extractor.extract(document)
+
+
+def test_knowledge_extractor_normalizes_relative_event_time_before_validation() -> None:
+    extractor = KnowledgeExtractor(enable_llm=True)
+    extractor_any = cast(Any, extractor)
+    extractor_any._time_normalizer = SimpleNamespace(
+        normalize_event_time=lambda raw_time, context: TimeNormalizationResult(
+            normalized_time=datetime(2026, 4, 4, 0, 0, tzinfo=UTC),
+            original_expression=str(raw_time),
+            resolution_type="relative",
+            confidence=0.9,
+        )
+    )
+    extractor_any.client = SimpleNamespace(
+        messages=SimpleNamespace(
+            create=lambda **_: SimpleNamespace(
+                content=[
+                    ToolUseBlock(
+                        id="toolu_test",
+                        type="tool_use",
+                        name="extract_knowledge_units",
+                        input={
+                            "knowledge_units": [
+                                {
+                                    "unit_kind": "event",
+                                    "unit_type": "product_launch",
+                                    "summary": "Xiaomi scheduled a product launch",
+                                    "entities": [{"mention": "Xiaomi Group"}],
+                                    "source": {
+                                        "doc_id": "doc-1",
+                                        "source_name": "test-source",
+                                    },
+                                    "evidence": [{"text": "Xiaomi will launch the product tomorrow."}],
+                                    "time": {
+                                        "event_time": "relative_time_token",
+                                        "published_at": "2026-04-05T09:00:00+00:00",
+                                        "extracted_at": "2026-04-05T09:05:00+00:00",
+                                    },
+                                    "confidence": 0.8,
+                                }
+                            ]
+                        },
+                    )
+                ]
+            )
+        )
+    )
+    extractor_any.model = "test-model"
+    document = RawDocument(
+        doc_id="doc-1",
+        source_type="news",
+        title="Xiaomi launches a new phone",
+        content="Xiaomi launched a new phone yesterday.",
+        source_name="test-source",
+        published_at=datetime(2026, 4, 5, 9, 0, tzinfo=UTC),
+        ingested_at=datetime(2026, 4, 5, 9, 5, tzinfo=UTC),
+    )
+
+    units = extractor.extract(document)
+
+    assert len(units) == 1
+    assert units[0].time.event_time == datetime(2026, 4, 4, 0, 0, tzinfo=UTC)
+    assert units[0].time.event_time_resolution == "relative"
+    assert units[0].time.raw_event_time_expression == "relative_time_token"
 
 
 def test_entity_resolver_matches_stable_identifier_and_keeps_uncertain_separate(tmp_path) -> None:
@@ -277,6 +350,64 @@ def test_event_clusterer_marks_adjacent_event_dates_as_possible_conflict(tmp_pat
     assert cluster.conflict_status == "possible"
     assert cluster.conflict_reasons == ["multiple_event_time_values"]
     assert [variant.value for variant in cluster.event_time_variants] == ["2026-04-01", "2026-04-02"]
+
+
+def test_event_cluster_snapshot_ignores_published_at_without_explicit_event_times() -> None:
+    unit_a = build_unit(
+        summary="Xiaomi Group announced a product launch schedule",
+        doc_id="doc-1",
+        published_at=datetime(2026, 4, 1, 10, 0, tzinfo=UTC),
+    )
+    unit_b = build_unit(
+        summary="Xiaomi Group announced a product launch schedule",
+        doc_id="doc-2",
+        published_at=datetime(2026, 4, 3, 10, 0, tzinfo=UTC),
+    )
+    for unit in (unit_a, unit_b):
+        unit.entities[0].entity_id = "ent_xiaomi"
+        unit.entities[0].entity_type = "Company"
+        unit.time.event_time = None
+
+    cluster = build_event_cluster_snapshot([unit_a, unit_b])
+
+    assert cluster.conflict_status == "none"
+    assert cluster.conflict_reasons == []
+    assert cluster.event_time_variants == []
+
+
+def test_event_cluster_snapshot_ignores_additive_participant_mentions() -> None:
+    published_at = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
+    unit_a = build_unit(
+        summary="Xiaomi Group received a regulatory penalty",
+        doc_id="doc-1",
+        published_at=published_at,
+    )
+    unit_b = build_unit(
+        summary="Xiaomi Group received a regulatory penalty",
+        doc_id="doc-2",
+        published_at=published_at,
+    )
+    unit_a.entities = [
+        EntityRef(
+            mention="Xiaomi Group",
+            entity_id="ent_xiaomi",
+            entity_type="Company",
+        )
+    ]
+    unit_b.entities = [
+        EntityRef(
+            mention="Xiaomi Group",
+            entity_id="ent_xiaomi",
+            entity_type="Company",
+        ),
+        EntityRef(mention="Beijing Regulator"),
+    ]
+
+    cluster = build_event_cluster_snapshot([unit_a, unit_b])
+
+    assert cluster.conflict_status == "none"
+    assert "participant_mismatch:entities" not in cluster.conflict_reasons
+    assert cluster.conflict_details == []
 
 
 def test_event_clusterer_merges_adjacent_high_similarity_but_keeps_distant_events_separate(tmp_path) -> None:

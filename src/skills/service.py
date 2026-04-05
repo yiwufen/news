@@ -14,6 +14,9 @@ from src.skills.models import (
     EntityOverviewPayload,
     EntityTimelinePayload,
     EventAnalysisPayload,
+    RelationshipGraph,
+    RelationshipPath,
+    RelationshipQueryPayload,
     SkillCapabilities,
     SkillContract,
     SkillType,
@@ -27,6 +30,7 @@ SUPPORTED_INTENTS: dict[str, SkillType] = {
     IntentType.ENTITY_OVERVIEW.value: "entity_overview",
     IntentType.ENTITY_TIMELINE.value: "entity_timeline",
     IntentType.EVENT_ANALYSIS.value: "event_analysis",
+    IntentType.RELATIONSHIP_QUERY.value: "relationship_query",
 }
 
 
@@ -96,9 +100,15 @@ def _is_non_blocking_skill_error(error: Any) -> bool:
     return isinstance(error, str) and error.startswith("[graph] ")
 
 
+def _verification_passed(verification: Any) -> bool:
+    """Check if verification passed. Returns True if passed or not explicitly failed."""
+    if not isinstance(verification, dict):
+        return True
+    return verification.get("passed") is not False
+
+
 def _contract_ok(raw_result: dict[str, Any]) -> bool:
-    verification = raw_result.get("verification", {})
-    if isinstance(verification, dict) and verification.get("passed") is False:
+    if not _verification_passed(raw_result.get("verification")):
         return False
 
     errors = raw_result.get("errors", [])
@@ -148,9 +158,7 @@ def _build_entity_overview_payload(
     sorted_clusters: list[dict[str, Any]],
     supporting_evidence: list[SupportingEvidence],
 ) -> EntityOverviewPayload:
-    related_entities = [
-        entity for entity in entities if not _is_target_entity(entity, target_entity)
-    ]
+    related_entities = _filter_related_entities(entities, target_entity=target_entity)
     return EntityOverviewPayload(
         target_entity=target_entity,
         recent_event_clusters=sorted_clusters,
@@ -285,6 +293,111 @@ def _build_event_analysis_payload(
     )
 
 
+def _normalize_relationship_paths(graph: dict[str, Any]) -> list[RelationshipPath]:
+    raw_paths = graph.get("paths", [])
+    if not isinstance(raw_paths, list):
+        return []
+    normalized: list[RelationshipPath] = []
+    for path in raw_paths:
+        if not isinstance(path, dict):
+            continue
+        normalized.append(
+            RelationshipPath(
+                path_type=str(path.get("path_type", "")),
+                start_entity_id=path.get("start_entity_id"),
+                start_entity_name=path.get("start_entity_name"),
+                cluster_id=path.get("cluster_id"),
+                cluster_title=path.get("cluster_title"),
+                cluster_type=path.get("cluster_type"),
+                neighbor_entity_id=path.get("neighbor_entity_id"),
+                neighbor_entity_name=path.get("neighbor_entity_name"),
+                member_ku_ids=list(path.get("member_ku_ids", [])),
+            )
+        )
+    return normalized
+
+
+def _build_relationship_graph(graph_data: dict[str, Any]) -> RelationshipGraph:
+    if not isinstance(graph_data, dict):
+        return RelationshipGraph()
+    return RelationshipGraph(
+        enabled=bool(graph_data.get("enabled", False)),
+        used=bool(graph_data.get("used", False)),
+        nodes=list(graph_data.get("nodes", [])),
+        edges=list(graph_data.get("edges", [])),
+        paths=list(graph_data.get("paths", [])),
+        summary=dict(graph_data.get("summary", {})),
+    )
+
+
+def _filter_related_entities(
+    entities: list[dict[str, Any]],
+    *,
+    target_entity: str | None,
+    allowed_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    related_entities: list[dict[str, Any]] = []
+    for entity in entities:
+        if _is_target_entity(entity, target_entity):
+            continue
+        entity_id = entity.get("entity_id")
+        if allowed_ids is not None and entity_id not in allowed_ids:
+            continue
+        related_entities.append(entity)
+    return related_entities
+
+
+def _build_relationship_query_payload(
+    raw_result: dict[str, Any],
+    target_entity: str | None,
+    event_clusters: list[dict[str, Any]],
+    entities: list[dict[str, Any]],
+    supporting_evidence: list[SupportingEvidence],
+) -> RelationshipQueryPayload:
+    graph_data = raw_result.get("graph", {})
+    if not isinstance(graph_data, dict):
+        graph_data = {}
+    graph = _build_relationship_graph(graph_data)
+
+    query_source = raw_result.get("source")
+    if query_source != "knowledge_base" or not _verification_passed(raw_result.get("verification")):
+        return RelationshipQueryPayload(
+            target_entity=target_entity,
+            graph=graph,
+            supporting_evidence=supporting_evidence,
+        )
+
+    relationship_paths = _normalize_relationship_paths(graph_data)
+
+    # Build both ID sets in a single pass
+    related_entity_ids: set[str] = set()
+    cluster_ids: set[str] = set()
+    for path in relationship_paths:
+        if path.neighbor_entity_id:
+            related_entity_ids.add(path.neighbor_entity_id)
+        if path.cluster_id:
+            cluster_ids.add(path.cluster_id)
+
+    related_entities = _filter_related_entities(
+        entities,
+        target_entity=target_entity,
+        allowed_ids=related_entity_ids,
+    )
+
+    related_event_clusters = [
+        cluster for cluster in event_clusters if cluster.get("cluster_id") in cluster_ids
+    ]
+
+    return RelationshipQueryPayload(
+        target_entity=target_entity,
+        related_entities=related_entities,
+        related_event_clusters=related_event_clusters,
+        relationship_paths=relationship_paths,
+        graph=graph,
+        supporting_evidence=supporting_evidence,
+    )
+
+
 def _build_payload(
     raw_result: dict[str, Any],
     skill_type: SkillType,
@@ -295,7 +408,7 @@ def _build_payload(
     target_entity: str | None,
     sorted_clusters: list[dict[str, Any]],
     supporting_evidence: list[SupportingEvidence],
-) -> EntityOverviewPayload | EntityTimelinePayload | EventAnalysisPayload:
+) -> EntityOverviewPayload | EntityTimelinePayload | EventAnalysisPayload | RelationshipQueryPayload:
     if skill_type == "entity_overview":
         return _build_entity_overview_payload(
             entities=entities,
@@ -311,12 +424,20 @@ def _build_payload(
             event_clusters=event_clusters,
             supporting_evidence=supporting_evidence,
         )
-    return _build_event_analysis_payload(
+    if skill_type == "event_analysis":
+        return _build_event_analysis_payload(
+            raw_result=raw_result,
+            knowledge_units=knowledge_units,
+            event_clusters=event_clusters,
+            entities=entities,
+            sorted_clusters=sorted_clusters,
+            supporting_evidence=supporting_evidence,
+        )
+    return _build_relationship_query_payload(
         raw_result=raw_result,
-        knowledge_units=knowledge_units,
-        event_clusters=event_clusters,
+        target_entity=target_entity,
+        event_clusters=sorted_clusters,
         entities=entities,
-        sorted_clusters=sorted_clusters,
         supporting_evidence=supporting_evidence,
     )
 
