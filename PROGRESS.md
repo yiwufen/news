@@ -146,7 +146,7 @@
 ```bash
 uv run python -c "
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv('.env')
 from src.pipeline import run_continuous
 
 result = run_continuous(graph_enabled=True)
@@ -157,7 +157,7 @@ print(result)
 ```bash
 uv run python -c "
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv('.env')
 from src.orchestration import run_pipeline
 
 result = run_pipeline(
@@ -173,6 +173,8 @@ print(result)
 - 上述入口当前仍可运行
 - `run_pipeline()` 已直接返回知识检索结果，不再兼容旧风险消费链路
 - 图谱默认开启；显式传 `graph_enabled=False` 仅用于调试或测试
+- 在当前 PowerShell heredoc / stdin 场景下，中文查询字符串可能被宿主链路降级成 `?`；做真实命令验证时，优先显式 `load_dotenv('.env')`，并避免依赖终端内联中文传参做最终判断
+- 若要验证中文查询命中，优先在脚本文件中执行，或使用 Unicode 转义字符串，避免把 shell 编码问题误判为意图解析/检索问题
 
 ---
 
@@ -209,3 +211,20 @@ print(result)
 - Regression checks passed after the fix:
   - `uv run pytest`
   - `uv run pyright .`
+
+---
+
+## 2026-04-05 Real Run Verification
+
+- Real regression checks passed again on **2026-04-05**:
+  - `uv run pytest` -> `54 passed`
+  - `uv run pyright .` -> `0 errors`
+- Current local knowledge base snapshot used in verification:
+  - `news_articles: 80`
+  - `knowledge_units: 528`
+  - `entities: 489`
+  - `event_clusters: 519`
+  - `knowledge_processing_log: 80`
+- Real incremental `run_continuous(graph_enabled=False)` completed without processing errors and returned zero new units/clusters, which matches the current fully processed local DB state.
+- Real `run_pipeline()` verification for the Xiaomi example works when the query is passed as a proper Unicode string: the parsed query resolved `entities=['小米集团']`, `time_range={'start': '2025-04-05', 'end': '2026-04-05'}`, and returned non-empty retrieval results (`total_count=35`, `knowledge_units=20`, `event_clusters=45`).
+- Earlier empty Xiaomi results were traced to command-line encoding, not retrieval logic: in the current PowerShell heredoc/stdin path, inline Chinese query text may arrive at Python as `????`, which causes the LLM intent parser to see a corrupted query and return empty entities.
