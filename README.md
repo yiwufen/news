@@ -31,6 +31,8 @@
 
 当前主线已经切到知识底座：`run_continuous()` 负责离线知识化建库，`run_pipeline()` 直接检索 `KnowledgeUnit` / `Entity` / `EventCluster`。旧的风险导向消费链路和对应 compatibility 输出已从主线接口中移除。
 
+在原始证据级检索之上，仓库现在还提供了稳定的 skill-facing 内部契约：`run_skill_query()`。它基于现有 `run_pipeline()` 结果做适配，不改变 `run_pipeline()` 语义。
+
 当前检索主线已包含：
 
 - `KnowledgeUnit` FTS 稀疏索引
@@ -83,14 +85,33 @@ print(result)
 "
 ```
 
+### Skill 契约入口
+
+```bash
+uv run python -c "
+from pathlib import Path
+from dotenv import load_dotenv
+load_dotenv(dotenv_path=Path('.env'))
+from src.skills import run_skill_query
+
+result = run_skill_query(
+    raw_query='查看小米集团过去一年做的事情',
+    graph_enabled=True,
+)
+print(result)
+"
+```
+
 说明：
 
 - `run_continuous()` 是当前阶段的重点入口
 - `run_pipeline()` 直接检索 `KnowledgeUnit` / `Entity` / `EventCluster`
+- `run_skill_query()` 是面向 skill 的稳定内部契约，当前 V1 正式支持 `ENTITY_OVERVIEW`、`ENTITY_TIMELINE`、`EVENT_ANALYSIS`
 - `run_pipeline(graph_enabled=True)` 会在主检索结果上叠加正式图谱增强，返回稳定的 `graph.nodes` / `graph.edges` / `graph.paths`
+- `run_skill_query()` 会返回统一的 `contract_version` / `summary` / `capabilities` / `payload` 结构，并显式区分 `knowledge_base` 与 `direct_articles` 的图谱能力差异
 - 图谱默认开启
 - 若未配置 `ANTHROPIC_API_KEY`，`run_pipeline()` 的意图解析会按 fail-fast 约束直接失败
-- 若未配置 embedding 凭据，`run_pipeline()` 会退化到 BM25-only 检索，而不会让默认知识库查询路径整体失败
+- 若未配置 embedding 凭据，`run_pipeline()` 与 `run_skill_query()` 都会退化到 BM25-only 检索，而不会让默认知识库查询路径整体失败
 
 ## 协作约定
 

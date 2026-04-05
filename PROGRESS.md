@@ -39,6 +39,7 @@
 ### 双模式骨架
 - [x] `run_continuous()` 离线流水线入口
 - [x] `run_pipeline()` 任务入口
+- [x] `run_skill_query()` skill-facing 契约入口
 - [x] 阶段状态与错误追踪
 
 ### 抽取与图谱基础设施
@@ -120,7 +121,7 @@
 
 ## P1 后续任务
 
-- [ ] 设计面向 skill 的统一检索接口
+- [x] 设计面向 skill 的统一检索接口
 - [ ] 将风险分析改造为消费知识底座的 skill
 - [ ] 将时间线生成功能改造为消费知识底座的 skill
 - [ ] 支持主题研究、关系扩展、事件影响分析 skill
@@ -168,10 +169,25 @@ print(result)
 "
 ```
 
+```bash
+uv run python -c "
+from dotenv import load_dotenv
+load_dotenv('.env')
+from src.skills import run_skill_query
+
+result = run_skill_query(
+    raw_query='查看小米集团过去一年做的事情',
+    graph_enabled=True,
+)
+print(result)
+"
+```
+
 说明：
 
 - 上述入口当前仍可运行
 - `run_pipeline()` 已直接返回知识检索结果，不再兼容旧风险消费链路
+- `run_skill_query()` 已提供稳定的 skill-facing V1 契约，统一返回 `summary` / `capabilities` / `payload`
 - 图谱默认开启；显式传 `graph_enabled=False` 仅用于调试或测试
 - 在当前 PowerShell heredoc / stdin 场景下，中文查询字符串可能被宿主链路降级成 `?`；做真实命令验证时，优先显式 `load_dotenv('.env')`，并避免依赖终端内联中文传参做最终判断
 - 若要验证中文查询命中，优先在脚本文件中执行，或使用 Unicode 转义字符串，避免把 shell 编码问题误判为意图解析/检索问题
@@ -274,3 +290,40 @@ Full migration is considered complete under the following acceptance conditions:
 - Follow-up hardening is now in place:
   - graph retrieval no longer attempts Neo4j schema writes on the read path
   - relationship queries over `articles=...` now fail explicitly because graph enhancement is only supported for `knowledge_base`
+
+---
+
+## 2026-04-05 Skill-Facing Contract V1 Update
+
+- Added `src.skills.run_skill_query()` as a stable internal contract over raw retrieval results without changing `run_pipeline()` semantics.
+- Skill contract V1 now formally supports three intent families:
+  - `ENTITY_OVERVIEW`
+  - `ENTITY_TIMELINE`
+  - `EVENT_ANALYSIS`
+- The V1 envelope is now stable across supported skills:
+  - `contract_version`
+  - `ok`
+  - `skill_type`
+  - `source`
+  - `query`
+  - `summary`
+  - `capabilities`
+  - `payload`
+  - `verification`
+  - `errors`
+- Source-specific capability normalization is now explicit:
+  - `knowledge_base` may report graph support and graph usage
+  - `direct_articles` always reports `graph_supported=false` and `graph_used=false`
+- Timeline payload normalization is now contractized:
+  - cluster-first when `cluster_id` matches a retrieved `EventCluster`
+  - graph-expanded `EventCluster` hits are appended even when no selected `KnowledgeUnit` directly carries that `cluster_id`
+  - fallback to standalone `KnowledgeUnit` timeline events
+  - final event ordering is oldest to newest
+- Unsupported V1 intents now return structured contract errors instead of introducing a new caller-visible exception path:
+  - `RELATIONSHIP_QUERY`
+  - `COMPARATIVE_ANALYSIS`
+- Skill contracts now preserve `ok=true` for non-blocking fail-open graph errors while still surfacing those errors in `errors`
+- Regression checks passed after the skill-contract work:
+  - `uv run pytest tests/unit/test_skill_contract.py`
+  - `uv run pytest tests/integration/test_skill_queries.py`
+  - `uv run pyright src/skills src/orchestration/__init__.py tests/unit/test_skill_contract.py tests/integration/test_skill_queries.py`
