@@ -214,10 +214,20 @@ def test_run_pipeline_queries_new_knowledge_store(tmp_path, monkeypatch) -> None
         def search_articles(self, articles, request):
             return self._searcher.search_articles(articles, request)
 
+    class FakeKnowledgeGraphRetriever:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def search(self, structured_query, *, start_entities):
+            from src.graph.knowledge_retrieval import GraphRetrievalResult
+
+            return GraphRetrievalResult.empty(start_entities=start_entities)
+
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(src.intent, "IntentClassifier", FakeIntentClassifier)
     monkeypatch.setattr(graph_module, "IntentClassifier", FakeIntentClassifier)
     monkeypatch.setattr(graph_module, "KnowledgeSearcher", FakeKnowledgeSearcher)
+    monkeypatch.setattr(graph_module, "KnowledgeGraphRetriever", FakeKnowledgeGraphRetriever)
 
     result = run_pipeline(raw_query="Show the Xiaomi Group timeline")
 
@@ -228,10 +238,16 @@ def test_run_pipeline_queries_new_knowledge_store(tmp_path, monkeypatch) -> None
     assert result["retrieval"]["retrieval_mode"] == "hybrid"
     assert result["retrieval"]["bm25_count"] >= 1
     assert result["retrieval"]["vector_count"] >= 1
+    assert result["retrieval"]["graph_used"] is False
+    assert result["retrieval"]["graph_candidate_count"] == 0
     assert result["timeline_data"]["entity"] == "Xiaomi Group"
     assert result["timeline_data"]["timeline"]["total_events"] >= 1
     assert len(result["event_clusters"]) >= 1
     assert result["event_clusters"][0]["source_count"] >= 1
+    assert result["graph"]["enabled"] is True
+    assert result["graph"]["used"] is False
+    assert result["graph"]["nodes"] == []
+    assert result["graph"]["paths"] == []
     assert "conflict_reasons" in result["event_clusters"][0]
     assert "summary_variants" in result["event_clusters"][0]
     assert "report" not in result
@@ -274,6 +290,21 @@ def test_run_pipeline_falls_back_to_bm25_without_embedding_config(tmp_path, monk
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(src.intent, "IntentClassifier", FakeIntentClassifier)
     monkeypatch.setattr(graph_module, "IntentClassifier", FakeIntentClassifier)
+    monkeypatch.setattr(
+        graph_module,
+        "KnowledgeGraphRetriever",
+        type(
+            "FakeKnowledgeGraphRetriever",
+            (),
+            {
+                "__init__": lambda self, *args, **kwargs: None,
+                "search": lambda self, structured_query, *, start_entities: __import__(
+                    "src.graph.knowledge_retrieval",
+                    fromlist=["GraphRetrievalResult"],
+                ).GraphRetrievalResult.empty(start_entities=start_entities),
+            },
+        ),
+    )
 
     result = run_pipeline(raw_query="Show the Xiaomi Group timeline")
 
@@ -339,6 +370,7 @@ def test_run_pipeline_returns_transient_entities_for_direct_articles(monkeypatch
     assert len(result["entities"]) == 1
     assert len(result["event_clusters"]) == 1
     assert result["retrieval"]["retrieval_mode"] == "hybrid"
+    assert result["retrieval"]["graph_used"] is False
     assert result["entities"][0]["entity_id"] == result["knowledge_units"][0]["entities"][0]["entity_id"]
     assert result["event_clusters"][0]["cluster_id"] == result["knowledge_units"][0]["cluster_id"]
     assert "event_impact" not in result
@@ -395,7 +427,11 @@ def test_run_pipeline_omits_graph_edges_when_disabled(monkeypatch) -> None:
     )
 
     assert result["graph"]["enabled"] is False
+    assert result["graph"]["used"] is False
+    assert result["graph"]["nodes"] == []
     assert result["graph"]["edges"] == []
+    assert result["graph"]["paths"] == []
+    assert result["retrieval"]["graph_used"] is False
     assert len(result["knowledge_units"]) == 1
     assert len(result["entities"]) == 1
     assert len(result["event_clusters"]) == 1
@@ -708,10 +744,20 @@ def test_run_pipeline_repairs_legacy_event_cluster_payloads(tmp_path, monkeypatc
         def search_articles(self, articles, request):
             return self._searcher.search_articles(articles, request)
 
+    class FakeKnowledgeGraphRetriever:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def search(self, structured_query, *, start_entities):
+            from src.graph.knowledge_retrieval import GraphRetrievalResult
+
+            return GraphRetrievalResult.empty(start_entities=start_entities)
+
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(src.intent, "IntentClassifier", FakeIntentClassifier)
     monkeypatch.setattr(graph_module, "IntentClassifier", FakeIntentClassifier)
     monkeypatch.setattr(graph_module, "KnowledgeSearcher", FakeKnowledgeSearcher)
+    monkeypatch.setattr(graph_module, "KnowledgeGraphRetriever", FakeKnowledgeGraphRetriever)
 
     result = run_pipeline(raw_query="Show the Xiaomi Group timeline")
 
@@ -719,3 +765,164 @@ def test_run_pipeline_repairs_legacy_event_cluster_payloads(tmp_path, monkeypatc
     assert result["event_clusters"][0]["member_count"] >= 1
     assert "representative_ku_id" in result["event_clusters"][0]
     assert "summary_variants" in result["event_clusters"][0]
+
+
+def test_run_pipeline_relationship_query_returns_formal_graph_results(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "data" / "news.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    seed_articles(str(db_path))
+
+    pipeline = ContinuousPipeline(
+        batch_size=10,
+        graph_enabled=False,
+        incremental=True,
+        db_path=str(db_path),
+        extractor=StubExtractor(),
+        index_builder=build_index_builder(str(db_path)),
+    )
+    pipeline.run()
+
+    class FakeIntentClassifier:
+        def parse(self, raw_query: str) -> StructuredQuery:
+            return StructuredQuery(
+                intent=IntentType.RELATIONSHIP_QUERY,
+                entities=["Xiaomi Group"],
+                time_range=None,
+                filters=QueryFilters(),
+                original_query=raw_query,
+            )
+
+    import src.intent
+    import src.orchestration.graph as graph_module
+
+    original_searcher_cls = graph_module.KnowledgeSearcher
+
+    class FakeKnowledgeSearcher:
+        def __init__(self) -> None:
+            self._searcher = original_searcher_cls(
+                db_path=str(db_path),
+                embedding_client=StubEmbeddingClient(),
+            )
+
+        def search(self, request):
+            return self._searcher.search(request)
+
+        def search_articles(self, articles, request):
+            return self._searcher.search_articles(articles, request)
+
+    class FakeKnowledgeGraphRetriever:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def search(self, structured_query, *, start_entities):
+            from src.graph.knowledge_retrieval import GraphRetrievalResult
+
+            start_entity = start_entities[0]
+            return GraphRetrievalResult(
+                used=True,
+                nodes=[
+                    {"id": start_entity.entity_id, "type": "Entity", "name": start_entity.canonical_name},
+                    {"id": "clu_1", "type": "EventCluster", "name": "Xiaomi relationship cluster"},
+                    {"id": "ent_partner", "type": "Entity", "name": "Partner Co"},
+                ],
+                edges=[
+                    {"source": start_entity.entity_id, "target": "clu_1", "type": "INVOLVED_IN"},
+                    {"source": "ent_partner", "target": "clu_1", "type": "INVOLVED_IN"},
+                ],
+                paths=[
+                    {
+                        "path_type": "Entity->EventCluster->Entity",
+                        "start_entity_id": start_entity.entity_id,
+                        "cluster_id": "clu_1",
+                        "neighbor_entity_id": "ent_partner",
+                        "member_ku_ids": ["ku_1"],
+                    }
+                ],
+                summary={
+                    "start_entities": [{"entity_id": start_entity.entity_id, "name": start_entity.canonical_name}],
+                    "event_cluster_count": 1,
+                    "expanded_entity_count": 1,
+                    "expanded": True,
+                },
+                hit_reasons={"ent_partner": ["co_involved_via:clu_1"]},
+                candidate_count=1,
+                expanded_cluster_count=1,
+                expanded_entity_count=1,
+            )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(src.intent, "IntentClassifier", FakeIntentClassifier)
+    monkeypatch.setattr(graph_module, "IntentClassifier", FakeIntentClassifier)
+    monkeypatch.setattr(graph_module, "KnowledgeSearcher", FakeKnowledgeSearcher)
+    monkeypatch.setattr(graph_module, "KnowledgeGraphRetriever", FakeKnowledgeGraphRetriever)
+
+    result = run_pipeline(raw_query="Show Xiaomi Group relationships", graph_enabled=True)
+
+    assert result["graph"]["enabled"] is True
+    assert result["graph"]["used"] is True
+    assert len(result["graph"]["nodes"]) == 3
+    assert len(result["graph"]["edges"]) == 2
+    assert result["graph"]["paths"][0]["path_type"] == "Entity->EventCluster->Entity"
+    assert result["retrieval"]["graph_used"] is True
+    assert result["retrieval"]["graph_candidate_count"] == 1
+    assert result["retrieval"]["graph_hit_reasons"] == {"ent_partner": ["co_involved_via:clu_1"]}
+
+
+def test_run_pipeline_rejects_relationship_query_for_direct_articles(monkeypatch) -> None:
+    class FakeIntentClassifier:
+        def parse(self, raw_query: str) -> StructuredQuery:
+            return StructuredQuery(
+                intent=IntentType.RELATIONSHIP_QUERY,
+                entities=["Xiaomi Group"],
+                time_range=None,
+                filters=QueryFilters(),
+                original_query=raw_query,
+            )
+
+    import src.intent
+    import src.orchestration.graph as graph_module
+
+    original_searcher_cls = graph_module.KnowledgeSearcher
+
+    class FakeKnowledgeSearcher:
+        def __init__(self) -> None:
+            self._searcher = original_searcher_cls(
+                extractor=StubExtractor(),
+                embedding_client=StubEmbeddingClient(),
+            )
+
+        def search(self, request):
+            return self._searcher.search(request)
+
+        def search_articles(self, articles, request):
+            return self._searcher.search_articles(articles, request)
+
+    monkeypatch.setattr(src.intent, "IntentClassifier", FakeIntentClassifier)
+    monkeypatch.setattr(graph_module, "IntentClassifier", FakeIntentClassifier)
+    monkeypatch.setattr(graph_module, "KnowledgeSearcher", FakeKnowledgeSearcher)
+
+    result = run_pipeline(
+        raw_query="Show Xiaomi Group relationships",
+        articles=[
+            {
+                "doc_id": "doc-1",
+                "title": "Xiaomi Group receives a regulatory penalty",
+                "content": "Xiaomi Group received a regulatory penalty and started remediation.",
+                "publish_time": "2026-04-01T09:00:00+00:00",
+                "source_name": "test-source",
+                "source_type": "news",
+                "category": "company",
+                "raw_tags": [],
+            }
+        ],
+        graph_enabled=True,
+    )
+
+    assert result["source"] == "direct_articles"
+    assert result["verification"]["passed"] is False
+    assert result["errors"] == ["关系查询当前仅支持 knowledge_base 检索源，不支持 direct articles 输入"]
+    assert result["graph"]["enabled"] is True
+    assert result["graph"]["used"] is False
+    assert result["graph"]["nodes"] == []
+    assert result["graph"]["edges"] == []
+    assert result["graph"]["paths"] == []

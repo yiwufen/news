@@ -55,6 +55,7 @@ The following are already on the mainline:
 - Neo4j sync for `Entity` and `EventCluster`
 - FTS5 plus embedding-backed retrieval storage
 - BM25 + vector hybrid retrieval with fusion ranking
+- graph-enhanced retrieval over `Entity -> EventCluster` with formal `nodes` / `edges` / `paths` output
 - timeline projection from retrieved knowledge units
 - self-healing repair for older materialized rows and legacy cluster payloads
 
@@ -62,7 +63,6 @@ The following are already on the mainline:
 
 Migration cleanup is complete. The next work is product-facing, not legacy-facing:
 
-- graph-aware retrieval as a first-class retrieval mode
 - a stable skill-facing retrieval contract
 - higher-level skills built on the knowledge foundation
 

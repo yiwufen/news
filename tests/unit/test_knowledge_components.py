@@ -12,6 +12,7 @@ import pytest
 
 from src.entities import Entity, EntityRepository, EntityResolver
 from src.event_clustering import EventCluster, EventClusterRepository, EventClusterer
+from src.graph.knowledge_retrieval import KnowledgeGraphRetriever
 from src.intent.classifier import IntentClassifier
 from src.intent.models import IntentType, QueryFilters, StructuredQuery, TimeRange
 from src.knowledge_base import (
@@ -460,11 +461,32 @@ class FakeSession:
 
 
 class FakeConnection:
-    def __init__(self, session: FakeSession) -> None:
+    def __init__(self, session: FakeSession | FakeResultSession) -> None:
         self._session = session
 
     def session(self):
         return self._session
+
+
+class FakeResultSession:
+    def __init__(self, records: list[dict] | None = None, error: Exception | None = None) -> None:
+        self.records = records or []
+        self.error = error
+        self.calls: list[tuple[str, dict]] = []
+
+    def run(self, query: str, **params):
+        self.calls.append((query, params))
+        if self.error is not None:
+            raise self.error
+        if "MATCH (start:Entity)-[:INVOLVED_IN]->(cluster:EventCluster)" in query:
+            return self.records
+        return []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
 
 
 def test_knowledge_graph_sync_emits_entity_cluster_and_edge_queries() -> None:
@@ -538,6 +560,188 @@ def test_knowledge_graph_sync_serializes_identifiers_to_json() -> None:
     entity_write = next(params for query, params in session.calls if "MERGE (e:Entity {id: $id})" in query)
     assert entity_write["primary_identifier"] == "1810.HK"
     assert entity_write["identifiers_json"] == '{"ticker": "1810.HK"}'
+
+
+def test_knowledge_graph_retriever_returns_paths_with_filters(tmp_path) -> None:
+    db_path = tmp_path / "news.db"
+    entity_repo = EntityRepository(str(db_path))
+    knowledge_repo = KnowledgeUnitRepository(str(db_path))
+    cluster_repo = EventClusterRepository(str(db_path), knowledge_units=knowledge_repo)
+    now = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
+
+    start_entity = Entity(
+        entity_id="ent_xiaomi",
+        entity_type="Company",
+        canonical_name="Xiaomi Group",
+        aliases=["Xiaomi"],
+        identifiers={},
+        source_ku_ids=["ku_1"],
+        created_at=now,
+        updated_at=now,
+    )
+    neighbor_entity = Entity(
+        entity_id="ent_supplier",
+        entity_type="Company",
+        canonical_name="Supplier Co",
+        aliases=["Supplier"],
+        identifiers={},
+        source_ku_ids=["ku_2"],
+        created_at=now,
+        updated_at=now,
+    )
+    entity_repo.save_batch([start_entity, neighbor_entity])
+
+    cluster = EventCluster(
+        cluster_id="clu_1",
+        cluster_type="market_impact",
+        title="Xiaomi market impact",
+        summary="Xiaomi market impact",
+        entity_ids=["ent_xiaomi", "ent_supplier"],
+        primary_entity_id="ent_xiaomi",
+        time_anchor=now,
+        time_range={
+            "start": "2026-04-01T10:00:00+00:00",
+            "end": "2026-04-02T10:00:00+00:00",
+        },
+        member_ku_ids=["ku_1", "ku_2"],
+        source_doc_ids=["doc-1", "doc-2"],
+        updated_at=now,
+    )
+    cluster_repo.save_batch([cluster])
+
+    session = FakeResultSession(
+        records=[
+            {
+                "start_entity_id": "ent_xiaomi",
+                "cluster_id": "clu_1",
+                "cluster_type": "market_impact",
+                "cluster_title": "Xiaomi market impact",
+                "cluster_summary": "Xiaomi market impact",
+                "cluster_primary_entity_id": "ent_xiaomi",
+                "member_ku_ids": ["ku_1", "ku_2"],
+                "source_doc_ids": ["doc-1", "doc-2"],
+                "conflict_status": "none",
+                "representative_ku_id": "ku_1",
+                "member_count": 2,
+                "source_count": 2,
+                "time_range_json": '{"start":"2026-04-01T10:00:00+00:00","end":"2026-04-02T10:00:00+00:00"}',
+                "neighbor_entity_id": "ent_supplier",
+            }
+        ]
+    )
+    retriever = KnowledgeGraphRetriever(
+        db_path=str(db_path),
+        connection=FakeConnection(session),
+        entity_repo=entity_repo,
+        cluster_repo=cluster_repo,
+    )
+
+    result = retriever.search(
+        StructuredQuery(
+            intent=IntentType.RELATIONSHIP_QUERY,
+            entities=["Xiaomi Group"],
+            time_range=TimeRange(
+                start=datetime(2026, 4, 1, tzinfo=UTC).date(),
+                end=datetime(2026, 4, 2, tzinfo=UTC).date(),
+            ),
+            filters=QueryFilters(event_types=["market_impact"]),
+            original_query="Show Xiaomi Group relationships",
+            confidence=1.0,
+        ),
+        start_entities=[start_entity],
+    )
+
+    assert result.used is True
+    assert result.candidate_count == 1
+    assert result.expanded_cluster_count == 1
+    assert result.expanded_entity_count == 1
+    assert result.paths[0]["member_ku_ids"] == ["ku_1", "ku_2"]
+    assert any(path["path_type"] == "Entity->EventCluster->Entity" for path in result.paths)
+    assert result.hit_reasons["clu_1"] == ["seed_entity:Xiaomi Group"]
+    assert result.hit_reasons["ent_supplier"] == ["co_involved_via:clu_1"]
+
+
+def test_knowledge_graph_retriever_fails_open_without_breaking_result_shape(tmp_path) -> None:
+    db_path = tmp_path / "news.db"
+    entity_repo = EntityRepository(str(db_path))
+    now = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
+    start_entity = Entity(
+        entity_id="ent_xiaomi",
+        entity_type="Company",
+        canonical_name="Xiaomi Group",
+        aliases=[],
+        identifiers={},
+        source_ku_ids=["ku_1"],
+        created_at=now,
+        updated_at=now,
+    )
+    entity_repo.save_batch([start_entity])
+
+    retriever = KnowledgeGraphRetriever(
+        db_path=str(db_path),
+        connection=FakeConnection(FakeResultSession(error=RuntimeError("neo4j unavailable"))),
+        entity_repo=entity_repo,
+        cluster_repo=EventClusterRepository(str(db_path)),
+    )
+
+    result = retriever.search(
+        StructuredQuery(
+            intent=IntentType.RELATIONSHIP_QUERY,
+            entities=["Xiaomi Group"],
+            time_range=None,
+            filters=QueryFilters(),
+            original_query="Show Xiaomi Group relationships",
+            confidence=1.0,
+        ),
+        start_entities=[start_entity],
+    )
+
+    assert result.used is False
+    assert result.errors == ["neo4j unavailable"]
+    assert result.nodes == []
+    assert result.edges == []
+    assert result.paths == []
+
+
+def test_knowledge_graph_retriever_does_not_write_schema_on_read_path(tmp_path) -> None:
+    db_path = tmp_path / "news.db"
+    entity_repo = EntityRepository(str(db_path))
+    now = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
+    start_entity = Entity(
+        entity_id="ent_xiaomi",
+        entity_type="Company",
+        canonical_name="Xiaomi Group",
+        aliases=[],
+        identifiers={},
+        source_ku_ids=["ku_1"],
+        created_at=now,
+        updated_at=now,
+    )
+    entity_repo.save_batch([start_entity])
+
+    session = FakeResultSession(records=[])
+    retriever = KnowledgeGraphRetriever(
+        db_path=str(db_path),
+        connection=FakeConnection(session),
+        entity_repo=entity_repo,
+        cluster_repo=EventClusterRepository(str(db_path)),
+    )
+
+    result = retriever.search(
+        StructuredQuery(
+            intent=IntentType.RELATIONSHIP_QUERY,
+            entities=["Xiaomi Group"],
+            time_range=None,
+            filters=QueryFilters(),
+            original_query="Show Xiaomi Group relationships",
+            confidence=1.0,
+        ),
+        start_entities=[start_entity],
+    )
+
+    assert result.used is True
+    assert len(session.calls) == 1
+    assert "MATCH (start:Entity)-[:INVOLVED_IN]->(cluster:EventCluster)" in session.calls[0][0]
 
 
 def test_intent_classifier_parses_chinese_and_english_time_ranges() -> None:

@@ -23,7 +23,7 @@
 | 2. 文档知识化抽取 | ⚠️ 迁移中 | 70% | `run_continuous()` 已切到 `RawDocument -> KnowledgeUnit` 新主线，默认采用 fail-fast 抽取，不再因未配置或异常静默回退到启发式 |
 | 3. 实体与事件归一 | ⚠️ 迁移中 | 80% | 已新增 `Entity` / `EventCluster` 保守归一与归并，并补上事件簇层冲突保留与多来源聚合视图 |
 | 4. 检索层 | ✅ 主线可用 | 85% | `run_pipeline()` 已切到混合检索主线，`KnowledgeUnit` FTS + 向量索引、融合排序、统一检索元数据与 `Entity` / `EventCluster` 检索入口已落地 |
-| 5. 图谱层 | ⚠️ 迁移中 | 75% | 新离线路径已同步 `Entity + EventCluster + INVOLVED_IN`，并写入事件簇聚合元数据，图谱默认开启 |
+| 5. 图谱层 | ✅ 主线可用 | 90% | 新离线路径已同步 `Entity + EventCluster + INVOLVED_IN`，`run_pipeline()` 已接入正式图谱增强检索、关系结果集与稳定输出契约 |
 | 6. 消费层 | ✅ 已移除旧链路 | 100% | 不再兼容旧风险导向消费链路，入口直接面向知识检索 |
 
 ---
@@ -100,7 +100,7 @@
 ### 图谱与 GraphRAG
 - [x] 按 `Entity + EventCluster` 重构新离线路径图谱主模型
 - [x] 定义节点、边与溯源约束
-- [ ] 让图谱成为正式可检索产物
+- [x] 让图谱成为正式可检索产物
 - [x] 保证图结果可回溯到底层 `KnowledgeUnit`
 
 ### 消费链路清理
@@ -251,3 +251,26 @@ Full migration is considered complete under the following acceptance conditions:
   - mainline intent symbols now use `ENTITY_OVERVIEW` and `EVENT_ANALYSIS`
   - routing paths now use `entity_overview_path` and `event_analysis_path`
   - old labels `RISK_ASSESSMENT` / `EVENT_IMPACT` remain only as parser input aliases for backward-compatible intent normalization, not as mainline internal names
+
+---
+
+## 2026-04-05 Graph Retrieval Productization Update
+
+- Graph-aware retrieval is now part of the supported mainline: `run_pipeline(graph_enabled=True)` performs formal graph enhancement over the current `Entity -> INVOLVED_IN -> EventCluster` model instead of only attaching ad hoc edge summaries.
+- A dedicated knowledge-graph retrieval service now powers two V1 graph actions:
+  - `Entity -> EventCluster` related-event retrieval
+  - `Entity -> EventCluster -> Entity` co-involvement expansion
+- `run_pipeline()` now keeps the existing public entrypoint while upgrading the output contract:
+  - `retrieval` now includes `graph_used`, `graph_candidate_count`, `graph_expanded_cluster_count`, `graph_expanded_entity_count`, and `graph_hit_reasons`
+  - `graph` now exposes stable `enabled`, `used`, `nodes`, `edges`, `paths`, and `summary`
+- Relationship queries now return formal graph result sets when graph enhancement is enabled, instead of only relying on plain retrieval output plus lightweight edge decoration.
+- Graph enhancement is fail-open:
+  - Neo4j failure no longer breaks the main retrieval path
+  - retrieval continues with knowledge results
+  - graph errors are recorded under `errors`
+- Regression checks passed after the productization work:
+  - `uv run pytest` -> `57 passed`
+  - `uv run pyright .` -> `0 errors`
+- Follow-up hardening is now in place:
+  - graph retrieval no longer attempts Neo4j schema writes on the read path
+  - relationship queries over `articles=...` now fail explicitly because graph enhancement is only supported for `knowledge_base`

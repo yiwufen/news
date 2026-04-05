@@ -1,0 +1,410 @@
+"""
+Knowledge-graph retrieval over Entity -> INVOLVED_IN -> EventCluster.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from datetime import date, datetime
+from typing import Any, ContextManager, Iterable, Protocol, cast
+
+from src.entities import Entity, EntityRepository
+from src.event_clustering import EventCluster, EventClusterRepository
+from src.graph.connection import get_connection
+from src.intent.models import StructuredQuery
+
+
+class GraphSessionLike(Protocol):
+    def run(self, query: str, **params: object) -> object:
+        ...
+
+
+class GraphConnectionLike(Protocol):
+    def session(self) -> ContextManager[GraphSessionLike]:
+        ...
+
+
+@dataclass
+class GraphRetrievalResult:
+    used: bool
+    nodes: list[dict[str, Any]] = field(default_factory=list)
+    edges: list[dict[str, Any]] = field(default_factory=list)
+    paths: list[dict[str, Any]] = field(default_factory=list)
+    summary: dict[str, Any] = field(default_factory=dict)
+    expanded_entities: list[Entity] = field(default_factory=list)
+    expanded_clusters: list[EventCluster] = field(default_factory=list)
+    hit_reasons: dict[str, list[str]] = field(default_factory=dict)
+    candidate_count: int = 0
+    expanded_cluster_count: int = 0
+    expanded_entity_count: int = 0
+    errors: list[str] = field(default_factory=list)
+
+    def to_graph_dict(self, enabled: bool) -> dict[str, Any]:
+        return {
+            "enabled": enabled,
+            "used": self.used,
+            "nodes": self.nodes,
+            "edges": self.edges,
+            "paths": self.paths,
+            "summary": self.summary,
+        }
+
+    @classmethod
+    def empty(
+        cls,
+        *,
+        start_entities: list[Entity] | None = None,
+    ) -> GraphRetrievalResult:
+        return cls(
+            used=False,
+            summary=_build_summary(start_entities or [], [], [], expanded=False),
+        )
+
+
+def _build_summary(
+    start_entities: list[Entity],
+    clusters: list[EventCluster],
+    expanded_entities: list[Entity],
+    *,
+    expanded: bool,
+) -> dict[str, Any]:
+    return {
+        "start_entities": [
+            {
+                "entity_id": entity.entity_id,
+                "name": entity.canonical_name,
+            }
+            for entity in start_entities
+        ],
+        "event_cluster_count": len(clusters),
+        "expanded_entity_count": len(expanded_entities),
+        "expanded": expanded,
+    }
+
+
+def _parse_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
+
+
+class KnowledgeGraphRetriever:
+    """Formal graph retrieval service for the current knowledge graph model."""
+
+    def __init__(
+        self,
+        *,
+        db_path: str = "data/news.db",
+        connection: GraphConnectionLike | None = None,
+        entity_repo: EntityRepository | None = None,
+        cluster_repo: EventClusterRepository | None = None,
+    ) -> None:
+        self.connection = connection or get_connection()
+        self.entity_repo = entity_repo or EntityRepository(db_path)
+        self.cluster_repo = cluster_repo or EventClusterRepository(db_path)
+
+    def search(
+        self,
+        structured_query: StructuredQuery,
+        *,
+        start_entities: list[Entity],
+    ) -> GraphRetrievalResult:
+        if not start_entities:
+            return GraphRetrievalResult.empty(start_entities=[])
+
+        try:
+            with self.connection.session() as session:
+                raw_records = session.run(
+                    """
+                    MATCH (start:Entity)-[:INVOLVED_IN]->(cluster:EventCluster)
+                    WHERE start.id IN $start_entity_ids
+                    OPTIONAL MATCH (cluster)<-[:INVOLVED_IN]-(neighbor:Entity)
+                    RETURN
+                        start.id AS start_entity_id,
+                        cluster.id AS cluster_id,
+                        cluster.cluster_type AS cluster_type,
+                        cluster.title AS cluster_title,
+                        cluster.summary AS cluster_summary,
+                        cluster.primary_entity_id AS cluster_primary_entity_id,
+                        cluster.member_ku_ids AS member_ku_ids,
+                        cluster.source_doc_ids AS source_doc_ids,
+                        cluster.conflict_status AS conflict_status,
+                        cluster.representative_ku_id AS representative_ku_id,
+                        cluster.member_count AS member_count,
+                        cluster.source_count AS source_count,
+                        cluster.time_range_json AS time_range_json,
+                        neighbor.id AS neighbor_entity_id
+                    """,
+                    start_entity_ids=[entity.entity_id for entity in start_entities],
+                )
+                records = list(cast(Iterable[Any], raw_records))
+        except Exception as exc:
+            return GraphRetrievalResult(
+                used=False,
+                errors=[str(exc)],
+                summary=_build_summary(start_entities, [], [], expanded=False),
+            )
+
+        cluster_rows = self._group_cluster_rows(records)
+        candidate_count = len(cluster_rows)
+        if not cluster_rows:
+            return GraphRetrievalResult(
+                used=True,
+                candidate_count=0,
+                summary=_build_summary(start_entities, [], [], expanded=False),
+            )
+
+        filtered_cluster_ids = [
+            cluster_id
+            for cluster_id, row in cluster_rows.items()
+            if self._matches_filters(row, structured_query)
+        ]
+        expanded_clusters = self.cluster_repo.get_by_ids(filtered_cluster_ids)
+        cluster_map = {cluster.cluster_id: cluster for cluster in expanded_clusters}
+        if not cluster_map:
+            return GraphRetrievalResult(
+                used=True,
+                candidate_count=candidate_count,
+                summary=_build_summary(start_entities, [], [], expanded=False),
+            )
+
+        start_ids = {entity.entity_id for entity in start_entities}
+        expanded_entity_ids = sorted(
+            {
+                neighbor_id
+                for cluster_id in filtered_cluster_ids
+                for neighbor_id in cluster_rows[cluster_id]["neighbor_entity_ids"]
+                if neighbor_id and neighbor_id not in start_ids
+            }
+        )
+        expanded_entities = self.entity_repo.get_by_ids(expanded_entity_ids)
+        expanded_entity_map = {entity.entity_id: entity for entity in expanded_entities}
+        start_entity_map = {entity.entity_id: entity for entity in start_entities}
+
+        nodes = self._build_nodes(start_entities, expanded_clusters, expanded_entities)
+        edges = self._build_edges(cluster_rows, filtered_cluster_ids, start_entity_map, expanded_entity_map)
+        paths, hit_reasons = self._build_paths(
+            cluster_rows,
+            filtered_cluster_ids,
+            start_entities=start_entities,
+            expanded_clusters=cluster_map,
+            expanded_entities=expanded_entity_map,
+        )
+        expanded = bool(filtered_cluster_ids or expanded_entity_ids)
+        return GraphRetrievalResult(
+            used=True,
+            nodes=nodes,
+            edges=edges,
+            paths=paths,
+            summary=_build_summary(
+                start_entities,
+                list(cluster_map.values()),
+                expanded_entities,
+                expanded=expanded,
+            ),
+            expanded_entities=expanded_entities,
+            expanded_clusters=list(cluster_map.values()),
+            hit_reasons=hit_reasons,
+            candidate_count=candidate_count,
+            expanded_cluster_count=len(cluster_map),
+            expanded_entity_count=len(expanded_entities),
+        )
+
+    def _group_cluster_rows(self, records: list[Any]) -> dict[str, dict[str, Any]]:
+        grouped: dict[str, dict[str, Any]] = {}
+        for record in records:
+            cluster_id = record["cluster_id"]
+            if cluster_id is None:
+                continue
+            row = grouped.setdefault(
+                cluster_id,
+                {
+                    "start_entity_ids": set(),
+                    "neighbor_entity_ids": set(),
+                    "cluster_type": record["cluster_type"],
+                    "time_range_json": record["time_range_json"],
+                },
+            )
+            if record["start_entity_id"]:
+                row["start_entity_ids"].add(record["start_entity_id"])
+            if record["neighbor_entity_id"]:
+                row["neighbor_entity_ids"].add(record["neighbor_entity_id"])
+        return grouped
+
+    def _matches_filters(self, row: dict[str, Any], structured_query: StructuredQuery) -> bool:
+        event_types = structured_query.filters.event_types or []
+        if event_types and row["cluster_type"] not in event_types:
+            return False
+        if structured_query.time_range is None:
+            return True
+        return self._matches_time_range(row.get("time_range_json"), structured_query)
+
+    def _matches_time_range(
+        self,
+        time_range_json: str | None,
+        structured_query: StructuredQuery,
+    ) -> bool:
+        if structured_query.time_range is None:
+            return True
+        if not time_range_json:
+            return False
+        try:
+            payload = json.loads(time_range_json)
+        except (TypeError, json.JSONDecodeError):
+            return False
+        if not isinstance(payload, dict):
+            return False
+        cluster_start = _parse_date(payload.get("start"))
+        cluster_end = _parse_date(payload.get("end"))
+        if cluster_start is None or cluster_end is None:
+            return False
+        request_start = structured_query.time_range.start
+        request_end = structured_query.time_range.end
+        if request_start > request_end:
+            request_start, request_end = request_end, request_start
+        return cluster_start <= request_end and request_start <= cluster_end
+
+    def _build_nodes(
+        self,
+        start_entities: list[Entity],
+        clusters: list[EventCluster],
+        expanded_entities: list[Entity],
+    ) -> list[dict[str, Any]]:
+        nodes: list[dict[str, Any]] = []
+        for entity in start_entities:
+            nodes.append(
+                {
+                    "id": entity.entity_id,
+                    "type": "Entity",
+                    "name": entity.canonical_name,
+                    "entity_type": entity.entity_type,
+                    "is_start": True,
+                }
+            )
+        for cluster in clusters:
+            nodes.append(
+                {
+                    "id": cluster.cluster_id,
+                    "type": "EventCluster",
+                    "name": cluster.title,
+                    "cluster_type": cluster.cluster_type,
+                    "member_ku_ids": cluster.member_ku_ids,
+                }
+            )
+        for entity in expanded_entities:
+            nodes.append(
+                {
+                    "id": entity.entity_id,
+                    "type": "Entity",
+                    "name": entity.canonical_name,
+                    "entity_type": entity.entity_type,
+                    "is_start": False,
+                }
+            )
+        return nodes
+
+    def _build_edges(
+        self,
+        cluster_rows: dict[str, dict[str, Any]],
+        filtered_cluster_ids: list[str],
+        start_entities: dict[str, Entity],
+        expanded_entities: dict[str, Entity],
+    ) -> list[dict[str, Any]]:
+        edges: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for cluster_id in filtered_cluster_ids:
+            row = cluster_rows[cluster_id]
+            for entity_id in sorted(row["start_entity_ids"]):
+                if entity_id not in start_entities:
+                    continue
+                key = (entity_id, cluster_id)
+                if key in seen:
+                    continue
+                seen.add(key)
+                edges.append(
+                    {
+                        "source": entity_id,
+                        "target": cluster_id,
+                        "type": "INVOLVED_IN",
+                        "direction": "entity_to_cluster",
+                    }
+                )
+            for entity_id in sorted(row["neighbor_entity_ids"]):
+                if entity_id not in expanded_entities:
+                    continue
+                key = (entity_id, cluster_id)
+                if key in seen:
+                    continue
+                seen.add(key)
+                edges.append(
+                    {
+                        "source": entity_id,
+                        "target": cluster_id,
+                        "type": "INVOLVED_IN",
+                        "direction": "entity_to_cluster",
+                    }
+                )
+        return edges
+
+    def _build_paths(
+        self,
+        cluster_rows: dict[str, dict[str, Any]],
+        filtered_cluster_ids: list[str],
+        *,
+        start_entities: list[Entity],
+        expanded_clusters: dict[str, EventCluster],
+        expanded_entities: dict[str, Entity],
+    ) -> tuple[list[dict[str, Any]], dict[str, list[str]]]:
+        start_entity_map = {entity.entity_id: entity for entity in start_entities}
+        paths: list[dict[str, Any]] = []
+        hit_reasons: dict[str, list[str]] = {}
+
+        for cluster_id in filtered_cluster_ids:
+            cluster = expanded_clusters[cluster_id]
+            row = cluster_rows[cluster_id]
+            for entity_id in sorted(row["start_entity_ids"]):
+                entity = start_entity_map.get(entity_id)
+                if entity is None:
+                    continue
+                paths.append(
+                    {
+                        "path_type": "Entity->EventCluster",
+                        "start_entity_id": entity.entity_id,
+                        "start_entity_name": entity.canonical_name,
+                        "cluster_id": cluster.cluster_id,
+                        "cluster_title": cluster.title,
+                        "cluster_type": cluster.cluster_type,
+                        "member_ku_ids": cluster.member_ku_ids,
+                    }
+                )
+                hit_reasons.setdefault(cluster.cluster_id, []).append(
+                    f"seed_entity:{entity.canonical_name}"
+                )
+            for neighbor_id in sorted(row["neighbor_entity_ids"]):
+                neighbor = expanded_entities.get(neighbor_id)
+                if neighbor is None:
+                    continue
+                for entity_id in sorted(row["start_entity_ids"]):
+                    entity = start_entity_map.get(entity_id)
+                    if entity is None:
+                        continue
+                    paths.append(
+                        {
+                            "path_type": "Entity->EventCluster->Entity",
+                            "start_entity_id": entity.entity_id,
+                            "start_entity_name": entity.canonical_name,
+                            "cluster_id": cluster.cluster_id,
+                            "cluster_title": cluster.title,
+                            "neighbor_entity_id": neighbor.entity_id,
+                            "neighbor_entity_name": neighbor.canonical_name,
+                            "member_ku_ids": cluster.member_ku_ids,
+                        }
+                    )
+                    hit_reasons.setdefault(neighbor.entity_id, []).append(
+                        f"co_involved_via:{cluster.cluster_id}"
+                    )
+        return paths, hit_reasons

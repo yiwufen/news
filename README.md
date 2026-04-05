@@ -36,6 +36,7 @@
 - `KnowledgeUnit` FTS 稀疏索引
 - `KnowledgeUnit` embedding 向量索引
 - BM25 / 向量召回与融合排序
+- `Entity -> EventCluster` 图谱增强检索与正式关系结果集输出
 - 旧 SQLite 库的检索物化状态自愈：仓库打开时会自动回填缺失的 `entity_ids` 并重建缺失的 FTS 行，避免出现“图里有实体、知识库检索为空”的状态漂移
 
 ## 开发命令
@@ -86,6 +87,7 @@ print(result)
 
 - `run_continuous()` 是当前阶段的重点入口
 - `run_pipeline()` 直接检索 `KnowledgeUnit` / `Entity` / `EventCluster`
+- `run_pipeline(graph_enabled=True)` 会在主检索结果上叠加正式图谱增强，返回稳定的 `graph.nodes` / `graph.edges` / `graph.paths`
 - 图谱默认开启
 - 若未配置 `ANTHROPIC_API_KEY`，`run_pipeline()` 的意图解析会按 fail-fast 约束直接失败
 - 若未配置 embedding 凭据，`run_pipeline()` 会退化到 BM25-only 检索，而不会让默认知识库查询路径整体失败
