@@ -45,7 +45,7 @@ def _build_timeline_events(result: dict) -> list[dict]:
     return events
 
 
-def _build_compatibility_output(
+def _build_pipeline_output(
     structured_query: StructuredQuery,
     result: dict,
     source: str,
@@ -79,19 +79,13 @@ def _build_compatibility_output(
         "entities": result["entities"],
         "event_clusters": result["event_clusters"],
         "total_count": result["total_count"],
-        "report": {},
-        "risk_assessment": {},
         "timeline_data": {},
-        "comparison_report": {},
-        "event_impact": {},
         "verification": {
             "passed": True,
             "retry_count": 0,
             "issues": [],
         },
-        "particles_count": len(result["knowledge_units"]),
         "errors": [],
-        "stage_durations": {},
     }
 
     if structured_query.intent == IntentType.ENTITY_TIMELINE:
@@ -121,67 +115,14 @@ def _build_compatibility_output(
                     "issues": [],
                 },
             }
-        base_output["report"] = {
-            "entities": structured_query.entities,
-            "relationships": base_output["graph"]["edges"],
-            "total_relationships": len(base_output["graph"]["edges"]),
-        }
         return base_output
 
     if structured_query.intent == IntentType.COMPARATIVE_ANALYSIS:
-        comparison = {
-            "entities": structured_query.entities,
-            "entity_event_counts": {
-                entity: sum(
-                    1
-                    for unit in result["knowledge_units"]
-                    if entity.lower()
-                    in " ".join(
-                        ref["mention"] for ref in unit["entities"]
-                    ).lower()
-                )
-                for entity in structured_query.entities
-            },
-            "summary": "",
-        }
-        if len(structured_query.entities) >= 2:
-            entity_a = structured_query.entities[0]
-            entity_b = structured_query.entities[1]
-            count_a = comparison["entity_event_counts"][entity_a]
-            count_b = comparison["entity_event_counts"][entity_b]
-            if count_a > count_b:
-                comparison["summary"] = f"{entity_a} has more matched events than {entity_b}"
-            elif count_b > count_a:
-                comparison["summary"] = f"{entity_b} has more matched events than {entity_a}"
-            else:
-                comparison["summary"] = f"{entity_a} and {entity_b} have the same matched event count"
-        base_output["comparison_report"] = comparison
         return base_output
 
-    if structured_query.intent == IntentType.EVENT_IMPACT:
-        base_output["event_impact"] = {
-            "key_events": events[:10],
-            "impact_scope": {
-                "entities": [entity["canonical_name"] for entity in result["entities"]],
-                "event_clusters": [cluster["cluster_id"] for cluster in result["event_clusters"]],
-            },
-            "affected_entities": [entity["canonical_name"] for entity in result["entities"]],
-        }
+    if structured_query.intent == IntentType.EVENT_ANALYSIS:
         return base_output
 
-    summaries = [event["description"] for event in events[:5]]
-    base_output["report"] = {
-        "target_entity": target_entity,
-        "summary": summaries,
-        "evidence_count": len(result["knowledge_units"]),
-        "entity_count": len(result["entities"]),
-        "cluster_count": len(result["event_clusters"]),
-    }
-    base_output["risk_assessment"] = {
-        "target_entity": target_entity,
-        "risk_level": "MEDIUM" if result["knowledge_units"] else "LOW",
-        "risk_score": min(1.0, len(result["knowledge_units"]) / 10),
-    }
     return base_output
 
 
@@ -213,7 +154,7 @@ def run_pipeline(
         result = searcher.search(request)
         source = "knowledge_base"
 
-    return _build_compatibility_output(
+    return _build_pipeline_output(
         structured_query=structured_query,
         result=result.to_dict(),
         source=source,

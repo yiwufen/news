@@ -29,7 +29,7 @@
 
 ## 当前状态
 
-当前主线已经切到知识底座：`run_continuous()` 负责离线知识化建库，`run_pipeline()` 直接检索 `KnowledgeUnit` / `Entity` / `EventCluster`。旧的风险导向消费链路不再作为默认实现维护。
+当前主线已经切到知识底座：`run_continuous()` 负责离线知识化建库，`run_pipeline()` 直接检索 `KnowledgeUnit` / `Entity` / `EventCluster`。旧的风险导向消费链路和对应 compatibility 输出已从主线接口中移除。
 
 当前检索主线已包含：
 

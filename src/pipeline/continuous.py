@@ -1,11 +1,8 @@
-"""
-Offline continuous pipeline entrypoint.
-"""
+"""Offline continuous pipeline entrypoint."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass
 
 from src.entities import EntityResolver, EntityRepository
 from src.event_clustering import EventClusterRepository, EventClusterer
@@ -14,25 +11,10 @@ from src.knowledge_base import (
     KnowledgeUnit,
     KnowledgeUnitRepository,
     RawDocumentRepository,
-    compute_slice_window_from_datetime,
 )
 from src.knowledge_extractor import KnowledgeExtractor
 from src.knowledge_graph_sync import KnowledgeGraphSync
 from src.retrieval.indexing import KnowledgeIndexBuilder
-
-
-def _build_legacy_particle(unit: KnowledgeUnit) -> dict[str, Any]:
-    """Build a compatibility payload for legacy callers of `run_continuous()`."""
-    anchor = unit.time.event_time or unit.time.published_at
-    return {
-        "particle_id": unit.ku_id,
-        "slice_window": compute_slice_window_from_datetime(anchor),
-        "event_type": unit.unit_type,
-        "event_summary": unit.summary,
-        "entities": [entity.mention for entity in unit.entities],
-        "source_doc_ids": [unit.source.doc_id],
-    }
-
 
 @dataclass
 class ContinuousRunResult:
@@ -41,9 +23,6 @@ class ContinuousRunResult:
     nodes_created: int
     edges_created: int
     errors: list[str]
-    particles_extracted: int = 0
-    particles_saved: int = 0
-    particles: list[dict[str, Any]] = field(default_factory=list)
     knowledge_units_extracted: int = 0
     knowledge_units_saved: int = 0
     entities_saved: int = 0
@@ -92,7 +71,6 @@ class ContinuousPipeline:
     ) -> ContinuousRunResult:
         errors: list[str] = []
         all_units: list[KnowledgeUnit] = []
-        legacy_particles: list[dict[str, Any]] = []
         total_nodes = 0
         total_edges = 0
         total_entities_saved = 0
@@ -136,7 +114,6 @@ class ContinuousPipeline:
                 resolved_units,
                 persist=not dry_run,
             )
-            legacy_particles.extend(_build_legacy_particle(unit) for unit in clustered_units)
 
             indexing_errors: list[str] = []
             post_processing_errors: list[str] = []
@@ -195,9 +172,6 @@ class ContinuousPipeline:
             nodes_created=total_nodes,
             edges_created=total_edges,
             errors=errors,
-            particles_extracted=len(legacy_particles),
-            particles_saved=len(legacy_particles) if not dry_run else 0,
-            particles=legacy_particles,
             knowledge_units_extracted=len(all_units),
             knowledge_units_saved=len(all_units) if not dry_run else 0,
             entities_saved=total_entities_saved if not dry_run else 0,

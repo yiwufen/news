@@ -325,13 +325,13 @@
 
 ### 7.2 Legacy 隔离规则
 
-为避免当前旧代码持续干扰后续实现，迁移阶段必须遵守以下隔离规则：
+以下规则用于明确历史设计的边界，避免已弃用方案重新回流到知识底座主线：
 
-- `IntelligenceParticle`、`RiskReport`、旧风险图查询语义统一视为 `legacy`
+- `IntelligenceParticle`、`RiskReport`、旧风险图查询语义统一视为已弃用的 `legacy` 设计
 - 新功能不得继续以 `IntelligenceParticle` 作为核心数据契约扩展
 - 新功能不得以 `RiskReport` 作为默认输出目标扩展
 - 新检索、图谱、知识化逻辑必须优先围绕 `RawDocument`、`KnowledgeUnit`、`EventCluster`、`Entity` 设计
-- 不再为旧消费链路维持主线路径兼容；若旧实现未被新主线使用，应优先删除而非继续保守保留
+- 不再为旧消费链路维持主线路径兼容；若旧实现未被新主线使用，应优先删除，而不是继续保留为事实上的现行设计
 - 运行入口 `run_continuous()`、`run_pipeline()` 的接口语义保持不变，但其内部实现允许逐步切换到新架构
 
 推荐迁移分层：

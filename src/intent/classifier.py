@@ -1,6 +1,4 @@
-"""
-Intent parsing and deterministic query normalization.
-"""
+"""Intent parsing and deterministic query normalization."""
 
 from __future__ import annotations
 
@@ -26,13 +24,14 @@ class IntentClassifier:
     SYSTEM_PROMPT = """你是一个意图解析专家。你的任务是将用户的自然语言查询解析成结构化格式。
 ## 意图类型
 - ENTITY_TIMELINE: 查看某实体的历史行为时间线
-- RISK_ASSESSMENT: 评估某实体的风险暴露
+- ENTITY_OVERVIEW: 给出某实体的整体知识概览
 - RELATIONSHIP_QUERY: 查询实体间的关系路径
 - COMPARATIVE_ANALYSIS: 多实体对比分析
-- EVENT_IMPACT: 事件影响分析
+- EVENT_ANALYSIS: 事件知识分析
 
 ## 输出要求
-返回 JSON 格式：{
+返回 JSON 格式：
+{
   "intent": "意图类型",
   "entities": ["实体名称列表"],
   "time_expression": "时间表达式（如果有）",
@@ -116,15 +115,19 @@ class IntentClassifier:
         normalized = (intent_str or "").strip()
         intent_map = {
             "ENTITY_TIMELINE": IntentType.ENTITY_TIMELINE,
-            "RISK_ASSESSMENT": IntentType.RISK_ASSESSMENT,
+            "ENTITY_OVERVIEW": IntentType.ENTITY_OVERVIEW,
             "RELATIONSHIP_QUERY": IntentType.RELATIONSHIP_QUERY,
             "COMPARATIVE_ANALYSIS": IntentType.COMPARATIVE_ANALYSIS,
-            "EVENT_IMPACT": IntentType.EVENT_IMPACT,
+            "EVENT_ANALYSIS": IntentType.EVENT_ANALYSIS,
+            "RISK_ASSESSMENT": IntentType.ENTITY_OVERVIEW,
+            "EVENT_IMPACT": IntentType.EVENT_ANALYSIS,
             "时间线": IntentType.ENTITY_TIMELINE,
-            "风险评估": IntentType.RISK_ASSESSMENT,
+            "实体概览": IntentType.ENTITY_OVERVIEW,
+            "风险评估": IntentType.ENTITY_OVERVIEW,
             "关系查询": IntentType.RELATIONSHIP_QUERY,
             "对比分析": IntentType.COMPARATIVE_ANALYSIS,
-            "事件影响": IntentType.EVENT_IMPACT,
+            "事件分析": IntentType.EVENT_ANALYSIS,
+            "事件影响": IntentType.EVENT_ANALYSIS,
         }
         return intent_map.get(normalized, IntentType.ENTITY_TIMELINE)
 
@@ -156,7 +159,7 @@ class IntentClassifier:
                     return TimeRange(start=date(ref.year, 1, 1), end=ref)
                 return TimeRange(start=ref - delta, end=ref)
 
-        quarter_match = re.search(r"(\d{4})\s*[年/-]?\s*q([1-4])", expression, re.IGNORECASE)
+        quarter_match = re.search(r"(\d{4})\s*[年-]?\s*q([1-4])", expression, re.IGNORECASE)
         if quarter_match:
             year = int(quarter_match.group(1))
             quarter = int(quarter_match.group(2))

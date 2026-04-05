@@ -8,7 +8,7 @@ from enum import Enum
 
 
 class EventType(Enum):
-    """事件类型枚举 (risk_signal.type)"""
+    """事件类型枚举。"""
 
     DEBT_DEFAULT = "债务违约"
     EQUITY_PLEDGE = "股权质押"
@@ -39,7 +39,7 @@ class EntityType(Enum):
 
 
 class RiskLevel(Enum):
-    """风险等级枚举 (risk_signal.level)"""
+    """风险等级枚举。"""
 
     CRITICAL = "立即预警"
     HIGH = "当日处理"

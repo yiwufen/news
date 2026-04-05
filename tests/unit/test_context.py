@@ -43,14 +43,14 @@ class TestQueryInput:
             raw_query="测试查询",
             entities=["实体A"],
             time_range=time_range,
-            intent=IntentType.RISK_ASSESSMENT,
+            intent=IntentType.ENTITY_OVERVIEW,
         )
 
         result = inp.to_dict()
         assert result["raw_query"] == "测试查询"
         assert result["entities"] == ["实体A"]
         assert result["time_range"]["start"] == "2025-01-01"
-        assert result["intent"] == "RISK_ASSESSMENT"
+        assert result["intent"] == "ENTITY_OVERVIEW"
 
 
 class TestStageOutput:

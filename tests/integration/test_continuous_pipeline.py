@@ -126,9 +126,9 @@ def test_run_continuous_builds_knowledge_tables_without_legacy_backfill(tmp_path
     assert result.knowledge_units_saved == 2
     assert result.entities_saved >= 1
     assert result.clusters_saved >= 1
-    assert result.particles_extracted == 2
-    assert result.particles_saved == 2
-    assert len(result.particles) == 2
+    assert not hasattr(result, "particles_extracted")
+    assert not hasattr(result, "particles_saved")
+    assert not hasattr(result, "particles")
 
     connection = sqlite3.connect(db_path)
     try:
@@ -234,6 +234,11 @@ def test_run_pipeline_queries_new_knowledge_store(tmp_path, monkeypatch) -> None
     assert result["event_clusters"][0]["source_count"] >= 1
     assert "conflict_reasons" in result["event_clusters"][0]
     assert "summary_variants" in result["event_clusters"][0]
+    assert "report" not in result
+    assert "risk_assessment" not in result
+    assert "comparison_report" not in result
+    assert "event_impact" not in result
+    assert "particles_count" not in result
 
 
 def test_run_pipeline_falls_back_to_bm25_without_embedding_config(tmp_path, monkeypatch) -> None:
@@ -277,6 +282,7 @@ def test_run_pipeline_falls_back_to_bm25_without_embedding_config(tmp_path, monk
     assert result["retrieval"]["bm25_count"] >= 1
     assert result["retrieval"]["vector_count"] == 0
     assert len(result["knowledge_units"]) >= 1
+    assert "risk_assessment" not in result
 
 
 def test_run_pipeline_returns_transient_entities_for_direct_articles(monkeypatch) -> None:
@@ -335,6 +341,7 @@ def test_run_pipeline_returns_transient_entities_for_direct_articles(monkeypatch
     assert result["retrieval"]["retrieval_mode"] == "hybrid"
     assert result["entities"][0]["entity_id"] == result["knowledge_units"][0]["entities"][0]["entity_id"]
     assert result["event_clusters"][0]["cluster_id"] == result["knowledge_units"][0]["cluster_id"]
+    assert "event_impact" not in result
 
 
 def test_run_pipeline_omits_graph_edges_when_disabled(monkeypatch) -> None:
@@ -392,6 +399,7 @@ def test_run_pipeline_omits_graph_edges_when_disabled(monkeypatch) -> None:
     assert len(result["knowledge_units"]) == 1
     assert len(result["entities"]) == 1
     assert len(result["event_clusters"]) == 1
+    assert "comparison_report" not in result
 
 
 def test_run_continuous_reuses_stable_knowledge_ids_on_rebuild(tmp_path) -> None:

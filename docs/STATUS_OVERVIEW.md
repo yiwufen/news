@@ -1,57 +1,24 @@
-# 当前进度总览
+# Current Status Overview
 
-这份文档用于快速回答 4 个问题：
+This document summarizes the actual supported mainline in the repo today.
+If any document disagrees, follow [docs/SHARED_RULES.md](docs/SHARED_RULES.md) first and [PROGRESS.md](../PROGRESS.md) second.
 
-1. 当前主线做到哪里了
-2. 现在能运行什么
-3. 现在能看到什么结果
-4. 还差哪些关键能力
+## Mainline
 
-如与其他文档有冲突，以 [docs/SHARED_RULES.md](D:/value/news/docs/SHARED_RULES.md) 为准；详细待办以 [PROGRESS.md](D:/value/news/PROGRESS.md) 为准。
+The project mainline is now the knowledge foundation:
 
-## 当前主线
+`RawDocument -> KnowledgeUnit -> Entity / EventCluster -> graph -> retrieval`
 
-当前项目主线已经切到知识检索底座：
+Official entrypoints:
 
-`RawDocument -> KnowledgeUnit -> Entity / EventCluster -> 图谱 -> 检索`
+- `run_continuous(graph_enabled=True)`: offline knowledge ingestion and indexing
+- `run_pipeline(raw_query=..., graph_enabled=True)`: unified knowledge retrieval
 
-对应两个正式入口：
+Legacy risk-oriented outputs are no longer part of the supported public interface.
 
-- `run_continuous(graph_enabled=True)`：离线知识化建库
-- `run_pipeline(raw_query=..., graph_enabled=True)`：统一知识检索入口
+## Public Outputs
 
-当前不再兼容旧的 `IntelligenceParticle / RiskReport` 消费主线。
-
-## 当前完成情况
-
-| 模块 | 状态 | 你现在能看到什么 |
-|------|------|------------------|
-| 原始新闻入库 | 已完成 | SQLite 中有 `news_articles` |
-| `KnowledgeUnit` 抽取 | 主线可用 | 可看到 `knowledge_units` 表和抽取计数 |
-| 实体归一 | 主线可用 | 可看到 `entities` 表和实体结果 |
-| 事件归并 | 主线可用 | 可看到 `event_clusters` 表和事件簇结果 |
-| 图谱同步 | 主线可用 | 可看到 graph sync 节点/边计数 |
-| 检索入口 | 主线可用 | `run_pipeline()` 直接返回知识检索结果 |
-| BM25 / 向量 / 融合排序 | 主线可用 | 已有 `knowledge_units_fts`、`knowledge_unit_embeddings`、混合召回与融合排序元数据 |
-| 检索物化状态自愈 | 主线可用 | 旧 SQLite 库会在打开 `KnowledgeUnitRepository` 时自动回填 `entity_ids` 并重建缺失 FTS 行 |
-
-## 现在可以直接运行的内容
-
-### 1. 跑离线知识化
-
-```bash
-uv run python -c "
-from pathlib import Path
-from dotenv import load_dotenv
-load_dotenv(dotenv_path=Path('.env'))
-from src.pipeline import run_continuous
-
-result = run_continuous(graph_enabled=True)
-print(result)
-"
-```
-
-你会看到类似这些字段：
+`run_continuous()` returns:
 
 - `knowledge_units_extracted`
 - `knowledge_units_saved`
@@ -61,139 +28,47 @@ print(result)
 - `edges_created`
 - `errors`
 
-对应实现：
+`run_pipeline()` returns:
 
-- [src/pipeline/continuous.py](D:/value/news/src/pipeline/continuous.py)
-
-### 2. 跑统一检索入口
-
-```bash
-uv run python -c "
-from pathlib import Path
-from dotenv import load_dotenv
-load_dotenv(dotenv_path=Path('.env'))
-from src.orchestration import run_pipeline
-
-result = run_pipeline(
-    raw_query='查看小米集团过去一年做的事情',
-    graph_enabled=True,
-)
-print(result)
-"
-```
-
-你会看到类似这些字段：
-
+- `request_id`
 - `query`
 - `source`
+- `retrieval`
 - `graph`
 - `knowledge_units`
 - `entities`
 - `event_clusters`
+- `timeline_data`
 - `total_count`
+- `verification`
+- `errors`
 
-对应实现：
+It does not return legacy wrapper fields such as `particles_count`, `report`, `risk_assessment`, `comparison_report`, or `event_impact`.
 
-- [src/orchestration/graph.py](D:/value/news/src/orchestration/graph.py)
-- [src/retrieval/knowledge_search.py](D:/value/news/src/retrieval/knowledge_search.py)
+## Current Capabilities
 
-注意：
+The following are already on the mainline:
 
-- `run_pipeline()` 的意图解析当前依赖 LLM 配置
-- 若未配置 `ANTHROPIC_API_KEY`，入口会直接失败，这符合当前 fail-fast 开发约束
-- 若未配置 embedding 凭据，检索会退化到 BM25-only 模式；这是当前默认的可接受降级，而不是失败
+- SQLite-backed `RawDocument`, `KnowledgeUnit`, `Entity`, and `EventCluster` storage
+- fail-fast `KnowledgeUnit` extraction
+- conservative entity resolution and event clustering
+- Neo4j sync for `Entity` and `EventCluster`
+- FTS5 plus embedding-backed retrieval storage
+- BM25 + vector hybrid retrieval with fusion ranking
+- timeline projection from retrieved knowledge units
+- self-healing repair for older materialized rows and legacy cluster payloads
 
-## 现在能直接查看的数据结果
+## Remaining Product Work
 
-### 1. 查看库里有多少知识对象
+Migration cleanup is complete. The next work is product-facing, not legacy-facing:
 
-```bash
-uv run python -c "
-import sqlite3
-conn = sqlite3.connect('data/news.db')
-for table in ['knowledge_units', 'entities', 'event_clusters', 'knowledge_processing_log']:
-    count = conn.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
-    print(table, count)
-conn.close()
-"
-```
+- graph-aware retrieval as a first-class retrieval mode
+- a stable skill-facing retrieval contract
+- higher-level skills built on the knowledge foundation
 
-### 2. 查看最近处理状态
+## Verification
 
-```bash
-uv run python -c "
-import sqlite3
-conn = sqlite3.connect('data/news.db')
-rows = conn.execute(
-    'SELECT doc_id, status, knowledge_units_count, entities_count, clusters_count, error_message '
-    'FROM knowledge_processing_log ORDER BY processed_at DESC LIMIT 20'
-).fetchall()
-for row in rows:
-    print(row)
-conn.close()
-"
-```
+See [PROGRESS.md](../PROGRESS.md) for the latest validation snapshot, including:
 
-### 3. 查看最近的知识单元
-
-```bash
-uv run python -c "
-import sqlite3
-conn = sqlite3.connect('data/news.db')
-rows = conn.execute(
-    'SELECT ku_id, unit_type, summary, cluster_id FROM knowledge_units ORDER BY updated_at DESC LIMIT 20'
-).fetchall()
-for row in rows:
-    print(row)
-conn.close()
-"
-```
-
-### 4. 查看索引和物化状态是否正常
-
-```bash
-uv run python -c "
-import sqlite3
-conn = sqlite3.connect('data/news.db')
-print('knowledge_units', conn.execute('SELECT COUNT(*) FROM knowledge_units').fetchone()[0])
-print('knowledge_units_fts', conn.execute('SELECT COUNT(*) FROM knowledge_units_fts').fetchone()[0])
-print('knowledge_unit_embeddings', conn.execute('SELECT COUNT(*) FROM knowledge_unit_embeddings').fetchone()[0])
-print('knowledge_units_with_entity_ids', conn.execute(\"SELECT COUNT(*) FROM knowledge_units WHERE entity_ids != '[]'\").fetchone()[0])
-conn.close()
-"
-```
-
-如果 `knowledge_units > 0`，但 `knowledge_units_fts = 0` 或 `knowledge_units_with_entity_ids = 0`，说明你看到的是旧库物化状态。当前代码会在仓库初始化时自动修复，但排查时仍建议先确认这组指标。
-
-## 结果怎么看
-
-如果你只是想判断“项目现在有没有跑起来”，看下面这几个信号就够了：
-
-- `run_continuous()` 返回的 `knowledge_units_saved > 0`
-- `knowledge_processing_log` 里出现 `success`
-- `knowledge_units` / `entities` / `event_clusters` 表里有数据
-- `run_pipeline()` 返回非空的 `knowledge_units` 或 `entities`
-- `graph.edges` 有结果，或者离线结果里 `nodes_created / edges_created > 0`
-
-## 当前还没完成的关键点
-
-这些是下一阶段真正影响检索质量的能力：
-
-- 图谱作为正式检索产物参与统一召回
-- 面向 skill 的稳定统一检索契约
-
-说明：
-
-- `KnowledgeUnit` 稀疏索引、向量索引、BM25 / 向量 / 融合排序已经在主线落地
-- 当前真正未完成的是“图谱参与统一召回”和“面向 skill 的稳定统一检索契约”
-
-## 推荐查看顺序
-
-如果你是第一次接手当前状态，建议按这个顺序看：
-
-1. [docs/STATUS_OVERVIEW.md](D:/value/news/docs/STATUS_OVERVIEW.md)
-2. [docs/SHARED_RULES.md](D:/value/news/docs/SHARED_RULES.md)
-3. [PROGRESS.md](D:/value/news/PROGRESS.md)
-4. [src/pipeline/continuous.py](D:/value/news/src/pipeline/continuous.py)
-5. [src/orchestration/graph.py](D:/value/news/src/orchestration/graph.py)
-6. [src/retrieval/knowledge_search.py](D:/value/news/src/retrieval/knowledge_search.py)
+- `uv run pytest`
+- `uv run pyright .`

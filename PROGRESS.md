@@ -62,17 +62,17 @@
 
 ---
 
-## 明确需要迁移或降级的旧设计
+## 已弃用的历史设计
 
-以下内容已明确降级为非主线设计，不再允许继续扩展：
+以下内容仅作为 legacy 边界保留，不属于当前主线设计，也不得继续扩展进知识底座：
 
-- [ ] `IntelligenceParticle` 作为核心数据契约
-- [ ] `risk_signal` 作为抽取层强制中心字段
-- [ ] `RiskReport` 作为默认终点产物
-- [ ] “风险研判系统”作为项目定位
-- [ ] 以风险传导为中心的图查询语义
+- `IntelligenceParticle` 作为核心数据契约
+- `risk_signal` 作为抽取层中心字段
+- `RiskReport` 作为默认终点产物
+- “风险研判系统”作为项目定位
+- 以风险传导为中心的图查询语义
 
-这些能力后续应降级为某些 skill 的消费逻辑，而不是知识底座本身。
+如仍有业务需要，上述能力只能作为上层 skill 的消费逻辑存在，而不是知识底座主线的一部分。
 
 ---
 
@@ -228,3 +228,26 @@ print(result)
 - Real incremental `run_continuous(graph_enabled=False)` completed without processing errors and returned zero new units/clusters, which matches the current fully processed local DB state.
 - Real `run_pipeline()` verification for the Xiaomi example works when the query is passed as a proper Unicode string: the parsed query resolved `entities=['小米集团']`, `time_range={'start': '2025-04-05', 'end': '2026-04-05'}`, and returned non-empty retrieval results (`total_count=35`, `knowledge_units=20`, `event_clusters=45`).
 - Earlier empty Xiaomi results were traced to command-line encoding, not retrieval logic: in the current PowerShell heredoc/stdin path, inline Chinese query text may arrive at Python as `????`, which causes the LLM intent parser to see a corrupted query and return empty entities.
+
+---
+
+## 2026-04-05 Full Migration Completion Update
+
+- The legacy compatibility payload in `run_continuous()` has been removed. The public result now only exposes knowledge-base processing metrics, graph sync stats, and errors.
+- The legacy compatibility shell in `run_pipeline()` has been removed. The public result now exposes the normalized knowledge retrieval payload plus `timeline_data`, without risk-report style wrapper fields.
+- Mainline public outputs no longer include `particles_extracted`, `particles_saved`, `particles`, `particles_count`, `report`, `risk_assessment`, `comparison_report`, or `event_impact`.
+- Integration tests now assert the absence of those legacy fields instead of depending on them.
+- `docs/STATUS_OVERVIEW.md` and `README.md` are aligned with the actual public interface and no longer imply that legacy output compatibility remains part of the supported mainline.
+
+Full migration is considered complete under the following acceptance conditions:
+
+- `run_continuous()` no longer constructs or returns `particles*`.
+- `run_pipeline()` no longer returns risk-report style compatibility fields.
+- Mainline implementation no longer constructs `IntelligenceParticle`-style payloads.
+- Formal project docs no longer treat the old design as a current interface contract.
+- Mainline tests no longer assert the presence of legacy output fields.
+
+- Final naming cleanup is also complete:
+  - mainline intent symbols now use `ENTITY_OVERVIEW` and `EVENT_ANALYSIS`
+  - routing paths now use `entity_overview_path` and `event_analysis_path`
+  - old labels `RISK_ASSESSMENT` / `EVENT_IMPACT` remain only as parser input aliases for backward-compatible intent normalization, not as mainline internal names
