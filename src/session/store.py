@@ -5,7 +5,7 @@ Session storage implementations for multi-turn task consumption layer.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from src.session.models import SessionContext, TaskResult
 
@@ -125,7 +125,8 @@ class RedisSessionStore:
         data = self._client.get(self._key(session_id))
         if data is None:
             return None
-        return self._deserialize(json.loads(data))
+        serialized = cast(str | bytes | bytearray, data)
+        return self._deserialize(json.loads(serialized))
 
     def set(self, session: SessionContext) -> None:
         import json

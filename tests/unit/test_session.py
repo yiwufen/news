@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
+from src.api.helpers import build_session_response
 from src.session import (
     InMemorySessionStore,
     SessionConfig,
@@ -282,6 +283,33 @@ class TestTaskExecutor:
         assert result.output["ok"] is True
 
     @pytest.mark.asyncio
+    async def test_execute_task_passes_skill_type_override(self) -> None:
+        """Test task execution forwards the requested skill type."""
+        now = datetime.now()
+        session = SessionContext(
+            session_id="test",
+            created_at=now,
+            updated_at=now,
+        )
+        task = TaskDefinition(
+            task_id="task-1",
+            skill_type="risk_assessment",
+            query="Assess risk",
+        )
+
+        executor = TaskExecutor()
+
+        with patch("src.session.executor.run_skill_query") as mock_run_skill_query:
+            mock_run_skill_query.return_value = {
+                "ok": True,
+                "skill_type": "risk_assessment",
+            }
+            result = await executor.execute(task, session)
+
+        assert result.state == TaskState.COMPLETED
+        assert mock_run_skill_query.call_args.kwargs["skill_type_override"] == "risk_assessment"
+
+    @pytest.mark.asyncio
     async def test_execute_task_failure(self) -> None:
         """Test task execution failure."""
         now = datetime.now()
@@ -412,6 +440,47 @@ class TestTaskExecutor:
         assert order.index("task-1") < order.index("task-2")
         assert order.index("task-1") < order.index("task-3")
         assert order.index("task-2") < order.index("task-3")
+
+    @pytest.mark.asyncio
+    async def test_execute_chain_skips_tasks_blocked_by_failed_dependencies(self) -> None:
+        """Test failed dependencies produce skipped downstream tasks."""
+        now = datetime.now()
+        session = SessionContext(
+            session_id="test",
+            created_at=now,
+            updated_at=now,
+        )
+        tasks = [
+            TaskDefinition(
+                task_id="task-1",
+                skill_type="entity_overview",
+                query="Query 1",
+            ),
+            TaskDefinition(
+                task_id="task-2",
+                skill_type="entity_timeline",
+                query="Query 2",
+                depends_on=["task-1"],
+            ),
+        ]
+
+        executor = TaskExecutor()
+
+        with patch(
+            "src.session.executor.run_skill_query",
+            side_effect=ValueError("Failure"),
+        ):
+            results = await executor.execute_chain(
+                tasks,
+                session,
+                parallel=False,
+                stop_on_failure=False,
+            )
+
+        assert len(results) == 2
+        assert results[0].state == TaskState.FAILED
+        assert results[1].state == TaskState.SKIPPED
+        assert "task-1" in results[1].errors[0]
 
     def test_build_query_with_variable_injection(self) -> None:
         """Test query building with variable injection."""
@@ -578,3 +647,23 @@ class TestSessionOrchestrator:
         updated = orchestrator.get_session(session.session_id)
         assert updated is not None
         assert len(updated.task_history) == 2
+
+
+class TestAPIHelpers:
+    """Tests for API helper functions."""
+
+    def test_build_session_response_reports_remaining_ttl(self) -> None:
+        """Test expires_in reflects remaining session lifetime."""
+        now = datetime.now()
+        session = SessionContext(
+            session_id="test-session",
+            created_at=now - timedelta(seconds=15),
+            updated_at=now - timedelta(seconds=15),
+            ttl_seconds=60,
+        )
+
+        response = build_session_response(session)
+
+        assert response.ttl_seconds == 60
+        assert response.expires_in is not None
+        assert 44 <= response.expires_in <= 45

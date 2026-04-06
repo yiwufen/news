@@ -233,6 +233,20 @@ def test_run_skill_query_maps_supported_entity_overview(monkeypatch) -> None:
     assert result["payload"]["related_entities"] == [raw_result["entities"][1]]
 
 
+def test_run_skill_query_honors_skill_type_override(monkeypatch) -> None:
+    raw_result = _base_raw_result(intent="ENTITY_OVERVIEW")
+    monkeypatch.setattr("src.skills.service.run_pipeline", lambda **_: raw_result)
+
+    result = run_skill_query(
+        raw_query="Assess Xiaomi risk",
+        skill_type_override="risk_assessment",
+    )
+
+    assert result["skill_type"] == "risk_assessment"
+    assert result["query"]["intent"] == "RISK_ASSESSMENT"
+    assert "risk_level" in result["payload"]
+
+
 def test_run_skill_query_rejects_unsupported_intents(monkeypatch) -> None:
     raw_result = _base_raw_result(intent="COMPARATIVE_ANALYSIS")
     monkeypatch.setattr("src.skills.service.run_pipeline", lambda **_: raw_result)

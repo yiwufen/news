@@ -59,6 +59,7 @@ class TaskExecutor:
                 lambda: run_skill_query(
                     raw_query=query,
                     graph_enabled=True,
+                    skill_type_override=task.skill_type,
                 ),
             )
 
@@ -122,6 +123,11 @@ class TaskExecutor:
 
         for task_id in execution_order:
             task = task_map[task_id]
+            blocked_dependencies = self._blocked_dependencies(task, results)
+            if blocked_dependencies:
+                results[task_id] = self._build_blocked_result(task, blocked_dependencies)
+                continue
+
             upstream = {
                 dep_id: results[dep_id]
                 for dep_id in task.depends_on
@@ -148,12 +154,26 @@ class TaskExecutor:
         completed: set[str] = set()
 
         while len(completed) < len(execution_order):
+            blocked = [
+                tid
+                for tid in execution_order
+                if tid not in completed
+                and self._blocked_dependencies(task_map[tid], results)
+            ]
+            for tid in blocked:
+                results[tid] = self._build_blocked_result(
+                    task_map[tid],
+                    self._blocked_dependencies(task_map[tid], results),
+                )
+                completed.add(tid)
+
             # Find tasks whose dependencies are all satisfied
             ready = [
                 tid
                 for tid in execution_order
                 if tid not in completed
                 and all(dep in completed for dep in task_map[tid].depends_on)
+                and not self._blocked_dependencies(task_map[tid], results)
             ]
 
             if not ready:
@@ -189,6 +209,35 @@ class TaskExecutor:
                     return list(results.values())
 
         return list(results.values())
+
+    def _blocked_dependencies(
+        self,
+        task: TaskDefinition,
+        results: dict[str, TaskResult],
+    ) -> list[str]:
+        """Return dependency IDs that have finished unsuccessfully."""
+        return [
+            dep_id
+            for dep_id in task.depends_on
+            if dep_id in results and results[dep_id].state != TaskState.COMPLETED
+        ]
+
+    def _build_blocked_result(
+        self,
+        task: TaskDefinition,
+        blocked_dependencies: list[str],
+    ) -> TaskResult:
+        """Build a skipped result for a task blocked by failed dependencies."""
+        timestamp = datetime.now()
+        blocked_list = ", ".join(blocked_dependencies)
+        return TaskResult(
+            task_id=task.task_id,
+            skill_type=task.skill_type,
+            state=TaskState.SKIPPED,
+            started_at=timestamp,
+            completed_at=timestamp,
+            errors=[f"Blocked by unsuccessful dependency: {blocked_list}"],
+        )
 
     def _build_query(
         self,

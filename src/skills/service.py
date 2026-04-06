@@ -50,6 +50,9 @@ SUPPORTED_INTENTS: dict[str, SkillType] = {
     IntentType.TOPIC_RESEARCH.value: "topic_research",
     IntentType.EVENT_IMPACT_ANALYSIS.value: "event_impact_analysis",
 }
+SKILL_TYPE_TO_INTENT: dict[SkillType, str] = {
+    skill_type: intent for intent, skill_type in SUPPORTED_INTENTS.items()
+}
 
 CLUSTER_TYPE_TO_RISK_FACTOR: dict[str, str] = {
     "debt_default": "DEBT_DEFAULT",
@@ -1447,6 +1450,7 @@ def run_skill_query(
     raw_query: str = "",
     articles: list[dict] | None = None,
     graph_enabled: bool = True,
+    skill_type_override: SkillType | None = None,
 ) -> dict[str, Any]:
     """Run the stable skill-facing retrieval contract over the knowledge foundation."""
     raw_result = run_pipeline(
@@ -1458,9 +1462,13 @@ def run_skill_query(
         return _error_contract(["missing query input"]).model_dump(mode="json")
 
     intent = raw_result.get("query", {}).get("intent")
-    skill_type = SUPPORTED_INTENTS.get(intent)
+    skill_type = skill_type_override or SUPPORTED_INTENTS.get(intent)
     if skill_type is None:
         return _error_contract([f"unsupported_intent:{intent}"], raw_result).model_dump(mode="json")
+
+    query_payload = dict(raw_result.get("query", {}))
+    if skill_type_override is not None:
+        query_payload["intent"] = SKILL_TYPE_TO_INTENT[skill_type_override]
 
     knowledge_units = raw_result.get("knowledge_units", [])
     event_clusters = raw_result.get("event_clusters", [])
@@ -1484,7 +1492,7 @@ def run_skill_query(
         ok=_contract_ok(raw_result),
         skill_type=skill_type,
         source=raw_result.get("source"),
-        query=dict(raw_result.get("query", {})),
+        query=query_payload,
         summary=SkillSummary(
             knowledge_unit_count=len(knowledge_units),
             entity_count=len(entities),

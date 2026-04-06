@@ -128,7 +128,7 @@
 - [x] 支持担保分析 skill（`GUARANTEE_ANALYSIS`）
 - [x] 支持主题研究、事件影响分析 skill（`TOPIC_RESEARCH`、`EVENT_IMPACT_ANALYSIS`）
 - [x] 设计多轮任务消费层
-- [ ] 提供 API 封装
+- [x] 提供 API 封装
 
 ---
 
@@ -563,3 +563,87 @@ A new multi-turn task consumption layer has been implemented to support session-
 - `uv run pytest` -> 138 passed (29 new session tests)
 - `uv run pyright .` -> 0 errors
 - New test file: `tests/unit/test_session.py`
+
+---
+
+## 2026-04-06 API 封装更新
+
+### New Module: `src/api/`
+
+REST API 封装层已完成，将 Session 模块和 skill 服务暴露为 HTTP 端点：
+
+- **`src/api/app.py`**: FastAPI 应用入口
+  - `create_app()` 工厂函数
+  - CORS 中间件配置
+  - 异常处理器注册
+
+- **`src/api/config.py`**: API 配置管理
+  - 环境变量配置 (APP_API_HOST, APP_API_PORT, etc.)
+  - Session 配置 (TTL, cleanup interval)
+  - 存储配置 (memory/redis backend)
+
+- **`src/api/dependencies.py`**: 依赖注入
+  - `get_session_store()` 存储实例
+  - `get_orchestrator()` SessionOrchestrator 单例
+
+- **`src/api/models/`**: 请求/响应模型
+  - `requests.py`: CreateSessionRequest, ExecuteTaskRequest, ExecuteChainRequest
+  - `responses.py`: SessionResponse, TaskResultResponse, ContextSummaryResponse
+
+- **`src/api/routes/`**: API 路由
+  - `session.py`: Session CRUD (创建、获取、关闭、删除、延长 TTL)
+  - `task.py`: 任务执行 (单任务、任务链)
+  - `context.py`: 上下文管理 (摘要、变量读写)
+  - `health.py`: 健康检查 (`/health`, `/ready`)
+
+### API 端点
+
+| 方法 | 端点 | 描述 |
+|------|------|------|
+| POST | `/api/v1/sessions` | 创建新会话 |
+| GET | `/api/v1/sessions/{session_id}` | 获取会话详情 |
+| POST | `/api/v1/sessions/{session_id}/close` | 关闭会话 |
+| DELETE | `/api/v1/sessions/{session_id}` | 删除会话 |
+| PATCH | `/api/v1/sessions/{session_id}/ttl` | 延长 TTL |
+| POST | `/api/v1/sessions/{session_id}/tasks` | 执行单任务 |
+| POST | `/api/v1/sessions/{session_id}/tasks/chain` | 执行任务链 |
+| GET | `/api/v1/sessions/{session_id}/context` | 获取上下文摘要 |
+| GET/PUT | `/api/v1/sessions/{session_id}/context/variables/{key}` | 变量读写 |
+| GET | `/health` | 健康检查 |
+| GET | `/ready` | 就绪检查 |
+
+### Dependencies
+
+- Added `fastapi>=0.115.0` to dependencies
+- Added `uvicorn[standard]>=0.32.0` to dependencies
+- Added `pydantic-settings>=2.6.0` to dependencies
+- Added `httpx>=0.28.0` to dev dependencies
+
+### Regression Checks
+
+- `uv run pytest` -> 165 passed (27 new API tests)
+- `uv run pyright .` -> 0 errors
+- New test files: `tests/api/test_session_routes.py`, `tests/api/test_task_routes.py`, `tests/api/test_context_routes.py`
+
+### 启动方式
+
+```bash
+# 开发模式
+uv run uvicorn src.api.app:app --reload --host 0.0.0.0 --port 8000
+
+# 生产模式
+uv run uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --workers 4
+```
+
+### API 文档
+
+启动服务后访问：
+- Swagger UI: http://localhost:8000/docs
+- ReDoc: http://localhost:8000/redoc
+
+### 2026-04-06 Follow-up Fixes
+
+- Session task execution now honors the caller-requested `skill_type` by overriding the skill-facing contract mapping instead of silently reclassifying only from the raw query text.
+- Task chains now mark downstream tasks as `skipped` when any declared dependency finishes unsuccessfully, avoiding false-success results after failed prerequisites.
+- Session API responses now compute `expires_in` from the remaining TTL instead of echoing the original configured TTL.
+- Added `redis` as an explicit runtime dependency so the documented Redis-backed session store can be installed with the main API package set.
