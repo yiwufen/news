@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 
 ContractVersion = Literal["v1"]
-SkillType = Literal["entity_overview", "entity_timeline", "event_analysis", "relationship_query"]
+SkillType = Literal["entity_overview", "entity_timeline", "event_analysis", "relationship_query", "risk_assessment", "guarantee_analysis"]
 SkillSource = Literal["knowledge_base", "direct_articles"]
 TimelineEventSource = Literal["event_cluster", "knowledge_unit"]
 
@@ -109,6 +109,62 @@ class RelationshipQueryPayload(BaseModel):
     supporting_evidence: list[SupportingEvidence] = Field(default_factory=list)
 
 
+class RiskFactorPayload(BaseModel):
+    """Risk factor exposed in skill payload."""
+
+    factor_id: str
+    factor_type: str
+    factor_score: float
+    description: str
+    source_doc_ids: list[str] = Field(default_factory=list)
+    cluster_ids: list[str] = Field(default_factory=list)
+
+
+class RiskPathPayload(BaseModel):
+    """Risk传导路径 exposed in skill payload."""
+
+    source_entity_id: str
+    source_entity_name: str
+    source_risk_score: float
+    path_weight: float
+    time_decay: float
+    cluster_id: str | None = None
+    relation_chain: list[str] = Field(default_factory=list)
+    event_date: str | None = None
+
+
+class RiskAssessmentPayload(BaseModel):
+    """Payload for the risk assessment skill."""
+
+    target_entity: str | None = None
+    target_entity_id: str | None = None
+    total_risk_score: float = 0.0
+    risk_level: str = "LOW"
+    risk_factors: list[RiskFactorPayload] = Field(default_factory=list)
+    risk_paths: list[RiskPathPayload] = Field(default_factory=list)
+    supporting_evidence: list[SupportingEvidence] = Field(default_factory=list)
+    source_doc_ids: list[str] = Field(default_factory=list)
+
+
+class GuaranteePatternPayload(BaseModel):
+    """Detected guarantee pattern exposed in skill payload."""
+
+    pattern_type: str
+    risk_level: str
+    entities: list[dict[str, Any]] = Field(default_factory=list)
+    description: str
+    source_doc_ids: list[str] = Field(default_factory=list)
+
+
+class GuaranteeAnalysisPayload(BaseModel):
+    """Payload for the guarantee pattern detection skill."""
+
+    target_entity: str | None = None
+    guarantee_edges: list[dict[str, Any]] = Field(default_factory=list)
+    detected_patterns: list[GuaranteePatternPayload] = Field(default_factory=list)
+    supporting_evidence: list[SupportingEvidence] = Field(default_factory=list)
+
+
 class SkillSummary(BaseModel):
     """Common aggregate counts for the contract."""
 
@@ -142,6 +198,6 @@ class SkillContract(BaseModel):
             timeline_supported=False,
         )
     )
-    payload: EntityOverviewPayload | EntityTimelinePayload | EventAnalysisPayload | RelationshipQueryPayload | None = None
+    payload: EntityOverviewPayload | EntityTimelinePayload | EventAnalysisPayload | RelationshipQueryPayload | RiskAssessmentPayload | GuaranteeAnalysisPayload | None = None
     verification: dict[str, Any] = Field(default_factory=dict)
     errors: list[str] = Field(default_factory=list)

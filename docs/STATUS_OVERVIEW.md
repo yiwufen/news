@@ -71,7 +71,7 @@ The following are already on the mainline:
 - BM25 + vector hybrid retrieval with fusion ranking
 - graph-enhanced retrieval over `Entity -> EventCluster` with formal `nodes` / `edges` / `paths` output
 - timeline projection from retrieved knowledge units
-- stable skill-facing contract V1 for `ENTITY_OVERVIEW`, `ENTITY_TIMELINE`, and `EVENT_ANALYSIS`
+- stable skill-facing contract V1 for `ENTITY_OVERVIEW`, `ENTITY_TIMELINE`, `EVENT_ANALYSIS`, `RELATIONSHIP_QUERY`, `RISK_ASSESSMENT`, and `GUARANTEE_ANALYSIS`
 - self-healing repair for older materialized rows and legacy cluster payloads
 
 ## Remaining Product Work

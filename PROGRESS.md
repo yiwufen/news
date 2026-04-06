@@ -122,10 +122,11 @@
 ## P1 后续任务
 
 - [x] 设计面向 skill 的统一检索接口
-- [ ] 将风险分析改造为消费知识底座的 skill
-- [ ] 将时间线生成功能改造为消费知识底座的 skill
-- [ ] 支持主题研究、事件影响分析 skill
+- [x] 将风险分析改造为消费知识底座的 skill（`RISK_ASSESSMENT`）
+- [x] 将时间线生成功能改造为消费知识底座的 skill（`ENTITY_TIMELINE`）
 - [x] 支持关系扩展 skill（`RELATIONSHIP_QUERY`）
+- [x] 支持担保分析 skill（`GUARANTEE_ANALYSIS`）
+- [ ] 支持主题研究、事件影响分析 skill
 - [ ] 设计多轮任务消费层
 - [ ] 提供 API 封装
 
@@ -392,3 +393,60 @@ Full migration is considered complete under the following acceptance conditions:
   - no-conflict handling for missing explicit event dates
   - no-conflict handling for additive participant mentions
   - empty relationship-path payload behavior
+
+---
+
+## 2026-04-05 Risk Assessment & Guarantee Analysis Skills Update
+
+### New Skill Types
+
+- Added `RISK_ASSESSMENT` and `GUARANTEE_ANALYSIS` to `IntentType` enum
+- Added `RiskAssessmentPayload` and `GuaranteeAnalysisPayload` models
+- Added `RiskFactorPayload`, `RiskPathPayload`, `GuaranteePatternPayload` models
+- Updated `SkillType` to include `"risk_assessment"` and `"guarantee_analysis"`
+
+### Risk Assessment Skill
+
+- `_build_risk_assessment_payload()` extracts risk factors from EventClusters
+- Maps cluster types to risk factor types (DEBT_DEFAULT, EQUITY_PLEDGE, LEGAL_SUIT, etc.)
+- Calculates total risk score using `get_risk_level()` from `src/risk/weights.py`
+- Builds risk paths from graph relationship paths
+
+### Guarantee Analysis Skill
+
+- `_build_guarantee_analysis_payload()` extracts guarantee relationships from EventClusters
+- Detects three guarantee patterns:
+  - Circular guarantee (环形担保) - CRITICAL
+  - Chain guarantee (链式担保) - HIGH
+  - Many-to-one guarantee (多对一担保) - MEDIUM
+
+### Code Quality Improvements
+
+- **Reuse `get_risk_level()`**: Replaced inline risk level logic with existing function from `src/risk/weights.py`
+- **Extract graph data outside loop**: Pre-build `paths_by_cluster` lookup to avoid redundant dict access inside cluster iteration
+- **Move nested function to module level**: `_find_cycle()` moved out of loop to avoid function object recreation
+- **Single-pass edge processing**: Build adjacency list and target_counts in one iteration instead of two
+
+### Legacy Code Cleanup
+
+- Removed `src/retrieval/hybrid_search.py` - had TODO markers, mainline migrated to `KnowledgeSearcher`
+- Updated `src/retrieval/__init__.py` to remove `HybridSearcher` export
+
+### Regression Checks
+
+- `uv run pytest` -> 100 passed
+- `uv run pyright .` -> 0 errors
+
+## 2026-04-05 Skill Routing & Guarantee Fix Update
+
+- Fixed `IntentClassifier` routing for `RISK_ASSESSMENT` and `GUARANTEE_ANALYSIS`; these intents no longer collapse into `ENTITY_OVERVIEW` / default timeline paths.
+- Added deterministic query keyword refinement so explicit risk-assessment and guarantee-analysis requests still route correctly when the LLM returns a broader legacy intent label.
+- Reworked skill-side guarantee extraction to align with the current mainline data contract:
+  - uses `EventCluster.entity_ids` / `primary_entity_id`
+  - reuses member `KnowledgeUnit` relation hints and role hints when present
+  - falls back to conservative cluster-level directed edges instead of depending on non-existent `involved_entities`
+- Guarantee pattern detection now runs over extracted directed guarantee edges and can surface circular / chain / many-to-one patterns from current mainline payloads.
+- Added regression coverage for:
+  - new intent routing
+  - risk assessment contract payload generation
+  - guarantee analysis edge extraction and circular-pattern detection from mainline cluster payloads

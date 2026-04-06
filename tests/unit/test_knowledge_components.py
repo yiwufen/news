@@ -923,6 +923,31 @@ def test_intent_classifier_supplements_entities_from_repository_when_llm_is_inco
     assert parsed.time_range is not None
 
 
+def test_intent_classifier_routes_new_skill_intents() -> None:
+    classifier = IntentClassifier()
+    classifier._call_llm = lambda query: {  # type: ignore[method-assign]
+        "intent": "RISK_ASSESSMENT",
+        "entities": ["Xiaomi Group"],
+        "time_expression": "",
+        "filters": {},
+        "confidence": 0.9,
+    }
+
+    risk_parsed = classifier.parse("Show Xiaomi Group risk assessment")
+    assert risk_parsed.intent is IntentType.RISK_ASSESSMENT
+
+    classifier._call_llm = lambda query: {  # type: ignore[method-assign]
+        "intent": "GUARANTEE_ANALYSIS",
+        "entities": ["Xiaomi Group"],
+        "time_expression": "",
+        "filters": {},
+        "confidence": 0.9,
+    }
+
+    guarantee_parsed = classifier.parse("Analyze Xiaomi Group guarantee network")
+    assert guarantee_parsed.intent is IntentType.GUARANTEE_ANALYSIS
+
+
 def test_knowledge_unit_repository_syncs_fts_rows(tmp_path) -> None:
     db_path = tmp_path / "news.db"
     repo = KnowledgeUnitRepository(str(db_path))

@@ -3,7 +3,6 @@ Retrieval layer exports.
 """
 
 from src.retrieval.embedding_client import OpenAIEmbeddingClient
-from src.retrieval.hybrid_search import HybridSearcher
 from src.retrieval.indexing import KnowledgeIndexBuilder, rebuild_knowledge_indexes
 from src.retrieval.knowledge_search import (
     KnowledgeSearchRequest,
@@ -18,7 +17,6 @@ from src.retrieval.models import (
 
 __all__ = [
     "KnowledgeIndexBuilder",
-    "HybridSearcher",
     "OpenAIEmbeddingClient",
     "KnowledgeSearcher",
     "KnowledgeSearchRequest",

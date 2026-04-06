@@ -21,31 +21,30 @@ from src.llm import (
 class IntentClassifier:
     """Parse natural language into StructuredQuery."""
 
-    SYSTEM_PROMPT = """你是一个意图解析专家。你的任务是将用户的自然语言查询解析成结构化格式。
-## 意图类型
-- ENTITY_TIMELINE: 查看某实体的历史行为时间线
-- ENTITY_OVERVIEW: 给出某实体的整体知识概览
-- RELATIONSHIP_QUERY: 查询实体间的关系路径
-- COMPARATIVE_ANALYSIS: 多实体对比分析
-- EVENT_ANALYSIS: 事件知识分析
+    SYSTEM_PROMPT = """You parse user queries into structured JSON.
 
-## 输出要求
-返回 JSON 格式：
+Supported intents:
+- ENTITY_TIMELINE
+- ENTITY_OVERVIEW
+- RELATIONSHIP_QUERY
+- COMPARATIVE_ANALYSIS
+- EVENT_ANALYSIS
+- RISK_ASSESSMENT
+- GUARANTEE_ANALYSIS
+
+Return JSON:
 {
-  "intent": "意图类型",
-  "entities": ["实体名称列表"],
-  "time_expression": "时间表达式（如果有）",
+  "intent": "INTENT_NAME",
+  "entities": ["entity names"],
+  "time_expression": "raw time expression if any",
   "filters": {
-    "event_types": ["事件类型过滤"],
-    "risk_levels": ["风险等级过滤"]
+    "event_types": ["optional event types"],
+    "risk_levels": ["optional risk levels"]
   },
-  "confidence": 0.0-1.0
+  "confidence": 0.0
 }
 
-## 注意事项
-- 实体名称保持原样，不要猜测或修改
-- 时间表达式保留原始表达
-- 置信度反映解析的确定性"""
+Keep entity names and time expressions faithful to the original query."""
 
     def __init__(self, entity_repository: EntityRepository | None = None):
         self.client = None
@@ -55,7 +54,10 @@ class IntentClassifier:
 
     def parse(self, raw_query: str) -> StructuredQuery:
         parsed = self._call_llm(raw_query)
-        intent = self._parse_intent(parsed.get("intent", ""))
+        intent = self._refine_intent(
+            self._parse_intent(parsed.get("intent", "")),
+            raw_query,
+        )
 
         llm_entities = self._normalize_entities(parsed.get("entities"))
         fallback_entities = self._match_entities_from_query(raw_query)
@@ -98,7 +100,7 @@ class IntentClassifier:
             model=model,
             max_tokens=self.max_tokens,
             system=self.SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": f"解析以下查询：{query}"}],
+            messages=[{"role": "user", "content": f"Parse this query: {query}"}],
         )
 
         content = extract_text_from_response(response)
@@ -119,17 +121,65 @@ class IntentClassifier:
             "RELATIONSHIP_QUERY": IntentType.RELATIONSHIP_QUERY,
             "COMPARATIVE_ANALYSIS": IntentType.COMPARATIVE_ANALYSIS,
             "EVENT_ANALYSIS": IntentType.EVENT_ANALYSIS,
-            "RISK_ASSESSMENT": IntentType.ENTITY_OVERVIEW,
+            "RISK_ASSESSMENT": IntentType.RISK_ASSESSMENT,
+            "GUARANTEE_ANALYSIS": IntentType.GUARANTEE_ANALYSIS,
+            "timeline": IntentType.ENTITY_TIMELINE,
+            "overview": IntentType.ENTITY_OVERVIEW,
+            "risk_assessment": IntentType.RISK_ASSESSMENT,
+            "guarantee_analysis": IntentType.GUARANTEE_ANALYSIS,
+            "relationship_query": IntentType.RELATIONSHIP_QUERY,
+            "comparative_analysis": IntentType.COMPARATIVE_ANALYSIS,
+            "event_analysis": IntentType.EVENT_ANALYSIS,
             "EVENT_IMPACT": IntentType.EVENT_ANALYSIS,
+            "timeline_query": IntentType.ENTITY_TIMELINE,
+            "entity_overview": IntentType.ENTITY_OVERVIEW,
+            "risk overview": IntentType.RISK_ASSESSMENT,
+            "guarantee review": IntentType.GUARANTEE_ANALYSIS,
             "时间线": IntentType.ENTITY_TIMELINE,
             "实体概览": IntentType.ENTITY_OVERVIEW,
-            "风险评估": IntentType.ENTITY_OVERVIEW,
+            "风险评估": IntentType.RISK_ASSESSMENT,
+            "担保分析": IntentType.GUARANTEE_ANALYSIS,
             "关系查询": IntentType.RELATIONSHIP_QUERY,
             "对比分析": IntentType.COMPARATIVE_ANALYSIS,
             "事件分析": IntentType.EVENT_ANALYSIS,
             "事件影响": IntentType.EVENT_ANALYSIS,
         }
         return intent_map.get(normalized, IntentType.ENTITY_TIMELINE)
+
+    def _refine_intent(self, intent: IntentType, raw_query: str) -> IntentType:
+        query = raw_query.strip().lower()
+        if not query:
+            return intent
+
+        guarantee_markers = (
+            "guarantee analysis",
+            "guarantee chain",
+            "guarantee network",
+            "circular guarantee",
+            "chain guarantee",
+            "many-to-one guarantee",
+            "担保分析",
+            "担保链",
+            "担保网络",
+            "环形担保",
+            "链式担保",
+            "多对一担保",
+        )
+        if any(marker in query for marker in guarantee_markers):
+            return IntentType.GUARANTEE_ANALYSIS
+
+        risk_markers = (
+            "risk assessment",
+            "risk analysis",
+            "risk exposure",
+            "风险评估",
+            "风险分析",
+            "风险暴露",
+        )
+        if any(marker in query for marker in risk_markers):
+            return IntentType.RISK_ASSESSMENT
+
+        return intent
 
     def parse_time_range(
         self,
@@ -159,7 +209,7 @@ class IntentClassifier:
                     return TimeRange(start=date(ref.year, 1, 1), end=ref)
                 return TimeRange(start=ref - delta, end=ref)
 
-        quarter_match = re.search(r"(\d{4})\s*[年-]?\s*q([1-4])", expression, re.IGNORECASE)
+        quarter_match = re.search(r"(\d{4})\s*[年]?\s*q([1-4])", expression, re.IGNORECASE)
         if quarter_match:
             year = int(quarter_match.group(1))
             quarter = int(quarter_match.group(2))
@@ -180,7 +230,10 @@ class IntentClassifier:
 
     def classify_intent(self, query: str) -> IntentType:
         result = self._call_llm(query)
-        return self._parse_intent(result.get("intent", ""))
+        return self._refine_intent(
+            self._parse_intent(result.get("intent", "")),
+            query,
+        )
 
     def extract_entities(self, query: str) -> list[str]:
         result = self._call_llm(query)

@@ -106,7 +106,13 @@ print(result)
 
 - `run_continuous()` 是当前阶段的重点入口
 - `run_pipeline()` 直接检索 `KnowledgeUnit` / `Entity` / `EventCluster`
-- `run_skill_query()` 是面向 skill 的稳定内部契约，当前 V1 正式支持 `ENTITY_OVERVIEW`、`ENTITY_TIMELINE`、`EVENT_ANALYSIS`
+- `run_skill_query()` 是面向 skill 的稳定内部契约，当前 V1 支持：
+  - `ENTITY_OVERVIEW` - 实体概览
+  - `ENTITY_TIMELINE` - 实体时间线
+  - `EVENT_ANALYSIS` - 事件分析
+  - `RELATIONSHIP_QUERY` - 关系查询
+  - `RISK_ASSESSMENT` - 风险评估
+  - `GUARANTEE_ANALYSIS` - 担保分析
 - `run_pipeline(graph_enabled=True)` 会在主检索结果上叠加正式图谱增强，返回稳定的 `graph.nodes` / `graph.edges` / `graph.paths`
 - `run_skill_query()` 会返回统一的 `contract_version` / `summary` / `capabilities` / `payload` 结构，并显式区分 `knowledge_base` 与 `direct_articles` 的图谱能力差异
 - 图谱默认开启
