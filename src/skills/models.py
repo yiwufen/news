@@ -4,13 +4,23 @@ Typed models for the skill-facing retrieval contract.
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 
 ContractVersion = Literal["v1"]
-SkillType = Literal["entity_overview", "entity_timeline", "event_analysis", "relationship_query", "risk_assessment", "guarantee_analysis"]
+SkillType = Literal[
+    "entity_overview",
+    "entity_timeline",
+    "event_analysis",
+    "relationship_query",
+    "risk_assessment",
+    "guarantee_analysis",
+    "topic_research",
+    "event_impact_analysis",
+]
 SkillSource = Literal["knowledge_base", "direct_articles"]
 TimelineEventSource = Literal["event_cluster", "knowledge_unit"]
 
@@ -165,6 +175,93 @@ class GuaranteeAnalysisPayload(BaseModel):
     supporting_evidence: list[SupportingEvidence] = Field(default_factory=list)
 
 
+class TrendMilestone(BaseModel):
+    """Trend milestone for topic research skill."""
+
+    date: str
+    event_type: str
+    title: str
+    summary: str
+    cluster_id: str
+    importance_score: float = 0.5
+    entity_count: int = 0
+    source_count: int = 0
+
+
+class TopicTrend(BaseModel):
+    """Topic trend data for topic research skill."""
+
+    period: str
+    event_count: int = 0
+    entity_count: int = 0
+    dominant_event_types: list[str] = Field(default_factory=list)
+
+
+class TopicResearchPayload(BaseModel):
+    """Payload for the topic research skill."""
+
+    topic_keywords: list[str] = Field(default_factory=list)
+    time_range: dict[str, Any] | None = None
+    related_event_clusters: list[dict[str, Any]] = Field(default_factory=list)
+    related_entities: list[dict[str, Any]] = Field(default_factory=list)
+    trend_timeline: list[TopicTrend] = Field(default_factory=list)
+    key_milestones: list[TrendMilestone] = Field(default_factory=list)
+    event_type_distribution: dict[str, int] = Field(default_factory=dict)
+    supporting_evidence: list[SupportingEvidence] = Field(default_factory=list)
+
+
+class ImpactLevel(str, Enum):
+    """Impact level for affected entities."""
+
+    CRITICAL = "CRITICAL"
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+    UNKNOWN = "UNKNOWN"
+
+
+class AffectedEntity(BaseModel):
+    """Affected entity for event impact analysis skill."""
+
+    entity_id: str
+    entity_name: str
+    entity_type: str | None = None
+    impact_level: ImpactLevel = ImpactLevel.UNKNOWN
+    impact_description: str | None = None
+    involvement_role: str | None = None
+    related_cluster_ids: list[str] = Field(default_factory=list)
+
+
+class ImpactPath(BaseModel):
+    """Impact transmission path for event impact analysis skill."""
+
+    path_id: str
+    path_type: str
+    source_entity_id: str
+    source_entity_name: str
+    target_entity_id: str
+    target_entity_name: str
+    intermediate_entities: list[dict[str, Any]] = Field(default_factory=list)
+    bridge_cluster_ids: list[str] = Field(default_factory=list)
+    path_weight: float = 0.5
+    hops: int = 1
+
+
+class EventImpactAnalysisPayload(BaseModel):
+    """Payload for the event impact analysis skill."""
+
+    focus_event_cluster_id: str | None = None
+    focus_event_type: str | None = None
+    focus_event_title: str | None = None
+    directly_affected_entities: list[AffectedEntity] = Field(default_factory=list)
+    indirectly_affected_entities: list[AffectedEntity] = Field(default_factory=list)
+    impact_paths: list[ImpactPath] = Field(default_factory=list)
+    impact_network: dict[str, Any] = Field(default_factory=dict)
+    total_affected_entities: int = 0
+    impact_summary: dict[str, Any] = Field(default_factory=dict)
+    supporting_evidence: list[SupportingEvidence] = Field(default_factory=list)
+
+
 class SkillSummary(BaseModel):
     """Common aggregate counts for the contract."""
 
@@ -198,6 +295,16 @@ class SkillContract(BaseModel):
             timeline_supported=False,
         )
     )
-    payload: EntityOverviewPayload | EntityTimelinePayload | EventAnalysisPayload | RelationshipQueryPayload | RiskAssessmentPayload | GuaranteeAnalysisPayload | None = None
+    payload: (
+        EntityOverviewPayload
+        | EntityTimelinePayload
+        | EventAnalysisPayload
+        | RelationshipQueryPayload
+        | RiskAssessmentPayload
+        | GuaranteeAnalysisPayload
+        | TopicResearchPayload
+        | EventImpactAnalysisPayload
+        | None
+    ) = None
     verification: dict[str, Any] = Field(default_factory=dict)
     errors: list[str] = Field(default_factory=list)

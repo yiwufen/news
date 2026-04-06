@@ -13,11 +13,15 @@ from src.orchestration.graph import run_pipeline
 from src.risk.patterns import PatternDetector, PatternType
 from src.risk.weights import get_risk_level
 from src.skills.models import (
+    AffectedEntity,
     EntityOverviewPayload,
     EntityTimelinePayload,
     EventAnalysisPayload,
+    EventImpactAnalysisPayload,
     GuaranteeAnalysisPayload,
     GuaranteePatternPayload,
+    ImpactLevel,
+    ImpactPath,
     RelationshipGraph,
     RelationshipPath,
     RelationshipQueryPayload,
@@ -30,6 +34,9 @@ from src.skills.models import (
     SkillType,
     SupportingEvidence,
     TimelineEvent,
+    TopicResearchPayload,
+    TopicTrend,
+    TrendMilestone,
 )
 
 
@@ -40,6 +47,8 @@ SUPPORTED_INTENTS: dict[str, SkillType] = {
     IntentType.RELATIONSHIP_QUERY.value: "relationship_query",
     IntentType.RISK_ASSESSMENT.value: "risk_assessment",
     IntentType.GUARANTEE_ANALYSIS.value: "guarantee_analysis",
+    IntentType.TOPIC_RESEARCH.value: "topic_research",
+    IntentType.EVENT_IMPACT_ANALYSIS.value: "event_impact_analysis",
 }
 
 CLUSTER_TYPE_TO_RISK_FACTOR: dict[str, str] = {
@@ -67,6 +76,16 @@ BASE_RISK_SCORES: dict[str, float] = {
 GUARANTEE_KEYWORDS = ("担保", "保证", "guarantee", "关联担保")
 GUARANTOR_ROLE_KEYWORDS = ("guarantor", "guarantee_provider", "担保方", "保证人", "担保人")
 GUARANTEED_ROLE_KEYWORDS = ("guaranteed", "guaranteed_party", "debtor", "被担保方", "债务人")
+
+# Importance scoring weights for milestone identification
+IMPORTANCE_WEIGHT_MEMBER = 0.1
+IMPORTANCE_WEIGHT_SOURCE = 0.15
+IMPORTANCE_WEIGHT_ENTITY = 0.1
+IMPORTANCE_THRESHOLD = 0.3
+
+# Path weights for impact analysis
+PATH_WEIGHT_DIRECT = 1.0
+PATH_WEIGHT_ONE_HOP = 0.7
 
 
 def _normalize_supporting_evidence(units: list[dict[str, Any]]) -> list[SupportingEvidence]:
@@ -864,6 +883,466 @@ def _build_guarantee_analysis_payload(
     )
 
 
+def _extract_topic_keywords(
+    raw_result: dict[str, Any],
+    knowledge_units: list[dict[str, Any]],
+) -> list[str]:
+    filters = raw_result.get("query", {}).get("filters", {})
+    if isinstance(filters, dict):
+        categories = filters.get("categories")
+        if isinstance(categories, list) and categories:
+            return [str(c) for c in categories if isinstance(c, str) and c.strip()]
+
+    keywords: set[str] = set()
+    for unit in knowledge_units:
+        unit_type = unit.get("unit_type")
+        if isinstance(unit_type, str) and unit_type.strip():
+            keywords.add(unit_type.strip())
+        for tag in unit.get("tags", []):
+            if isinstance(tag, str) and len(tag.strip()) >= 2:
+                keywords.add(tag.strip())
+    return sorted(keywords)[:10]
+
+
+def _get_cluster_period(cluster: dict[str, Any], granularity: str = "month") -> str:
+    time_anchor = cluster.get("time_anchor")
+    date_value: date | None = None
+    if isinstance(time_anchor, datetime):
+        date_value = time_anchor.date()
+    elif isinstance(time_anchor, date):
+        date_value = time_anchor
+    elif isinstance(time_anchor, str) and time_anchor.strip():
+        try:
+            date_value = date.fromisoformat(time_anchor.strip()[:10])
+        except ValueError:
+            pass
+
+    if date_value is None:
+        return "unknown"
+
+    if granularity == "month":
+        return f"{date_value.year}-{date_value.month:02d}"
+    if granularity == "quarter":
+        quarter = (date_value.month - 1) // 3 + 1
+        return f"{date_value.year}-Q{quarter}"
+    return str(date_value.year)
+
+
+def _build_trend_timeline(
+    clusters: list[dict[str, Any]],
+) -> list[TopicTrend]:
+    period_data: dict[str, dict[str, Any]] = {}
+
+    for cluster in clusters:
+        period = _get_cluster_period(cluster, "month")
+        if period not in period_data:
+            period_data[period] = {
+                "event_count": 0,
+                "entity_ids": set(),
+                "event_types": {},
+            }
+        period_data[period]["event_count"] += 1
+        period_data[period]["entity_ids"].update(cluster.get("entity_ids", []))
+        cluster_type = cluster.get("cluster_type")
+        if isinstance(cluster_type, str) and cluster_type.strip():
+            period_data[period]["event_types"][cluster_type] = \
+                period_data[period]["event_types"].get(cluster_type, 0) + 1
+
+    timeline: list[TopicTrend] = []
+    for period, data in sorted(period_data.items()):
+        dominant_types = sorted(
+            data["event_types"].items(),
+            key=lambda x: (-x[1], x[0])
+        )[:3]
+        timeline.append(TopicTrend(
+            period=period,
+            event_count=data["event_count"],
+            entity_count=len(data["entity_ids"]),
+            dominant_event_types=[t[0] for t in dominant_types],
+        ))
+    return timeline
+
+
+def _identify_key_milestones(
+    clusters: list[dict[str, Any]],
+) -> list[TrendMilestone]:
+    milestones: list[TrendMilestone] = []
+
+    for cluster in clusters:
+        member_count = len(cluster.get("member_ku_ids", []))
+        source_count = len(cluster.get("source_doc_ids", []))
+        entity_count = len(cluster.get("entity_ids", []))
+
+        importance_score = min(1.0, (
+            member_count * IMPORTANCE_WEIGHT_MEMBER +
+            source_count * IMPORTANCE_WEIGHT_SOURCE +
+            entity_count * IMPORTANCE_WEIGHT_ENTITY
+        ))
+
+        if importance_score > IMPORTANCE_THRESHOLD:
+            time_anchor = cluster.get("time_anchor")
+            date_value: str = ""
+            if isinstance(time_anchor, str):
+                date_value = time_anchor[:10] if len(time_anchor) >= 10 else time_anchor
+            elif isinstance(time_anchor, datetime):
+                date_value = time_anchor.date().isoformat()
+            elif isinstance(time_anchor, date):
+                date_value = time_anchor.isoformat()
+
+            milestones.append(TrendMilestone(
+                date=date_value,
+                event_type=cluster.get("cluster_type", ""),
+                title=cluster.get("title", ""),
+                summary=cluster.get("summary", ""),
+                cluster_id=cluster.get("cluster_id", ""),
+                importance_score=round(importance_score, 2),
+                entity_count=entity_count,
+                source_count=source_count,
+            ))
+
+    return sorted(milestones, key=lambda x: (-x.importance_score, x.date))[:10]
+
+
+def _compute_event_type_distribution(
+    clusters: list[dict[str, Any]],
+) -> dict[str, int]:
+    distribution: dict[str, int] = {}
+    for cluster in clusters:
+        cluster_type = cluster.get("cluster_type")
+        if isinstance(cluster_type, str) and cluster_type.strip():
+            distribution[cluster_type] = distribution.get(cluster_type, 0) + 1
+    return distribution
+
+
+def _extract_key_entities(
+    entities: list[dict[str, Any]],
+    clusters: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    entity_counts: dict[str, int] = {}
+    for cluster in clusters:
+        for entity_id in cluster.get("entity_ids", []):
+            if isinstance(entity_id, str):
+                entity_counts[entity_id] = entity_counts.get(entity_id, 0) + 1
+
+    entity_lookup = _build_entity_lookup(entities)
+    key_entities: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+
+    for entity_id, count in sorted(entity_counts.items(), key=lambda x: (-x[1], x[0])):
+        if entity_id in seen_ids:
+            continue
+        seen_ids.add(entity_id)
+        entity = entity_lookup.get(entity_id, {})
+        key_entities.append({
+            "entity_id": entity_id,
+            "entity_name": entity.get("canonical_name", entity_id),
+            "entity_type": entity.get("entity_type"),
+            "appearance_count": count,
+        })
+
+    return key_entities[:10]
+
+
+def _build_topic_research_payload(
+    raw_result: dict[str, Any],
+    knowledge_units: list[dict[str, Any]],
+    sorted_clusters: list[dict[str, Any]],
+    entities: list[dict[str, Any]],
+    supporting_evidence: list[SupportingEvidence],
+) -> TopicResearchPayload:
+    topic_keywords = _extract_topic_keywords(raw_result, knowledge_units)
+    trend_timeline = _build_trend_timeline(sorted_clusters)
+    key_milestones = _identify_key_milestones(sorted_clusters)
+    event_type_distribution = _compute_event_type_distribution(sorted_clusters)
+    key_entities = _extract_key_entities(entities, sorted_clusters)
+
+    return TopicResearchPayload(
+        topic_keywords=topic_keywords,
+        time_range=raw_result.get("query", {}).get("time_range"),
+        related_event_clusters=sorted_clusters,
+        related_entities=key_entities,
+        trend_timeline=trend_timeline,
+        key_milestones=key_milestones,
+        event_type_distribution=event_type_distribution,
+        supporting_evidence=supporting_evidence,
+    )
+
+
+def _identify_focus_cluster(
+    sorted_clusters: list[dict[str, Any]],
+    target_entity: str | None,
+    entities: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if not sorted_clusters:
+        return None
+
+    if target_entity:
+        target_entity_id: str | None = None
+        for entity in entities:
+            if _is_target_entity(entity, target_entity):
+                target_entity_id = entity.get("entity_id")
+                break
+
+        if target_entity_id:
+            for cluster in sorted_clusters:
+                entity_ids = cluster.get("entity_ids", [])
+                if target_entity_id in entity_ids:
+                    return cluster
+
+    return sorted_clusters[0] if sorted_clusters else None
+
+
+def _infer_impact_description(cluster: dict[str, Any], entity: dict[str, Any]) -> str:
+    cluster_type = cluster.get("cluster_type", "")
+    entity_name = entity.get("canonical_name", "实体")
+    return f"{entity_name} 涉及 {cluster_type} 事件"
+
+
+def _infer_involvement_role(entity_id: str, cluster: dict[str, Any]) -> str | None:
+    primary_entity_id = cluster.get("primary_entity_id")
+    if primary_entity_id == entity_id:
+        return "primary"
+    return "participant"
+
+
+def _analyze_direct_impact(
+    focus_cluster: dict[str, Any],
+    entity_lookup: dict[str, dict[str, Any]],
+) -> list[AffectedEntity]:
+    affected: list[AffectedEntity] = []
+    focus_cluster_id = focus_cluster.get("cluster_id")
+    entity_ids = focus_cluster.get("entity_ids", [])
+    seen_ids: set[str] = set()
+
+    for entity_id in entity_ids:
+        if entity_id in seen_ids:
+            continue
+        seen_ids.add(entity_id)
+        entity = entity_lookup.get(entity_id, {})
+        affected.append(AffectedEntity(
+            entity_id=entity_id,
+            entity_name=entity.get("canonical_name", entity_id),
+            entity_type=entity.get("entity_type"),
+            impact_level=ImpactLevel.CRITICAL,
+            impact_description=_infer_impact_description(focus_cluster, entity),
+            involvement_role=_infer_involvement_role(entity_id, focus_cluster),
+            related_cluster_ids=[focus_cluster_id] if focus_cluster_id else [],
+        ))
+
+    return affected
+
+
+def _analyze_indirect_impact(
+    focus_cluster: dict[str, Any],
+    graph_paths: list[dict[str, Any]],
+    entity_lookup: dict[str, dict[str, Any]],
+    directly_affected: list[AffectedEntity],
+) -> list[AffectedEntity]:
+    indirect_entities: dict[str, AffectedEntity] = {}
+    focus_cluster_id = focus_cluster.get("cluster_id")
+    direct_entity_ids = {e.entity_id for e in directly_affected}
+
+    for path in graph_paths:
+        if not isinstance(path, dict):
+            continue
+        path_type = path.get("path_type", "")
+        if path_type != "Entity->EventCluster->Entity":
+            continue
+
+        neighbor_id = path.get("neighbor_entity_id")
+        if not neighbor_id or neighbor_id in direct_entity_ids:
+            continue
+
+        bridge_cluster_id = path.get("cluster_id")
+        if bridge_cluster_id == focus_cluster_id:
+            continue
+
+        entity = entity_lookup.get(neighbor_id, {})
+        if neighbor_id not in indirect_entities:
+            indirect_entities[neighbor_id] = AffectedEntity(
+                entity_id=neighbor_id,
+                entity_name=entity.get("canonical_name", neighbor_id),
+                entity_type=entity.get("entity_type"),
+                impact_level=ImpactLevel.MEDIUM,
+                related_cluster_ids=[],
+            )
+
+        if bridge_cluster_id and bridge_cluster_id not in indirect_entities[neighbor_id].related_cluster_ids:
+            indirect_entities[neighbor_id].related_cluster_ids.append(bridge_cluster_id)
+
+    return list(indirect_entities.values())
+
+
+def _build_impact_paths(
+    focus_cluster: dict[str, Any],
+    graph_paths: list[dict[str, Any]],
+    entity_lookup: dict[str, dict[str, Any]],
+    directly_affected: list[AffectedEntity],
+    indirectly_affected: list[AffectedEntity],
+) -> list[ImpactPath]:
+    impact_paths: list[ImpactPath] = []
+    focus_cluster_id = focus_cluster.get("cluster_id")
+    focus_entity_ids = {e.entity_id for e in directly_affected}
+    path_counter = 0
+
+    for path in graph_paths:
+        if not isinstance(path, dict):
+            continue
+
+        path_type = path.get("path_type", "")
+        start_id = path.get("start_entity_id")
+        neighbor_id = path.get("neighbor_entity_id")
+        cluster_id = path.get("cluster_id")
+
+        if not start_id:
+            continue
+
+        if path_type == "Entity->EventCluster" and cluster_id == focus_cluster_id:
+            path_counter += 1
+            impact_paths.append(ImpactPath(
+                path_id=f"impact-{path_counter}",
+                path_type="direct",
+                source_entity_id=start_id,
+                source_entity_name=entity_lookup.get(start_id, {}).get("canonical_name", start_id),
+                target_entity_id=start_id,
+                target_entity_name=entity_lookup.get(start_id, {}).get("canonical_name", start_id),
+                bridge_cluster_ids=[cluster_id] if cluster_id else [],
+                path_weight=PATH_WEIGHT_DIRECT,
+                hops=0,
+            ))
+
+        elif path_type == "Entity->EventCluster->Entity":
+            if start_id in focus_entity_ids and neighbor_id and neighbor_id not in focus_entity_ids:
+                path_counter += 1
+                impact_paths.append(ImpactPath(
+                    path_id=f"impact-{path_counter}",
+                    path_type="one_hop",
+                    source_entity_id=start_id,
+                    source_entity_name=path.get("start_entity_name", start_id),
+                    target_entity_id=neighbor_id,
+                    target_entity_name=path.get("neighbor_entity_name", neighbor_id),
+                    bridge_cluster_ids=[cluster_id] if cluster_id else [],
+                    path_weight=PATH_WEIGHT_ONE_HOP,
+                    hops=1,
+                ))
+
+    return impact_paths
+
+
+def _build_impact_network(
+    focus_cluster: dict[str, Any],
+    impact_paths: list[ImpactPath],
+    entity_lookup: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+    seen_entity_ids: set[str] = set()
+    seen_edges: set[tuple[str, str, str]] = set()
+
+    focus_cluster_id = focus_cluster.get("cluster_id")
+    for entity_id in focus_cluster.get("entity_ids", []):
+        if entity_id in seen_entity_ids:
+            continue
+        seen_entity_ids.add(entity_id)
+        entity = entity_lookup.get(entity_id, {})
+        nodes.append({
+            "id": entity_id,
+            "name": entity.get("canonical_name", entity_id),
+            "type": entity.get("entity_type"),
+            "impact_level": "CRITICAL",
+        })
+
+    for path in impact_paths:
+        for entity_id in [path.source_entity_id, path.target_entity_id]:
+            if entity_id in seen_entity_ids:
+                continue
+            seen_entity_ids.add(entity_id)
+            entity = entity_lookup.get(entity_id, {})
+            nodes.append({
+                "id": entity_id,
+                "name": entity.get("canonical_name", entity_id),
+                "type": entity.get("entity_type"),
+                "impact_level": "MEDIUM" if path.path_type == "one_hop" else "LOW",
+            })
+
+        for bridge_id in path.bridge_cluster_ids:
+            edge_key = (path.source_entity_id, path.target_entity_id, bridge_id)
+            if edge_key in seen_edges:
+                continue
+            seen_edges.add(edge_key)
+            edges.append({
+                "source": path.source_entity_id,
+                "target": path.target_entity_id,
+                "cluster_id": bridge_id,
+                "weight": path.path_weight,
+            })
+
+    return {
+        "focus_cluster_id": focus_cluster_id,
+        "nodes": nodes,
+        "edges": edges,
+    }
+
+
+def _generate_impact_summary(
+    focus_cluster: dict[str, Any],
+    directly_affected: list[AffectedEntity],
+    indirectly_affected: list[AffectedEntity],
+    impact_paths: list[ImpactPath],
+) -> dict[str, Any]:
+    impact_level_counts: dict[str, int] = {}
+    for entity in directly_affected + indirectly_affected:
+        level = entity.impact_level.value
+        impact_level_counts[level] = impact_level_counts.get(level, 0) + 1
+
+    return {
+        "focus_event": focus_cluster.get("title"),
+        "focus_event_type": focus_cluster.get("cluster_type"),
+        "direct_impact_count": len(directly_affected),
+        "indirect_impact_count": len(indirectly_affected),
+        "impact_path_count": len(impact_paths),
+        "impact_level_distribution": impact_level_counts,
+    }
+
+
+def _build_event_impact_analysis_payload(
+    raw_result: dict[str, Any],
+    target_entity: str | None,
+    knowledge_units: list[dict[str, Any]],
+    sorted_clusters: list[dict[str, Any]],
+    entities: list[dict[str, Any]],
+    supporting_evidence: list[SupportingEvidence],
+) -> EventImpactAnalysisPayload:
+    focus_cluster = _identify_focus_cluster(sorted_clusters, target_entity, entities)
+    if focus_cluster is None:
+        return EventImpactAnalysisPayload(
+            supporting_evidence=supporting_evidence,
+        )
+
+    graph_data = raw_result.get("graph", {})
+    paths = graph_data.get("paths", []) if isinstance(graph_data, dict) else []
+    entity_lookup = _build_entity_lookup(entities)
+
+    directly_affected = _analyze_direct_impact(focus_cluster, entity_lookup)
+    indirectly_affected = _analyze_indirect_impact(focus_cluster, paths, entity_lookup, directly_affected)
+    impact_paths = _build_impact_paths(focus_cluster, paths, entity_lookup, directly_affected, indirectly_affected)
+    impact_network = _build_impact_network(focus_cluster, impact_paths, entity_lookup)
+    impact_summary = _generate_impact_summary(focus_cluster, directly_affected, indirectly_affected, impact_paths)
+
+    return EventImpactAnalysisPayload(
+        focus_event_cluster_id=focus_cluster.get("cluster_id"),
+        focus_event_type=focus_cluster.get("cluster_type"),
+        focus_event_title=focus_cluster.get("title"),
+        directly_affected_entities=directly_affected,
+        indirectly_affected_entities=indirectly_affected,
+        impact_paths=impact_paths,
+        impact_network=impact_network,
+        total_affected_entities=len(directly_affected) + len(indirectly_affected),
+        impact_summary=impact_summary,
+        supporting_evidence=supporting_evidence,
+    )
+
+
 def _build_payload(
     raw_result: dict[str, Any],
     skill_type: SkillType,
@@ -874,7 +1353,16 @@ def _build_payload(
     target_entity: str | None,
     sorted_clusters: list[dict[str, Any]],
     supporting_evidence: list[SupportingEvidence],
-) -> EntityOverviewPayload | EntityTimelinePayload | EventAnalysisPayload | RelationshipQueryPayload | RiskAssessmentPayload | GuaranteeAnalysisPayload:
+) -> (
+    EntityOverviewPayload
+    | EntityTimelinePayload
+    | EventAnalysisPayload
+    | RelationshipQueryPayload
+    | RiskAssessmentPayload
+    | GuaranteeAnalysisPayload
+    | TopicResearchPayload
+    | EventImpactAnalysisPayload
+):
     if skill_type == "entity_overview":
         return _build_entity_overview_payload(
             entities=entities,
@@ -912,6 +1400,23 @@ def _build_payload(
             raw_result=raw_result,
             target_entity=target_entity,
             event_clusters=event_clusters,
+            entities=entities,
+            supporting_evidence=supporting_evidence,
+        )
+    if skill_type == "topic_research":
+        return _build_topic_research_payload(
+            raw_result=raw_result,
+            knowledge_units=knowledge_units,
+            sorted_clusters=sorted_clusters,
+            entities=entities,
+            supporting_evidence=supporting_evidence,
+        )
+    if skill_type == "event_impact_analysis":
+        return _build_event_impact_analysis_payload(
+            raw_result=raw_result,
+            target_entity=target_entity,
+            knowledge_units=knowledge_units,
+            sorted_clusters=sorted_clusters,
             entities=entities,
             supporting_evidence=supporting_evidence,
         )

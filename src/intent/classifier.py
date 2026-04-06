@@ -31,6 +31,8 @@ Supported intents:
 - EVENT_ANALYSIS
 - RISK_ASSESSMENT
 - GUARANTEE_ANALYSIS
+- TOPIC_RESEARCH
+- EVENT_IMPACT_ANALYSIS
 
 Return JSON:
 {
@@ -39,7 +41,8 @@ Return JSON:
   "time_expression": "raw time expression if any",
   "filters": {
     "event_types": ["optional event types"],
-    "risk_levels": ["optional risk levels"]
+    "risk_levels": ["optional risk levels"],
+    "categories": ["optional topic/category labels"]
   },
   "confidence": 0.0
 }
@@ -72,6 +75,7 @@ Keep entity names and time expressions faithful to the original query."""
         filters = QueryFilters(
             event_types=filters_data.get("event_types"),
             risk_levels=filters_data.get("risk_levels"),
+            categories=filters_data.get("categories"),
         )
 
         confidence = parsed.get("confidence", 0.8)
@@ -123,10 +127,14 @@ Keep entity names and time expressions faithful to the original query."""
             "EVENT_ANALYSIS": IntentType.EVENT_ANALYSIS,
             "RISK_ASSESSMENT": IntentType.RISK_ASSESSMENT,
             "GUARANTEE_ANALYSIS": IntentType.GUARANTEE_ANALYSIS,
+            "TOPIC_RESEARCH": IntentType.TOPIC_RESEARCH,
+            "EVENT_IMPACT_ANALYSIS": IntentType.EVENT_IMPACT_ANALYSIS,
             "timeline": IntentType.ENTITY_TIMELINE,
             "overview": IntentType.ENTITY_OVERVIEW,
             "risk_assessment": IntentType.RISK_ASSESSMENT,
             "guarantee_analysis": IntentType.GUARANTEE_ANALYSIS,
+            "topic_research": IntentType.TOPIC_RESEARCH,
+            "event_impact_analysis": IntentType.EVENT_IMPACT_ANALYSIS,
             "relationship_query": IntentType.RELATIONSHIP_QUERY,
             "comparative_analysis": IntentType.COMPARATIVE_ANALYSIS,
             "event_analysis": IntentType.EVENT_ANALYSIS,
@@ -142,7 +150,11 @@ Keep entity names and time expressions faithful to the original query."""
             "关系查询": IntentType.RELATIONSHIP_QUERY,
             "对比分析": IntentType.COMPARATIVE_ANALYSIS,
             "事件分析": IntentType.EVENT_ANALYSIS,
-            "事件影响": IntentType.EVENT_ANALYSIS,
+            "事件影响": IntentType.EVENT_IMPACT_ANALYSIS,
+            "主题研究": IntentType.TOPIC_RESEARCH,
+            "趋势分析": IntentType.TOPIC_RESEARCH,
+            "影响分析": IntentType.EVENT_IMPACT_ANALYSIS,
+            "影响传导": IntentType.EVENT_IMPACT_ANALYSIS,
         }
         return intent_map.get(normalized, IntentType.ENTITY_TIMELINE)
 
@@ -178,6 +190,29 @@ Keep entity names and time expressions faithful to the original query."""
         )
         if any(marker in query for marker in risk_markers):
             return IntentType.RISK_ASSESSMENT
+
+        topic_markers = (
+            "topic research",
+            "主题研究",
+            "趋势分析",
+            "事件脉络",
+            "发展态势",
+            "行业分析",
+            "topic analysis",
+        )
+        if any(marker in query for marker in topic_markers):
+            return IntentType.TOPIC_RESEARCH
+
+        impact_markers = (
+            "impact analysis",
+            "事件影响",
+            "影响分析",
+            "影响传导",
+            "连锁反应",
+            "传导路径",
+        )
+        if any(marker in query for marker in impact_markers):
+            return IntentType.EVENT_IMPACT_ANALYSIS
 
         return intent
 

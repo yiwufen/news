@@ -379,3 +379,99 @@ def test_run_skill_query_builds_guarantee_analysis_from_mainline_clusters(monkey
     assert result["payload"]["guarantee_edges"][0]["source_name"] == "A Holdings"
     pattern_types = {pattern["pattern_type"] for pattern in result["payload"]["detected_patterns"]}
     assert "circular_guarantee" in pattern_types
+
+
+def test_run_skill_query_maps_topic_research_to_topic_payload(monkeypatch) -> None:
+    raw_result = _base_raw_result(intent="TOPIC_RESEARCH")
+    raw_result["query"]["filters"]["categories"] = ["新能源", "光伏"]
+    monkeypatch.setattr("src.skills.service.run_pipeline", lambda **_: raw_result)
+
+    result = run_skill_query(raw_query="分析新能源行业的发展趋势")
+
+    assert result["ok"] is True
+    assert result["skill_type"] == "topic_research"
+    assert result["payload"]["topic_keywords"] == ["新能源", "光伏"]
+    assert len(result["payload"]["related_event_clusters"]) == 2
+    assert len(result["payload"]["trend_timeline"]) >= 1
+    assert result["payload"]["event_type_distribution"]["policy_sanction"] == 2
+    assert len(result["payload"]["key_milestones"]) >= 1
+
+
+def test_run_skill_query_maps_event_impact_analysis_to_impact_payload(monkeypatch) -> None:
+    raw_result = _base_raw_result(intent="EVENT_IMPACT_ANALYSIS")
+    monkeypatch.setattr("src.skills.service.run_pipeline", lambda **_: raw_result)
+
+    result = run_skill_query(raw_query="分析小米集团事件的影响")
+
+    assert result["ok"] is True
+    assert result["skill_type"] == "event_impact_analysis"
+    assert result["payload"]["focus_event_cluster_id"] == "clu-new"
+    assert result["payload"]["focus_event_type"] == "policy_sanction"
+    assert len(result["payload"]["directly_affected_entities"]) == 2
+    assert result["payload"]["directly_affected_entities"][0]["impact_level"] == "CRITICAL"
+    assert result["payload"]["directly_affected_entities"][0]["entity_id"] == "ent-xiaomi"
+    # impact_paths may be empty if neighbor entities are in the focus cluster
+    assert result["payload"]["total_affected_entities"] >= 2
+    assert "focus_event" in result["payload"]["impact_summary"]
+
+
+def test_run_skill_query_event_impact_analysis_empty_clusters(monkeypatch) -> None:
+    raw_result = _base_raw_result(intent="EVENT_IMPACT_ANALYSIS")
+    raw_result["event_clusters"] = []
+    raw_result["knowledge_units"] = []
+    raw_result["entities"] = []
+    monkeypatch.setattr("src.skills.service.run_pipeline", lambda **_: raw_result)
+
+    result = run_skill_query(raw_query="分析事件影响")
+
+    assert result["ok"] is True
+    assert result["skill_type"] == "event_impact_analysis"
+    assert result["payload"]["focus_event_cluster_id"] is None
+    assert result["payload"]["directly_affected_entities"] == []
+    assert result["payload"]["indirectly_affected_entities"] == []
+
+
+def test_run_skill_query_event_impact_analysis_with_indirect_impact(monkeypatch) -> None:
+    """Test event impact analysis with indirect impact paths."""
+    raw_result = _base_raw_result(intent="EVENT_IMPACT_ANALYSIS")
+    # Add an entity outside the focus cluster
+    raw_result["entities"].append({
+        "entity_id": "ent-supplier",
+        "entity_type": "Company",
+        "canonical_name": "Supplier Co",
+        "aliases": [],
+        "identifiers": {},
+        "description": None,
+        "tags": [],
+        "source_ku_ids": ["ku-supplier"],
+        "created_at": "2026-04-02T09:00:00+00:00",
+        "updated_at": "2026-04-02T09:00:00+00:00",
+    })
+    # Add a path to an entity NOT in the focus cluster
+    raw_result["graph"]["paths"].append({
+        "path_type": "Entity->EventCluster->Entity",
+        "start_entity_id": "ent-xiaomi",
+        "start_entity_name": "Xiaomi Group",
+        "cluster_id": "clu-supplier",
+        "cluster_title": "Supplier relationship",
+        "cluster_type": "supply_chain",
+        "neighbor_entity_id": "ent-supplier",
+        "neighbor_entity_name": "Supplier Co",
+        "member_ku_ids": ["ku-supplier"],
+    })
+    monkeypatch.setattr("src.skills.service.run_pipeline", lambda **_: raw_result)
+
+    result = run_skill_query(raw_query="分析小米集团事件的影响")
+
+    assert result["ok"] is True
+    assert result["skill_type"] == "event_impact_analysis"
+    assert result["payload"]["focus_event_cluster_id"] == "clu-new"
+    # Direct affected: ent-xiaomi, ent-partner
+    assert len(result["payload"]["directly_affected_entities"]) == 2
+    # Indirect affected: ent-supplier
+    assert len(result["payload"]["indirectly_affected_entities"]) == 1
+    assert result["payload"]["indirectly_affected_entities"][0]["entity_id"] == "ent-supplier"
+    assert result["payload"]["indirectly_affected_entities"][0]["impact_level"] == "MEDIUM"
+    # Impact path from xiaomi to supplier
+    assert len(result["payload"]["impact_paths"]) >= 1
+    assert result["payload"]["total_affected_entities"] == 3

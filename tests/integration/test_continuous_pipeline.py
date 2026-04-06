@@ -868,6 +868,177 @@ def test_run_pipeline_relationship_query_returns_formal_graph_results(tmp_path, 
     assert result["retrieval"]["graph_hit_reasons"] == {"ent_partner": ["co_involved_via:clu_1"]}
 
 
+def test_run_pipeline_event_impact_analysis_expands_from_focus_cluster_entities(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "data" / "news.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    now = datetime(2026, 4, 2, 9, 0, tzinfo=UTC)
+    entity_repo = EntityRepository(str(db_path))
+    entity_repo.save_batch(
+        [
+            Entity(
+                entity_id="ent_xiaomi",
+                entity_type="Company",
+                canonical_name="Xiaomi Group",
+                aliases=[],
+                identifiers={},
+                source_ku_ids=["ku_focus"],
+                created_at=now,
+                updated_at=now,
+            ),
+            Entity(
+                entity_id="ent_partner",
+                entity_type="Organization",
+                canonical_name="Partner Co",
+                aliases=[],
+                identifiers={},
+                source_ku_ids=["ku_focus"],
+                created_at=now,
+                updated_at=now,
+            ),
+        ]
+    )
+
+    class FakeIntentClassifier:
+        def parse(self, raw_query: str) -> StructuredQuery:
+            return StructuredQuery(
+                intent=IntentType.EVENT_IMPACT_ANALYSIS,
+                entities=["Xiaomi Group"],
+                time_range=None,
+                filters=QueryFilters(),
+                original_query=raw_query,
+            )
+
+    import src.intent
+    import src.orchestration.graph as graph_module
+
+    class FakeSearchResult:
+        def to_dict(self) -> dict[str, Any]:
+            return {
+                "knowledge_units": [
+                    {
+                        "ku_id": "ku_focus",
+                        "unit_kind": "event",
+                        "unit_type": "policy_sanction",
+                        "summary": "Xiaomi and Partner face a sanction event",
+                        "entities": [
+                            {"entity_id": "ent_xiaomi", "mention": "Xiaomi Group"},
+                            {"entity_id": "ent_partner", "mention": "Partner Co"},
+                        ],
+                        "source": {"doc_id": "doc-1", "source_name": "test-source", "url": None},
+                        "evidence": [{"text": "Focus event evidence"}],
+                        "time": {
+                            "event_time": "2026-04-02T09:00:00+00:00",
+                            "published_at": "2026-04-02T09:00:00+00:00",
+                            "extracted_at": "2026-04-02T09:05:00+00:00",
+                        },
+                        "confidence": 0.95,
+                        "tags": [],
+                        "relation_hints": [],
+                        "cluster_id": "clu_focus",
+                        "conflict_status": "none",
+                        "status": "active",
+                    }
+                ],
+                "entities": [
+                    {
+                        "entity_id": "ent_xiaomi",
+                        "entity_type": "Company",
+                        "canonical_name": "Xiaomi Group",
+                        "aliases": [],
+                        "identifiers": {},
+                        "description": None,
+                        "tags": [],
+                        "source_ku_ids": ["ku_focus"],
+                        "created_at": "2026-04-02T09:00:00+00:00",
+                        "updated_at": "2026-04-02T09:00:00+00:00",
+                    },
+                    {
+                        "entity_id": "ent_partner",
+                        "entity_type": "Organization",
+                        "canonical_name": "Partner Co",
+                        "aliases": [],
+                        "identifiers": {},
+                        "description": None,
+                        "tags": [],
+                        "source_ku_ids": ["ku_focus"],
+                        "created_at": "2026-04-02T09:00:00+00:00",
+                        "updated_at": "2026-04-02T09:00:00+00:00",
+                    },
+                ],
+                "event_clusters": [
+                    {
+                        "cluster_id": "clu_focus",
+                        "cluster_type": "policy_sanction",
+                        "title": "Focus sanction event",
+                        "summary": "Focus sanction event",
+                        "entity_ids": ["ent_xiaomi", "ent_partner"],
+                        "primary_entity_id": "ent_xiaomi",
+                        "time_anchor": "2026-04-02T09:00:00+00:00",
+                        "time_range": {
+                            "start": "2026-04-02T09:00:00+00:00",
+                            "end": "2026-04-03T09:00:00+00:00",
+                        },
+                        "member_ku_ids": ["ku_focus"],
+                        "source_doc_ids": ["doc-1"],
+                        "conflict_status": "none",
+                        "cluster_confidence": 0.95,
+                        "representative_ku_id": "ku_focus",
+                        "member_count": 1,
+                        "source_count": 1,
+                        "summary_variants": [],
+                        "event_time_variants": [],
+                        "conflict_reasons": [],
+                        "updated_at": "2026-04-03T09:00:00+00:00",
+                    }
+                ],
+                "total_count": 1,
+                "retrieval": {
+                    "retrieval_mode": "hybrid",
+                    "bm25_count": 1,
+                    "vector_count": 1,
+                    "fusion_count": 1,
+                    "applied_filters": {
+                        "entities": ["Xiaomi Group"],
+                        "resolved_entity_ids": ["ent_xiaomi"],
+                        "event_types": [],
+                        "time_range": None,
+                    },
+                    "hit_scores": {},
+                },
+            }
+
+    class FakeKnowledgeSearcher:
+        def search(self, request):
+            return FakeSearchResult()
+
+        def search_articles(self, articles, request):
+            return FakeSearchResult()
+
+    class FakeKnowledgeGraphRetriever:
+        calls: list[list[str]] = []
+
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def search(self, structured_query, *, start_entities):
+            from src.graph.knowledge_retrieval import GraphRetrievalResult
+
+            self.calls.append([entity.entity_id for entity in start_entities])
+            return GraphRetrievalResult.empty(start_entities=start_entities)
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(src.intent, "IntentClassifier", FakeIntentClassifier)
+    monkeypatch.setattr(graph_module, "IntentClassifier", FakeIntentClassifier)
+    monkeypatch.setattr(graph_module, "KnowledgeSearcher", FakeKnowledgeSearcher)
+    monkeypatch.setattr(graph_module, "KnowledgeGraphRetriever", FakeKnowledgeGraphRetriever)
+
+    run_pipeline(raw_query="Analyze Xiaomi event impact", graph_enabled=True)
+
+    assert len(FakeKnowledgeGraphRetriever.calls) == 1
+    assert sorted(FakeKnowledgeGraphRetriever.calls[0]) == ["ent_partner", "ent_xiaomi"]
+
+
 def test_run_pipeline_rejects_relationship_query_for_direct_articles(monkeypatch) -> None:
     class FakeIntentClassifier:
         def parse(self, raw_query: str) -> StructuredQuery:

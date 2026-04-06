@@ -126,8 +126,8 @@
 - [x] 将时间线生成功能改造为消费知识底座的 skill（`ENTITY_TIMELINE`）
 - [x] 支持关系扩展 skill（`RELATIONSHIP_QUERY`）
 - [x] 支持担保分析 skill（`GUARANTEE_ANALYSIS`）
-- [ ] 支持主题研究、事件影响分析 skill
-- [ ] 设计多轮任务消费层
+- [x] 支持主题研究、事件影响分析 skill（`TOPIC_RESEARCH`、`EVENT_IMPACT_ANALYSIS`）
+- [x] 设计多轮任务消费层
 - [ ] 提供 API 封装
 
 ---
@@ -450,3 +450,116 @@ Full migration is considered complete under the following acceptance conditions:
   - new intent routing
   - risk assessment contract payload generation
   - guarantee analysis edge extraction and circular-pattern detection from mainline cluster payloads
+
+---
+
+## 2026-04-06 Topic Research & Event Impact Analysis Skills Update
+
+### New Skill Types
+
+- Added `TOPIC_RESEARCH` and `EVENT_IMPACT_ANALYSIS` to `IntentType` enum
+- Added `TopicResearchPayload` and `EventImpactAnalysisPayload` models
+- Added supporting models: `TrendMilestone`, `TopicTrend`, `ImpactLevel`, `AffectedEntity`, `ImpactPath`
+
+### TOPIC_RESEARCH Skill
+
+- `_build_topic_research_payload()` aggregates topic-related events and entities
+- Trend timeline analysis by month with event type distribution
+- Key milestone identification based on importance scoring
+- Topic keyword extraction from query filters or KnowledgeUnit tags
+
+### EVENT_IMPACT_ANALYSIS Skill
+
+- `_build_event_impact_analysis_payload()` analyzes event impact on entities
+- Direct impact: entities directly involved in the focus event cluster
+- Indirect impact: entities connected through graph paths (`Entity->EventCluster->Entity`)
+- Impact path building with weight and hop count
+- Impact network visualization data generation
+
+### Intent Classifier Updates
+
+- Added `TOPIC_RESEARCH` and `EVENT_IMPACT_ANALYSIS` to SYSTEM_PROMPT
+- Added Chinese aliases: "主题研究", "趋势分析", "事件影响", "影响分析"
+- Added keyword refinement for topic and impact markers
+
+### Regression Checks
+
+- `uv run pytest` -> 107 passed
+- `uv run pyright .` -> 0 errors
+- New test file: `tests/unit/test_skill_contract_new_skills.py` (6 tests for new skills)
+
+### 2026-04-06 Follow-up Fixes
+
+- `IntentClassifier` now preserves `filters.categories` for `TOPIC_RESEARCH`, so topic keywords can carry the user's requested topic labels through the normal mainline parse path instead of depending on injected query payloads.
+- `run_pipeline()` graph enhancement now expands `EVENT_IMPACT_ANALYSIS` from all entities in the selected focus `EventCluster`, not only the originally queried seed entity, so downstream impact paths are not silently truncated for multi-party events.
+- Added regression coverage for:
+  - topic-category preservation in intent parsing
+  - focus-cluster participant expansion on the event-impact graph path
+
+---
+
+## 2026-04-06 Multi-Turn Task Consumption Layer Update
+
+### New Module: `src/session/`
+
+A new multi-turn task consumption layer has been implemented to support session-based workflows:
+
+- **`src/session/models.py`**: Core data models
+  - `SessionState`, `TaskState` enums
+  - `TaskDefinition`, `TaskResult`, `SessionContext` dataclasses
+  - `TaskChain`, `SessionConfig` configurations
+  - Helper functions: `create_session_id()`, `create_task_id()`
+
+- **`src/session/store.py`**: Session storage backends
+  - `SessionStore` protocol for storage abstraction
+  - `InMemorySessionStore` for single-instance deployments
+  - `RedisSessionStore` for distributed deployments (optional dependency)
+
+- **`src/session/executor.py`**: Task execution engine
+  - `TaskExecutor` class with async execution support
+  - Thread pool for running sync `run_skill_query()` calls
+  - Topological sort for task dependency resolution
+  - Parallel and sequential chain execution modes
+  - Context injection (variable replacement, entity injection)
+
+- **`src/session/orchestrator.py`**: Session orchestration service
+  - `SessionOrchestrator` class for session lifecycle management
+  - `create_session()`, `get_session()`, `close_session()`, `delete_session()`
+  - `execute_task()` for single task execution within a session
+  - `execute_chain()` for multi-task chain execution
+  - Automatic context tracking (entities, clusters)
+  - Variable storage for inter-task communication
+
+### Key Features
+
+1. **Session Lifecycle Management**
+   - Create, get, close, delete sessions
+   - TTL-based expiration
+   - State tracking (ACTIVE, PAUSED, COMPLETED, FAILED, EXPIRED)
+
+2. **Task Chain Execution**
+   - Dependency resolution via topological sort
+   - Sequential or parallel execution modes
+   - Stop-on-failure option
+   - Input mapping for variable passing between tasks
+
+3. **Context Preservation**
+   - Automatic entity tracking across tasks
+   - Event cluster accumulation
+   - Session-level variable storage
+   - Context size limits to prevent unbounded growth
+
+4. **Async Support**
+   - All execution methods are async
+   - Thread pool for sync-to-async conversion
+   - Compatible with FastAPI and other async frameworks
+
+### Dependencies
+
+- Added `pytest-asyncio>=0.23.0` to dev dependencies for async test support
+
+### Regression Checks
+
+- `uv run pytest` -> 138 passed (29 new session tests)
+- `uv run pyright .` -> 0 errors
+- New test file: `tests/unit/test_session.py`

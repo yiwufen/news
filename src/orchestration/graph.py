@@ -5,6 +5,7 @@ Knowledge retrieval entrypoint for `run_pipeline`.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, datetime
 from typing import Literal
 from uuid import uuid4
 
@@ -36,6 +37,98 @@ class PipelineGraphEnhancement:
     entities: list[dict]
     event_clusters: list[dict]
     errors: list[str]
+
+
+def _parse_cluster_anchor(value: object) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return datetime.combine(value, datetime.min.time())
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            try:
+                return datetime.combine(date.fromisoformat(text[:10]), datetime.min.time())
+            except ValueError:
+                return None
+    return None
+
+
+def _cluster_sort_anchor(cluster: dict[str, object]) -> datetime:
+    time_range = cluster.get("time_range")
+    if not isinstance(time_range, dict):
+        time_range = {}
+    for candidate in (
+        cluster.get("time_anchor"),
+        time_range.get("end"),
+        time_range.get("start"),
+    ):
+        parsed = _parse_cluster_anchor(candidate)
+        if parsed is not None:
+            return parsed
+    return datetime.min
+
+
+def _select_focus_cluster_for_impact(
+    clusters: list[dict[str, object]],
+    start_entity_ids: set[str],
+) -> dict[str, object] | None:
+    if not clusters:
+        return None
+
+    sorted_clusters = sorted(
+        clusters,
+        key=lambda cluster: (_cluster_sort_anchor(cluster), str(cluster.get("cluster_id", ""))),
+        reverse=True,
+    )
+    for cluster in sorted_clusters:
+        entity_ids = cluster.get("entity_ids", [])
+        if not isinstance(entity_ids, list):
+            continue
+        if any(isinstance(entity_id, str) and entity_id in start_entity_ids for entity_id in entity_ids):
+            return cluster
+    return sorted_clusters[0]
+
+
+def _resolve_graph_start_entities(
+    *,
+    structured_query: StructuredQuery,
+    result: dict[str, object],
+    entity_repo: EntityRepository,
+) -> list:
+    start_entities = entity_repo.find_by_names(structured_query.entities)
+    if not start_entities:
+        return []
+    if structured_query.intent != IntentType.EVENT_IMPACT_ANALYSIS:
+        return start_entities
+
+    raw_clusters = result.get("event_clusters", [])
+    if not isinstance(raw_clusters, list):
+        return start_entities
+
+    focus_cluster = _select_focus_cluster_for_impact(
+        [cluster for cluster in raw_clusters if isinstance(cluster, dict)],
+        {entity.entity_id for entity in start_entities},
+    )
+    if focus_cluster is None:
+        return start_entities
+
+    raw_entity_ids = focus_cluster.get("entity_ids", [])
+    if not isinstance(raw_entity_ids, list):
+        return start_entities
+    focus_entity_ids = [
+        entity_id
+        for entity_id in raw_entity_ids
+        if isinstance(entity_id, str) and entity_id
+    ]
+    focus_entities = entity_repo.get_by_ids(focus_entity_ids)
+    return focus_entities or start_entities
 
 
 def _build_timeline_events(result: dict) -> list[dict]:
@@ -74,6 +167,7 @@ def _merge_by_id(
 def _enhance_with_graph(
     *,
     structured_query: StructuredQuery,
+    result: dict[str, object],
     source: str,
     db_path: str = "data/news.db",
 ) -> PipelineGraphEnhancement:
@@ -86,7 +180,11 @@ def _enhance_with_graph(
         )
 
     entity_repo = EntityRepository(db_path)
-    start_entities = entity_repo.find_by_names(structured_query.entities)
+    start_entities = _resolve_graph_start_entities(
+        structured_query=structured_query,
+        result=result,
+        entity_repo=entity_repo,
+    )
     if not start_entities:
         return PipelineGraphEnhancement(
             graph_result=GraphRetrievalResult.empty(start_entities=[]),
@@ -228,17 +326,19 @@ def run_pipeline(
     else:
         result = searcher.search(request)
         source = "knowledge_base"
+    result_dict = result.to_dict()
 
     graph_enhancement: PipelineGraphEnhancement | None = None
     if graph_enabled:
         graph_enhancement = _enhance_with_graph(
             structured_query=structured_query,
+            result=result_dict,
             source=source,
         )
 
     return _build_pipeline_output(
         structured_query=structured_query,
-        result=result.to_dict(),
+        result=result_dict,
         source=source,
         graph_enabled=graph_enabled,
         graph_enhancement=graph_enhancement,

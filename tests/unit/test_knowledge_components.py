@@ -948,6 +948,24 @@ def test_intent_classifier_routes_new_skill_intents() -> None:
     assert guarantee_parsed.intent is IntentType.GUARANTEE_ANALYSIS
 
 
+def test_intent_classifier_preserves_topic_categories() -> None:
+    classifier = IntentClassifier()
+    classifier._call_llm = lambda query: {  # type: ignore[method-assign]
+        "intent": "TOPIC_RESEARCH",
+        "entities": [],
+        "time_expression": "",
+        "filters": {
+            "categories": ["新能源", "光伏"],
+        },
+        "confidence": 0.9,
+    }
+
+    parsed = classifier.parse("分析新能源行业的发展趋势")
+
+    assert parsed.intent is IntentType.TOPIC_RESEARCH
+    assert parsed.filters.categories == ["新能源", "光伏"]
+
+
 def test_knowledge_unit_repository_syncs_fts_rows(tmp_path) -> None:
     db_path = tmp_path / "news.db"
     repo = KnowledgeUnitRepository(str(db_path))
