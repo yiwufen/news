@@ -266,16 +266,36 @@ class EntityResolver:
         units: list[KnowledgeUnit],
         persist: bool = True,
     ) -> tuple[list[KnowledgeUnit], list[Entity]]:
+        entities_cache = {e.entity_id: e for e in self.repository.get_all()}
+        return self.resolve_units_with_cache(units, entities_cache, persist)
+
+    def resolve_units_with_cache(
+        self,
+        units: list[KnowledgeUnit],
+        entities_cache: dict[str, Entity],
+        persist: bool = True,
+    ) -> tuple[list[KnowledgeUnit], list[Entity]]:
+        """
+        Resolve entities using an external cache.
+
+        Used for batch processing where multiple documents share entity context,
+        avoiding redundant database loads between documents.
+        """
         now = datetime.now(UTC)
-        entities = {entity.entity_id: entity for entity in self.repository.get_all()}
         touched_entities: dict[str, Entity] = {}
 
         for unit in units:
             for entity_ref in unit.entities:
-                matched = self._find_match(entity_ref.mention, entity_ref.identifiers, entities.values())
+                matched = self._find_match(
+                    entity_ref.mention,
+                    entity_ref.identifiers,
+                    entities_cache.values(),
+                )
                 if matched is None:
                     matched = Entity(
-                        entity_type=_resolve_entity_type(entity_ref.entity_type, entity_ref.mention),
+                        entity_type=_resolve_entity_type(
+                            entity_ref.entity_type, entity_ref.mention
+                        ),
                         canonical_name=entity_ref.mention,
                         aliases=[entity_ref.mention],
                         identifiers=dict(entity_ref.identifiers),
@@ -283,7 +303,7 @@ class EntityResolver:
                         created_at=now,
                         updated_at=now,
                     )
-                    entities[matched.entity_id] = matched
+                    entities_cache[matched.entity_id] = matched
                 else:
                     if entity_ref.mention not in matched.aliases:
                         matched.aliases.append(entity_ref.mention)

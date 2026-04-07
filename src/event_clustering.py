@@ -487,30 +487,43 @@ class EventClusterer:
         units: list[KnowledgeUnit],
         persist: bool = True,
     ) -> tuple[list[KnowledgeUnit], list[EventCluster]]:
-        working_clusters = {
-            cluster.cluster_id: cluster
-            for cluster in self.repository.get_all()
-        }
-        cluster_members: dict[str, list[KnowledgeUnit]] = {}
+        clusters_cache = {c.cluster_id: c for c in self.repository.get_all()}
+        return self.assign_clusters_with_cache(units, clusters_cache, persist=persist)
+
+    def assign_clusters_with_cache(
+        self,
+        units: list[KnowledgeUnit],
+        clusters_cache: dict[str, EventCluster],
+        cluster_members_cache: dict[str, list[KnowledgeUnit]] | None = None,
+        persist: bool = True,
+    ) -> tuple[list[KnowledgeUnit], list[EventCluster]]:
+        """
+        Assign clusters using an external cache.
+
+        Used for batch processing where multiple documents share cluster context,
+        avoiding redundant database loads between documents.
+        """
+        if cluster_members_cache is None:
+            cluster_members_cache = {}
         touched_clusters: dict[str, EventCluster] = {}
 
         for unit in units:
-            matched = self._find_cluster(unit, working_clusters.values())
+            matched = self._find_cluster(unit, clusters_cache.values())
             if matched is None:
                 matched_members = [unit]
                 updated_cluster = build_event_cluster_snapshot(matched_members)
             else:
                 matched_members = self._load_cluster_members(
                     matched,
-                    cluster_members,
+                    cluster_members_cache,
                 )
                 self._upsert_member(matched_members, unit)
                 updated_cluster = build_event_cluster_snapshot(
                     matched_members,
                     cluster_id=matched.cluster_id,
                 )
-            cluster_members[updated_cluster.cluster_id] = matched_members
-            working_clusters[updated_cluster.cluster_id] = updated_cluster
+            cluster_members_cache[updated_cluster.cluster_id] = matched_members
+            clusters_cache[updated_cluster.cluster_id] = updated_cluster
             unit.cluster_id = updated_cluster.cluster_id
             touched_clusters[updated_cluster.cluster_id] = updated_cluster
 

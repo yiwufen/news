@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Literal
 
-from src.entities import EntityResolver, EntityRepository
-from src.event_clustering import EventClusterRepository, EventClusterer
+from src.entities import Entity, EntityRepository, EntityResolver
+from src.event_clustering import EventCluster, EventClusterRepository, EventClusterer
 from src.knowledge_base import (
     KnowledgeProcessingLogRepository,
     KnowledgeUnit,
     KnowledgeUnitRepository,
+    RawDocument,
     RawDocumentRepository,
 )
 from src.knowledge_extractor import KnowledgeExtractor
@@ -18,6 +20,44 @@ from src.knowledge_graph_sync import KnowledgeGraphSync
 from src.retrieval.indexing import KnowledgeIndexBuilder
 
 logger = logging.getLogger(__name__)
+
+ProcessingStage = Literal["extract", "resolve", "cluster", "save", "index", "complete"]
+
+
+@dataclass
+class DocumentProcessingResult:
+    """单个文档的处理结果。"""
+
+    doc_id: str
+    status: Literal["success", "partial", "failed"]
+    failed_stage: ProcessingStage | None
+    error_message: str | None
+    units: list[KnowledgeUnit] = field(default_factory=list)
+    entities: list[Entity] = field(default_factory=list)
+    clusters: list[EventCluster] = field(default_factory=list)
+
+    @property
+    def knowledge_units_count(self) -> int:
+        return len(self.units)
+
+    @property
+    def entities_count(self) -> int:
+        return len(self.entities)
+
+    @property
+    def clusters_count(self) -> int:
+        return len(self.clusters)
+
+
+@dataclass
+class BatchProcessingContext:
+    """Batch 级别的处理上下文，缓存跨文档共享的数据。"""
+
+    entities_cache: dict[str, Entity] = field(default_factory=dict)
+    clusters_cache: dict[str, EventCluster] = field(default_factory=dict)
+    cluster_members_cache: dict[str, list[KnowledgeUnit]] = field(default_factory=dict)
+    results: list[DocumentProcessingResult] = field(default_factory=list)
+
 
 @dataclass
 class ContinuousRunResult:
@@ -74,7 +114,7 @@ class ContinuousPipeline:
         dry_run: bool = False,
     ) -> ContinuousRunResult:
         logger.info(f"Starting pipeline run (time_window={time_window}, dry_run={dry_run})")
-        errors: list[str] = []
+        all_errors: list[str] = []
         all_units: list[KnowledgeUnit] = []
         total_nodes = 0
         total_edges = 0
@@ -89,101 +129,73 @@ class ContinuousPipeline:
         ):
             batch_count += 1
             logger.debug(f"Processing batch {batch_count} with {len(batch)} documents")
-            batch_units: list[KnowledgeUnit] = []
-            batch_log_records: list[dict[str, object]] = []
-            extracted_by_doc: dict[str, list[KnowledgeUnit]] = {}
 
+            # Batch 初始化：加载全量缓存
+            context = BatchProcessingContext(
+                entities_cache={
+                    entity.entity_id: entity for entity in self.entity_repo.get_all()
+                },
+                clusters_cache={
+                    cluster.cluster_id: cluster for cluster in self.cluster_repo.get_all()
+                },
+            )
+
+            # 文档级独立处理
             for document in batch:
-                try:
-                    units = self.extractor.extract(document)
-                    extracted_by_doc[document.doc_id] = units
-                    batch_units.extend(units)
-                    all_units.extend(units)
-                except Exception as exc:
-                    error_msg = f"[{document.doc_id}] KnowledgeUnit extraction failed: {exc}"
-                    errors.append(error_msg)
-                    logger.error(error_msg)
-                    batch_log_records.append(
-                        {
-                            "doc_id": document.doc_id,
-                            "status": "failed",
-                            "error_message": str(exc),
-                        }
-                    )
-
-            if not batch_units:
-                if not dry_run and batch_log_records:
-                    self.log_repo.log_batch(batch_log_records)
-                logger.debug(f"Batch {batch_count}: No units extracted, skipping")
-                continue
-
-            logger.debug(f"Batch {batch_count}: Resolving {len(batch_units)} units")
-            resolved_units, resolved_entities = self.entity_resolver.resolve_units(
-                batch_units,
-                persist=not dry_run,
-            )
-            clustered_units, clusters = self.clusterer.assign_clusters(
-                resolved_units,
-                persist=not dry_run,
-            )
-
-            indexing_errors: list[str] = []
-            post_processing_errors: list[str] = []
-            if not dry_run:
-                self.knowledge_units.save_batch(clustered_units)
-                try:
-                    self.index_builder.build_for_units(clustered_units)
-                except Exception as exc:
-                    indexing_errors.append(str(exc))
-                    errors.append(f"[index] {exc}")
-
-                if self.graph_enabled and self.graph_sync:
-                    sync_result = self.graph_sync.sync(resolved_entities, clusters)
-                    total_nodes += sync_result["entities_created"] + sync_result["clusters_created"]
-                    total_edges += sync_result["edges_created"]
-                    errors.extend(sync_result["errors"])
-                    if sync_result["errors"]:
-                        post_processing_errors.extend(sync_result["errors"])
-
-            total_entities_saved += len(resolved_entities)
-            total_clusters_saved += len(clusters)
-
-            entities_by_doc: dict[str, set[str]] = {doc.doc_id: set() for doc in batch}
-            clusters_by_doc: dict[str, set[str]] = {doc.doc_id: set() for doc in batch}
-            for unit in clustered_units:
-                entities_by_doc.setdefault(unit.source.doc_id, set()).update(
-                    entity.entity_id for entity in unit.entities if entity.entity_id
+                result = self._process_single_document(
+                    document=document,
+                    context=context,
+                    dry_run=dry_run,
                 )
-                if unit.cluster_id:
-                    clusters_by_doc.setdefault(unit.source.doc_id, set()).add(unit.cluster_id)
+                context.results.append(result)
 
-            for document in batch:
-                if any(record["doc_id"] == document.doc_id for record in batch_log_records):
-                    continue
-                doc_units = extracted_by_doc.get(document.doc_id, [])
-                blocking_errors = list(post_processing_errors)
-                error_details = list(blocking_errors)
-                error_details.extend(error for error in indexing_errors if error not in error_details)
-                error_message = "; ".join(error_details) if error_details else None
-                status = "failed" if blocking_errors else "success"
-                batch_log_records.append(
+                # 收集成功的产出
+                if result.status in ("success", "partial"):
+                    all_units.extend(result.units)
+                    total_entities_saved += result.entities_count
+                    total_clusters_saved += result.clusters_count
+
+                # 收集错误
+                if result.error_message:
+                    all_errors.append(f"[{document.doc_id}] {result.error_message}")
+
+            # 后处理：图同步
+            if not dry_run and self.graph_enabled and self.graph_sync:
+                all_entities = [
+                    entity for r in context.results for entity in r.entities
+                ]
+                all_clusters = [
+                    cluster for r in context.results for cluster in r.clusters
+                ]
+                if all_entities or all_clusters:
+                    try:
+                        sync_result = self.graph_sync.sync(all_entities, all_clusters)
+                        total_nodes += sync_result["entities_created"] + sync_result["clusters_created"]
+                        total_edges += sync_result["edges_created"]
+                        all_errors.extend(sync_result["errors"])
+                    except Exception as exc:
+                        all_errors.append(f"[graph_sync] {exc}")
+                        logger.error(f"Graph sync failed: {exc}")
+
+            # 记录日志
+            if not dry_run:
+                log_records = [
                     {
-                        "doc_id": document.doc_id,
-                        "status": status,
-                        "knowledge_units_count": len(doc_units),
-                        "entities_count": len(entities_by_doc.get(document.doc_id, set())),
-                        "clusters_count": len(clusters_by_doc.get(document.doc_id, set())),
-                        "error_message": error_message,
+                        "doc_id": r.doc_id,
+                        "status": r.status,
+                        "knowledge_units_count": r.knowledge_units_count,
+                        "entities_count": r.entities_count,
+                        "clusters_count": r.clusters_count,
+                        "error_message": r.error_message,
                     }
-                )
-
-            if not dry_run:
-                self.log_repo.log_batch(batch_log_records)
+                    for r in context.results
+                ]
+                self.log_repo.log_batch(log_records)
 
         result = ContinuousRunResult(
             nodes_created=total_nodes,
             edges_created=total_edges,
-            errors=errors,
+            errors=all_errors,
             knowledge_units_extracted=len(all_units),
             knowledge_units_saved=len(all_units) if not dry_run else 0,
             entities_saved=total_entities_saved if not dry_run else 0,
@@ -193,8 +205,109 @@ class ContinuousPipeline:
             f"Pipeline run completed: {result.knowledge_units_extracted} units extracted, "
             f"{result.nodes_created} nodes, {result.edges_created} edges"
         )
-        if errors:
-            logger.warning(f"Pipeline completed with {len(errors)} errors")
+        if all_errors:
+            logger.warning(f"Pipeline completed with {len(all_errors)} errors")
+        return result
+
+    def _process_single_document(
+        self,
+        document: RawDocument,
+        context: BatchProcessingContext,
+        dry_run: bool,
+    ) -> DocumentProcessingResult:
+        """
+        处理单个文档，每个阶段独立 try-except。
+
+        使用 context 中的缓存进行实体解析和集群分配。
+        """
+        result = DocumentProcessingResult(
+            doc_id=document.doc_id,
+            status="failed",
+            failed_stage=None,
+            error_message=None,
+        )
+
+        # Stage 1: Extract
+        try:
+            units = self.extractor.extract(document)
+            result.units = units
+        except Exception as exc:
+            result.failed_stage = "extract"
+            result.error_message = f"extract failed: {exc}"
+            logger.error(f"[{document.doc_id}] Extract failed: {exc}")
+            return result
+
+        if not units:
+            result.status = "success"
+            result.failed_stage = "complete"
+            return result
+
+        # Stage 2: Resolve Entities
+        try:
+            resolved_units, resolved_entities = self.entity_resolver.resolve_units_with_cache(
+                units=units,
+                entities_cache=context.entities_cache,
+                persist=not dry_run,
+            )
+            result.units = resolved_units
+            result.entities = resolved_entities
+
+            # 更新缓存，使后续文档可见新实体
+            for entity in resolved_entities:
+                context.entities_cache[entity.entity_id] = entity
+        except Exception as exc:
+            result.failed_stage = "resolve"
+            result.error_message = f"resolve failed: {exc}"
+            logger.error(f"[{document.doc_id}] Resolve failed: {exc}")
+            return result
+
+        # Stage 3: Assign Clusters
+        try:
+            clustered_units, clusters = self.clusterer.assign_clusters_with_cache(
+                units=resolved_units,
+                clusters_cache=context.clusters_cache,
+                cluster_members_cache=context.cluster_members_cache,
+                persist=not dry_run,
+            )
+            result.units = clustered_units
+            result.clusters = clusters
+
+            # 更新缓存
+            for cluster in clusters:
+                context.clusters_cache[cluster.cluster_id] = cluster
+        except Exception as exc:
+            result.failed_stage = "cluster"
+            result.error_message = f"cluster failed: {exc}"
+            logger.error(f"[{document.doc_id}] Cluster failed: {exc}")
+            return result
+
+        # Stage 4: Save Units
+        if not dry_run:
+            try:
+                self.knowledge_units.save_batch(clustered_units)
+            except Exception as exc:
+                result.failed_stage = "save"
+                result.error_message = f"save failed: {exc}"
+                logger.error(f"[{document.doc_id}] Save failed: {exc}")
+                return result
+
+        # Stage 5: Index
+        indexing_error = None
+        if not dry_run:
+            try:
+                self.index_builder.build_for_units(clustered_units)
+            except Exception as exc:
+                indexing_error = f"index failed: {exc}"
+                logger.error(f"[{document.doc_id}] Index failed: {exc}")
+
+        # 确定最终状态
+        if indexing_error:
+            result.status = "partial"
+            result.error_message = indexing_error
+        else:
+            result.status = "success"
+            result.failed_stage = "complete"
+
         return result
 
     def run_once(self, limit: int = 10) -> ContinuousRunResult:
