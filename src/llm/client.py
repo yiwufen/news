@@ -5,27 +5,65 @@ LLM 客户端工厂。
 from __future__ import annotations
 
 import json
-import os
 import re
 from typing import Any
 
 from anthropic import Anthropic
 
-
-DEFAULT_MAX_TOKENS = 4096
-DEFAULT_MODEL = "glm-5"
+from src.llm.config import get_llm_config
 
 
 def create_llm_client() -> tuple[Anthropic, str]:
-    """创建统一的 LLM 客户端。"""
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
+    """
+    创建统一的 LLM 客户端（向后兼容接口）。
+
+    推荐使用 create_online_llm_client() 或 create_offline_llm_client()
+    """
+    config = get_llm_config()
+    return _create_client(config.default_model)
+
+
+def create_online_llm_client() -> tuple[Anthropic, str]:
+    """
+    创建在线处理模块使用的 LLM 客户端。
+
+    用于：意图解析等实时服务
+    """
+    config = get_llm_config()
+    model = config.get_online_model()
+    return _create_client(model)
+
+
+def create_offline_llm_client() -> tuple[Anthropic, str]:
+    """
+    创建离线处理模块使用的 LLM 客户端。
+
+    用于：新闻生成、知识抽取等批处理任务
+    """
+    config = get_llm_config()
+    model = config.get_offline_model()
+    return _create_client(model)
+
+
+def _create_client(model: str) -> tuple[Anthropic, str]:
+    """内部：创建客户端实例。"""
+    config = get_llm_config()
+
+    if not config.api_key:
         raise ValueError("ANTHROPIC_API_KEY 环境变量未设置")
 
-    base_url = os.environ.get("ANTHROPIC_API_BASE_URL")
-    client = Anthropic(api_key=api_key, base_url=base_url)
-    model = os.environ.get("ANTHROPIC_MODEL") or DEFAULT_MODEL
+    client = Anthropic(api_key=config.api_key, base_url=config.base_url)
     return client, model
+
+
+def get_online_max_tokens() -> int:
+    """获取在线处理的 max_tokens 配置。"""
+    return get_llm_config().get_online_max_tokens()
+
+
+def get_offline_max_tokens() -> int:
+    """获取离线处理的 max_tokens 配置。"""
+    return get_llm_config().get_offline_max_tokens()
 
 
 def extract_text_from_response(response: Any) -> str:

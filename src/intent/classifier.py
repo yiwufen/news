@@ -11,9 +11,9 @@ from dateutil.relativedelta import relativedelta
 from src.entities import EntityRepository, entity_matches_query_name, entity_name_in_text
 from src.intent.models import IntentType, QueryFilters, StructuredQuery, TimeRange
 from src.llm import (
-    DEFAULT_MAX_TOKENS,
-    create_llm_client,
+    create_online_llm_client,
     extract_text_from_response,
+    get_online_max_tokens,
     parse_json_from_text,
 )
 
@@ -52,7 +52,7 @@ Keep entity names and time expressions faithful to the original query."""
     def __init__(self, entity_repository: EntityRepository | None = None):
         self.client = None
         self.model = None
-        self.max_tokens = min(DEFAULT_MAX_TOKENS, 1024)
+        self.max_tokens = min(get_online_max_tokens(), 1024)
         self.entity_repository = entity_repository or EntityRepository()
 
     def parse(self, raw_query: str) -> StructuredQuery:
@@ -95,7 +95,7 @@ Keep entity names and time expressions faithful to the original query."""
 
     def _get_client(self):
         if self.client is None or self.model is None:
-            self.client, self.model = create_llm_client()
+            self.client, self.model = create_online_llm_client()
         return self.client, self.model
 
     def _call_llm(self, query: str) -> dict[str, Any]:

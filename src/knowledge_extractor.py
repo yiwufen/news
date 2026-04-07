@@ -5,14 +5,18 @@ KnowledgeUnit extraction service.
 from __future__ import annotations
 
 import json
+import logging
+import time
 from datetime import UTC, datetime
 from typing import Any
 
 from anthropic.types import Message, ToolUseBlock
 
 from src.knowledge_base import KnowledgeUnit, RawDocument
-from src.llm import DEFAULT_MAX_TOKENS, create_llm_client
+from src.llm import create_offline_llm_client, get_offline_max_tokens
 from src.time_normalization import TimeNormalizationContext, TimeNormalizer
+
+logger = logging.getLogger(__name__)
 
 
 SYSTEM_PROMPT = """你是一名金融知识工程助手，负责从新闻文档中抽取可溯源的 statement-level KnowledgeUnit。
@@ -60,14 +64,16 @@ def build_extraction_prompt(doc: RawDocument) -> str:
 
 
 class KnowledgeExtractor:
-    """KnowledgeUnit extractor with fail-fast LLM-only behavior."""
+    """KnowledgeUnit extractor with retry support for LLM format instability."""
 
-    def __init__(self, enable_llm: bool | None = None):
+    def __init__(self, enable_llm: bool | None = None, max_retries: int = 2):
         self.enable_llm = enable_llm if enable_llm is not None else True
+        self.max_retries = max_retries
         self.client = None
         self.model = None
-        self.max_tokens = DEFAULT_MAX_TOKENS
+        self.max_tokens = get_offline_max_tokens()
         self._time_normalizer = TimeNormalizer()  # Cache instance
+        logger.debug(f"KnowledgeExtractor initialized (enable_llm={self.enable_llm}, max_retries={self.max_retries})")
 
     def extract(self, document: RawDocument) -> list[KnowledgeUnit]:
         """Extract KnowledgeUnits for one document."""
@@ -76,9 +82,13 @@ class KnowledgeExtractor:
                 "KnowledgeExtractor is configured without LLM extraction; heuristic extraction has been removed"
             )
 
+        logger.debug(f"Extracting KnowledgeUnits from document: {document.doc_id}")
         try:
-            return self._extract_with_llm(document)
+            units = self._extract_with_llm(document)
+            logger.info(f"Extracted {len(units)} KnowledgeUnits from {document.doc_id}")
+            return units
         except Exception as exc:
+            logger.error(f"Failed to extract from {document.doc_id}: {exc}")
             raise RuntimeError(
                 f"KnowledgeUnit extraction failed for {document.doc_id}: {exc}"
             ) from exc
@@ -89,20 +99,39 @@ class KnowledgeExtractor:
 
     def _get_client(self) -> tuple[Any, str]:
         if self.client is None or self.model is None:
-            self.client, self.model = create_llm_client()
+            self.client, self.model = create_offline_llm_client()
+            logger.debug(f"LLM client initialized with model: {self.model}")
         return self.client, self.model
 
     def _extract_with_llm(self, document: RawDocument) -> list[KnowledgeUnit]:
         client, model = self._get_client()
-        response: Message = client.messages.create(
-            model=model,
-            max_tokens=self.max_tokens,
-            system=SYSTEM_PROMPT,
-            tools=[EXTRACTION_TOOL_SCHEMA],  # type: ignore[arg-type]
-            tool_choice={"type": "tool", "name": "extract_knowledge_units"},
-            messages=[{"role": "user", "content": build_extraction_prompt(document)}],
-        )
+        last_error: Exception | None = None
 
+        for attempt in range(self.max_retries + 1):
+            try:
+                response: Message = client.messages.create(
+                    model=model,
+                    max_tokens=self.max_tokens,
+                    system=SYSTEM_PROMPT,
+                    tools=[EXTRACTION_TOOL_SCHEMA],  # type: ignore[arg-type]
+                    tool_choice={"type": "tool", "name": "extract_knowledge_units"},
+                    messages=[{"role": "user", "content": build_extraction_prompt(document)}],
+                )
+                return self._parse_llm_response(response, document)
+            except ValueError as e:
+                last_error = e
+                if attempt < self.max_retries:
+                    logger.warning(
+                        f"LLM format error for {document.doc_id} (attempt {attempt + 1}/{self.max_retries + 1}): {e}"
+                    )
+                    time.sleep(0.5 * (attempt + 1))  # 递增延迟
+                else:
+                    raise
+
+        raise last_error or ValueError("LLM extraction failed")
+
+    def _parse_llm_response(self, response: Message, document: RawDocument) -> list[KnowledgeUnit]:
+        """Parse LLM response into KnowledgeUnit list."""
         for block in response.content:
             if isinstance(block, ToolUseBlock) and block.name == "extract_knowledge_units":
                 payload = block.input
@@ -110,9 +139,14 @@ class KnowledgeExtractor:
                     payload = json.loads(payload)
                 if not isinstance(payload, dict):
                     raise ValueError("extract_knowledge_units returned a non-object payload")
-                units_payload = payload.get("knowledge_units", [])
+                units_payload = payload.get("knowledge_units")
+                # 容错处理：None 或非列表类型触发重试
+                if units_payload is None:
+                    raise ValueError("LLM returned null knowledge_units")
                 if not isinstance(units_payload, list):
-                    raise ValueError("extract_knowledge_units.knowledge_units must be a list")
+                    raise ValueError(
+                        f"LLM returned non-list knowledge_units (type={type(units_payload).__name__})"
+                    )
                 context = self._build_time_normalization_context(document)
                 normalized_units_payload = [
                     self._normalize_unit_payload_time(unit, context)

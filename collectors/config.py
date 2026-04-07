@@ -99,7 +99,5 @@ GENERATION_CONFIG = {
     "date_range": ("2026-01-01", "2026-03-31"),
     "batch_size": 10,
     "retry_attempts": 3,
-    "model": "claude-sonnet-4-20250514",
-    "max_tokens": 2000,
     "temperature": 0.7,
 }

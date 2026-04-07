@@ -5,7 +5,7 @@
 
 import argparse
 import json
-import os
+import logging
 import random
 import re
 import sys
@@ -24,9 +24,20 @@ from config import (
     NEWS_SOURCES, EVENT_TYPE_WEIGHTS, EventType, GENERATION_CONFIG
 )
 from database import Database
+from src.llm import create_offline_llm_client, get_offline_max_tokens
 
-import anthropic
 from anthropic.types import TextBlock
+
+# 延迟初始化的日志器
+_logger: logging.Logger | None = None
+
+
+def _get_logger() -> logging.Logger:
+    """获取日志器（延迟初始化）。"""
+    global _logger
+    if _logger is None:
+        _logger = logging.getLogger(__name__)
+    return _logger
 
 # JSON 代码块提取正则
 JSON_BLOCK_RE = re.compile(r'```(?:json)?\s*([\s\S]*?)\s*```', re.IGNORECASE)
@@ -52,17 +63,9 @@ class NewsGenerator:
         self.article_counter = self.db.get_article_count() + 1
 
     def _init_llm_client(self):
-        """初始化 LLM 客户端"""
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise ValueError("ANTHROPIC_API_KEY 环境变量未设置")
-
-        self.client = anthropic.Anthropic(
-            api_key=api_key,
-            base_url=os.environ.get("ANTHROPIC_API_BASE_URL")
-        )
-        self.model = os.environ.get("ANTHROPIC_MODEL") or GENERATION_CONFIG["model"]
-        self.max_tokens = GENERATION_CONFIG["max_tokens"]
+        """初始化 LLM 客户端（使用离线处理配置）。"""
+        self.client, self.model = create_offline_llm_client()
+        self.max_tokens = get_offline_max_tokens()
         self.temperature = GENERATION_CONFIG["temperature"]
 
     def generate_entities(self, event_type: EventType) -> dict[str, str]:
@@ -159,11 +162,11 @@ class NewsGenerator:
                 if isinstance(block, TextBlock):
                     return self._parse_response(block.text)
 
-            print("生成失败: 未找到文本内容")
+            _get_logger().warning("生成失败: 未找到文本内容")
             return None
 
         except Exception as e:
-            print(f"生成失败: {e}")
+            _get_logger().error(f"生成失败: {e}")
             return None
 
     def _parse_response(self, content: str) -> GeneratedArticle | None:
@@ -178,7 +181,7 @@ class NewsGenerator:
                 raw_tags=tuple(data.get("raw_tags", []))
             )
         except Exception as e:
-            print(f"解析失败: {e}")
+            _get_logger().error(f"解析失败: {e}")
             return None
 
     def generate_time_slots(self, count: int) -> list[dict]:
@@ -212,7 +215,7 @@ class NewsGenerator:
         time_slots = self.generate_time_slots(count)
 
         for i, slot in enumerate(time_slots):
-            print(f"正在生成第 {i+1}/{count} 篇...")
+            _get_logger().info(f"正在生成第 {i+1}/{count} 篇...")
 
             event_type = self.select_event_type()
             entities = self.generate_entities(event_type)
@@ -238,36 +241,35 @@ class NewsGenerator:
                 })
                 self.article_counter += 1
             else:
-                print("  跳过: 生成失败")
+                _get_logger().warning("跳过: 生成失败")
 
         return articles
 
     def run(self, total_count: int = 80, batch_size: int = 10):
         """运行生成器"""
-        print(f"=== 财经情报模拟数据生成器 ===")
-        print(f"目标数量: {total_count}")
-        print(f"批次大小: {batch_size}")
-        print(f"时间范围: {GENERATION_CONFIG['date_range']}\n")
+        log = _get_logger()
+        log.info(f"=== 财经情报模拟数据生成器 ===")
+        log.info(f"目标数量: {total_count}, 批次大小: {batch_size}")
+        log.info(f"时间范围: {GENERATION_CONFIG['date_range']}")
 
         all_articles = []
         batches = (total_count + batch_size - 1) // batch_size
 
         for batch_num in range(batches):
             batch_count = min(batch_size, total_count - batch_num * batch_size)
-            print(f"\n--- 批次 {batch_num + 1}/{batches} ---")
+            log.info(f"--- 批次 {batch_num + 1}/{batches} ---")
 
             articles = self.generate_batch(count=batch_count)
             if articles:
                 inserted = self.db.insert_articles_batch(articles)
-                print(f"已插入 {inserted} 条记录")
+                log.info(f"已插入 {inserted} 条记录")
                 all_articles.extend(articles)
 
         stats = self.db.get_statistics()
-        print(f"\n=== 生成完成 ===")
-        print(f"总文章数: {stats['total_articles']}")
-        print("\n按类别分布:")
+        log.info(f"=== 生成完成 ===")
+        log.info(f"总文章数: {stats['total_articles']}")
         for cat, cnt in stats['by_category'].items():
-            print(f"  {cat}: {cnt}")
+            log.info(f"  {cat}: {cnt}")
 
         return all_articles
 
@@ -279,25 +281,29 @@ def main():
     parser.add_argument("--db", type=str, default="data/news.db", help="数据库路径")
     parser.add_argument("--stats", action="store_true", help="仅显示统计信息")
     parser.add_argument("--clear", action="store_true", help="清空数据库")
+    parser.add_argument("--verbose", "-v", action="store_true", help="显示详细日志")
     args = parser.parse_args()
+
+    # 初始化日志
+    from src.utils.logging import setup_logging
+    setup_logging(level=logging.DEBUG if args.verbose else logging.INFO)
+    log = _get_logger()
 
     generator = NewsGenerator(db_path=args.db)
 
     if args.stats:
         stats = generator.db.get_statistics()
-        print(f"总文章数: {stats['total_articles']}")
-        print(f"时间范围: {stats['time_range']['start']} ~ {stats['time_range']['end']}")
-        print("\n按类别分布:")
+        log.info(f"总文章数: {stats['total_articles']}")
+        log.info(f"时间范围: {stats['time_range']['start']} ~ {stats['time_range']['end']}")
         for cat, cnt in stats['by_category'].items():
-            print(f"  {cat}: {cnt}")
-        print("\n按来源分布:")
+            log.info(f"  {cat}: {cnt}")
         for source, cnt in stats['by_source'].items():
-            print(f"  {source}: {cnt}")
+            log.info(f"  {source}: {cnt}")
         return
 
     if args.clear:
         generator.db.clear_all()
-        print("数据库已清空")
+        log.info("数据库已清空")
         return
 
     generator.run(total_count=args.count, batch_size=args.batch_size)

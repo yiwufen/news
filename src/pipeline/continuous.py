@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from src.entities import EntityResolver, EntityRepository
@@ -15,6 +16,8 @@ from src.knowledge_base import (
 from src.knowledge_extractor import KnowledgeExtractor
 from src.knowledge_graph_sync import KnowledgeGraphSync
 from src.retrieval.indexing import KnowledgeIndexBuilder
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class ContinuousRunResult:
@@ -63,24 +66,29 @@ class ContinuousPipeline:
             self.knowledge_units,
             self.entity_repo,
         )
+        logger.info(f"ContinuousPipeline initialized (batch_size={batch_size}, graph_enabled={graph_enabled}, incremental={incremental})")
 
     def run(
         self,
         time_window: str | None = None,
         dry_run: bool = False,
     ) -> ContinuousRunResult:
+        logger.info(f"Starting pipeline run (time_window={time_window}, dry_run={dry_run})")
         errors: list[str] = []
         all_units: list[KnowledgeUnit] = []
         total_nodes = 0
         total_edges = 0
         total_entities_saved = 0
         total_clusters_saved = 0
+        batch_count = 0
 
         for batch in self.raw_documents.iter_documents(
             batch_size=self.batch_size,
             time_window=time_window,
             incremental=self.incremental,
         ):
+            batch_count += 1
+            logger.debug(f"Processing batch {batch_count} with {len(batch)} documents")
             batch_units: list[KnowledgeUnit] = []
             batch_log_records: list[dict[str, object]] = []
             extracted_by_doc: dict[str, list[KnowledgeUnit]] = {}
@@ -92,7 +100,9 @@ class ContinuousPipeline:
                     batch_units.extend(units)
                     all_units.extend(units)
                 except Exception as exc:
-                    errors.append(f"[{document.doc_id}] KnowledgeUnit extraction failed: {exc}")
+                    error_msg = f"[{document.doc_id}] KnowledgeUnit extraction failed: {exc}"
+                    errors.append(error_msg)
+                    logger.error(error_msg)
                     batch_log_records.append(
                         {
                             "doc_id": document.doc_id,
@@ -104,8 +114,10 @@ class ContinuousPipeline:
             if not batch_units:
                 if not dry_run and batch_log_records:
                     self.log_repo.log_batch(batch_log_records)
+                logger.debug(f"Batch {batch_count}: No units extracted, skipping")
                 continue
 
+            logger.debug(f"Batch {batch_count}: Resolving {len(batch_units)} units")
             resolved_units, resolved_entities = self.entity_resolver.resolve_units(
                 batch_units,
                 persist=not dry_run,
@@ -168,7 +180,7 @@ class ContinuousPipeline:
             if not dry_run:
                 self.log_repo.log_batch(batch_log_records)
 
-        return ContinuousRunResult(
+        result = ContinuousRunResult(
             nodes_created=total_nodes,
             edges_created=total_edges,
             errors=errors,
@@ -177,6 +189,13 @@ class ContinuousPipeline:
             entities_saved=total_entities_saved if not dry_run else 0,
             clusters_saved=total_clusters_saved if not dry_run else 0,
         )
+        logger.info(
+            f"Pipeline run completed: {result.knowledge_units_extracted} units extracted, "
+            f"{result.nodes_created} nodes, {result.edges_created} edges"
+        )
+        if errors:
+            logger.warning(f"Pipeline completed with {len(errors)} errors")
+        return result
 
     def run_once(self, limit: int = 10) -> ContinuousRunResult:
         original_batch_size = self.batch_size

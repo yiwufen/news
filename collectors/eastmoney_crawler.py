@@ -7,12 +7,12 @@
 import argparse
 import hashlib
 import json
-import time
+import logging
 import random
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
-import urllib.error
-import logging
 from pathlib import Path
 import sys
 
@@ -21,7 +21,16 @@ sys.path.insert(0, str(Path(__file__).parent))
 from config import EventType, SourceType
 from database import Database
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# 延迟初始化的日志器
+_logger: logging.Logger | None = None
+
+
+def _get_logger() -> logging.Logger:
+    """获取日志器（延迟初始化）。"""
+    global _logger
+    if _logger is None:
+        _logger = logging.getLogger(__name__)
+    return _logger
 
 # 常用 User-Agent 列表，用于随机切换防反爬
 USER_AGENTS = [
@@ -63,24 +72,24 @@ class EastMoneyCrawler:
             'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
         })
         
-        logging.info(f"Fetching news from {self.API_URL} (pageSize={page_size})")
-        
+        _get_logger().info(f"Fetching news from {self.API_URL} (pageSize={page_size})")
+
         try:
             with urllib.request.urlopen(req, timeout=10) as response:
                 if response.status == 200:
                     data = json.loads(response.read().decode('utf-8'))
                     return data.get("data", {}).get("fastNewsList", [])
                 else:
-                    logging.error(f"Unexpected HTTP Status: {response.status}")
+                    _get_logger().error(f"Unexpected HTTP Status: {response.status}")
                     return None
         except urllib.error.HTTPError as e:
-            logging.error(f"HTTP Error: {e.code} {e.reason}")
+            _get_logger().error(f"HTTP Error: {e.code} {e.reason}")
             # 常见的反爬虫状态码
             if e.code in (403, 429, 503):
-                logging.warning(f"🚨 警告: 检测到可能的反爬虫拦截 (状态码: {e.code})!")
+                _get_logger().warning(f"🚨 警告: 检测到可能的反爬虫拦截 (状态码: {e.code})!")
             return None
         except Exception as e:
-            logging.error(f"Request failed: {e}")
+            _get_logger().error(f"Request failed: {e}")
             return None
 
     def _infer_category(self, text: str) -> str:
@@ -141,45 +150,46 @@ class EastMoneyCrawler:
             
         if articles:
             inserted = self.db.insert_articles_batch(articles)
-            logging.info(f"Successfully inserted {inserted} out of {len(articles)} articles.")
+            _get_logger().info(f"Successfully inserted {inserted} out of {len(articles)} articles.")
             return inserted
         return 0
 
     def run(self, page_size: int = 100, continuous: bool = False, interval: int = 900):
         """运行爬虫任务"""
-        logging.info("=== 东方财富快讯爬虫启动 ===")
-        
+        log = _get_logger()
+        log.info("=== 东方财富快讯爬虫启动 ===")
+
         while True:
             news_list = self.fetch_news(page_size=page_size)
-            
+
             if news_list is not None:
                 # 抓取成功，重置错误计数
                 self.consecutive_errors = 0
                 if news_list:
-                    logging.info(f"Fetched {len(news_list)} news items. Processing...")
+                    log.info(f"Fetched {len(news_list)} news items. Processing...")
                     self.process_and_save(news_list)
                 else:
-                    logging.warning("Fetched successfully but no news data found.")
+                    log.warning("Fetched successfully but no news data found.")
             else:
                 # 抓取失败，增加错误计数并触发退避策略
                 self.consecutive_errors += 1
-                logging.error(f"Failed to fetch news. Consecutive errors: {self.consecutive_errors}")
-                
+                log.error(f"Failed to fetch news. Consecutive errors: {self.consecutive_errors}")
+
             if not continuous:
                 break
-                
+
             # 计算等待时间：正常间隔 + 指数退避 (在反爬虫时自动延长休眠时间)
             # 比如连续失败 1, 2, 3 次，额外等待 60, 120, 240 秒
             backoff_delay = 0
             if self.consecutive_errors > 0:
                 backoff_delay = interval * (2 ** (min(self.consecutive_errors - 1, 5)))
-                logging.warning(f"⏱️ 触发指数退避机制，额外延迟 {backoff_delay} 秒...")
-                
+                log.warning(f"⏱️ 触发指数退避机制，额外延迟 {backoff_delay} 秒...")
+
             total_sleep = interval + backoff_delay
-            logging.info(f"Waiting for {total_sleep} seconds before next fetch...")
+            log.info(f"Waiting for {total_sleep} seconds before next fetch...")
             time.sleep(total_sleep)
-            
-        logging.info("=== 爬虫任务完成 ===")
+
+        log.info("=== 爬虫任务完成 ===")
 
 
 if __name__ == "__main__":
@@ -188,7 +198,12 @@ if __name__ == "__main__":
     parser.add_argument("--db", type=str, default="data/news.db", help="数据库路径")
     parser.add_argument("--continuous", action="store_true", help="是否持续运行")
     parser.add_argument("--interval", type=int, default=900, help="持续运行时的间隔时间(秒)")
+    parser.add_argument("--verbose", "-v", action="store_true", help="显示详细日志")
     args = parser.parse_args()
-    
+
+    # 初始化日志
+    from src.utils.logging import setup_logging
+    setup_logging(level=logging.DEBUG if args.verbose else logging.INFO)
+
     crawler = EastMoneyCrawler(db_path=args.db)
     crawler.run(page_size=args.limit, continuous=args.continuous, interval=args.interval)
