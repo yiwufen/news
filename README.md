@@ -1,4 +1,4 @@
-# Financial Knowledge Retrieval Foundation
+﻿# Financial Knowledge Retrieval Foundation
 
 本项目当前定位为一个面向金融场景的知识检索底座，目标是把原始消息加工为可检索、可溯源、可组合的知识层，供后续 skill 驱动的分析 agent 执行通用金融任务。
 
@@ -119,9 +119,49 @@ print(result)
 - 若未配置 `ANTHROPIC_API_KEY`，`run_pipeline()` 的意图解析会按 fail-fast 约束直接失败
 - 若未配置 embedding 凭据，`run_pipeline()` 与 `run_skill_query()` 都会退化到 BM25-only 检索，而不会让默认知识库查询路径整体失败
 
-## 协作约定
+### Windows 启动脚本
+
+仓库现在仅保留 3 个 Python 启动脚本，默认都围绕 `data/news.db` 工作：
+
+```bash
+uv run python scripts/start_fetch.py --limit 100 --interval 900
+uv run python scripts/start_offline.py --batch-size 10 --interval 300
+uv run python scripts/start_services.py --fetch-limit 100 --fetch-interval 900 --process-batch-size 10 --process-interval 300
+```
+
+说明：
+
+- `start_fetch.py`：启动东方财富快讯持续抓取
+- `start_offline.py`：启动离线知识化轮询处理；默认增量处理
+- `start_offline.py --graph-enabled`：在 Neo4j 已配置可用时启用图谱同步
+- `start_services.py`：一键拉起“消息源抓取 + 离线处理”两个独立控制台窗口
+
+参数说明：
+
+- `start_fetch.py`
+- `--limit`：每次抓取的消息条数，默认 `100`
+- `--interval`：连续抓取间隔，单位秒，默认 `900`
+- `--db`：SQLite 数据库路径，默认 `data/news.db`
+
+- `start_offline.py`
+- `--batch-size`：每轮离线处理的批大小，默认 `10`
+- `--interval`：离线轮询间隔，单位秒，默认 `300`
+- `--db`：SQLite 数据库路径，默认 `data/news.db`
+- `--time-window`：可选的 ISO 周过滤，例如 `2026-W14`
+- `--graph-enabled`：启用 Neo4j 图谱同步；不传时按脚本默认关闭
+
+- `start_services.py`
+- `--fetch-limit`：传给 `start_fetch.py --limit`，默认 `100`
+- `--fetch-interval`：传给 `start_fetch.py --interval`，默认 `900`
+- `--process-batch-size`：传给 `start_offline.py --batch-size`，默认 `10`
+- `--process-interval`：传给 `start_offline.py --interval`，默认 `300`
+- `--db`：统一传给抓取和离线处理脚本的数据库路径，默认 `data/news.db`
+- `--graph-enabled`：给离线处理进程启用图谱同步
+
 
 - 项目级规则统一维护在 `docs/SHARED_RULES.md`
 - 完成功能后同步更新 `PROGRESS.md`
 - 运行接口语义保持不变：`run_continuous()`、`run_pipeline()`
 - 优先围绕知识底座重构，不再新增以风险报告为中心的项目级设计
+
+

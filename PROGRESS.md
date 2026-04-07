@@ -1,4 +1,4 @@
-# 项目开发进度
+﻿# 项目开发进度
 
 ## 当前定位
 
@@ -647,3 +647,35 @@ uv run uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --workers 4
 - Task chains now mark downstream tasks as `skipped` when any declared dependency finishes unsuccessfully, avoiding false-success results after failed prerequisites.
 - Session API responses now compute `expires_in` from the remaining TTL instead of echoing the original configured TTL.
 - Added `redis` as an explicit runtime dependency so the documented Redis-backed session store can be installed with the main API package set.
+
+## 2026-04-07 Windows Script Helper Update
+
+- Added repo-local PowerShell helpers under `scripts/` for the most common local workflow:
+  - `fetch-eastmoney.ps1`
+  - `process-offline.ps1`
+  - `verify-pipeline.ps1`
+  - `run-cycle.ps1`
+- The helper flow is intentionally aligned with the current mainline:
+  - fetch raw news into `data/news.db`
+  - run one offline knowledge-processing pass
+  - optionally verify retrieval through `run_pipeline()`
+- Helper scripts do not change `run_continuous()` / `run_pipeline()` semantics; they wrap the existing mainline entrypoints for easier Windows usage.
+- README now documents the helper-script startup path for local operation.
+
+## 2026-04-07 Startup Script Cleanup Update
+
+- Removed the earlier one-shot helper scripts and verification wrapper from `scripts/`.
+- The repo now keeps only three Windows startup entrypoints:
+  - `start-fetch.ps1`
+  - `start-offline.ps1`
+  - `start-services.ps1`
+- `start-fetch.ps1` and `start-offline.ps1` are now self-contained and no longer depend on deleted wrapper scripts.
+
+## 2026-04-07 Python Startup Script Update
+
+- Replaced the remaining Windows startup entrypoints in scripts/ with Python scripts only:
+  - start_fetch.py
+  - start_offline.py
+  - start_services.py
+- Removed the earlier PowerShell startup wrappers so the repo now keeps only Python startup scripts for fetch/offline service launch.
+- Clarified in README that this conservative graph default applies only to the startup script runtime behavior; the mainline `run_continuous()` interface semantics still default to `graph_enabled=True`.
