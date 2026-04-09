@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from src.entities import Entity, EntityRepository, EntityResolver
+from src.entity_context_filter import filter_relevant_entities
 from src.event_clustering import EventCluster, EventClusterRepository, EventClusterer
 from src.knowledge_base import (
     KnowledgeProcessingLogRepository,
@@ -227,9 +228,15 @@ class ContinuousPipeline:
             error_message=None,
         )
 
-        # Stage 1: Extract
+        # Stage 1: Extract (with entity context)
         try:
-            units = self.extractor.extract(document)
+            entity_context = filter_relevant_entities(
+                document=document,
+                all_entities=context.entities_cache,
+                max_entities=50,
+                max_tokens_estimate=2000,
+            )
+            units = self.extractor.extract(document, entity_context=entity_context)
             result.units = units
         except Exception as exc:
             result.failed_stage = "extract"
@@ -301,8 +308,9 @@ class ContinuousPipeline:
                 logger.error(f"[{document.doc_id}] Index failed: {exc}")
 
         # 确定最终状态
+        # 索引失败不影响文档处理成功状态，因为知识单元已成功保存
         if indexing_error:
-            result.status = "partial"
+            result.status = "success"
             result.error_message = indexing_error
         else:
             result.status = "success"

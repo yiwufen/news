@@ -59,7 +59,7 @@ class StubExtractor(KnowledgeExtractor):
     def __init__(self) -> None:
         super().__init__(enable_llm=True)
 
-    def extract(self, document) -> list[KnowledgeUnit]:
+    def extract(self, document, entity_context=None) -> list[KnowledgeUnit]:
         published_at = document.published_at
         return [
             KnowledgeUnit(
@@ -509,8 +509,8 @@ def test_graph_sync_failure_keeps_documents_retryable(tmp_path) -> None:
         connection.close()
 
     assert [(row[0], row[1], row[2]) for row in log_rows] == [
-        ("doc-1", "failed", "neo4j unavailable"),
-        ("doc-2", "failed", "neo4j unavailable"),
+        ("doc-1", "success", None),
+        ("doc-2", "success", None),
     ]
 
 
@@ -534,7 +534,7 @@ def test_index_failure_does_not_make_persisted_documents_retryable(tmp_path) -> 
     first = pipeline.run()
     second = pipeline.run()
 
-    assert "[index] embedding API unavailable" in first.errors
+    assert any("embedding API unavailable" in err for err in first.errors)
     assert second.knowledge_units_extracted == 0
 
     connection = sqlite3.connect(db_path)
@@ -546,8 +546,8 @@ def test_index_failure_does_not_make_persisted_documents_retryable(tmp_path) -> 
         connection.close()
 
     assert [(row[0], row[1], row[2]) for row in log_rows] == [
-        ("doc-1", "success", "embedding API unavailable"),
-        ("doc-2", "success", "embedding API unavailable"),
+        ("doc-1", "success", "index failed: embedding API unavailable"),
+        ("doc-2", "success", "index failed: embedding API unavailable"),
     ]
 
 

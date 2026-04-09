@@ -57,7 +57,7 @@ class StubExtractor(KnowledgeExtractor):
     def __init__(self) -> None:
         super().__init__(enable_llm=True)
 
-    def extract(self, document) -> list[KnowledgeUnit]:
+    def extract(self, document, entity_context=None) -> list[KnowledgeUnit]:
         published_at = document.published_at
         return [
             KnowledgeUnit(

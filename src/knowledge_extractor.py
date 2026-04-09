@@ -12,6 +12,7 @@ from typing import Any
 
 from anthropic.types import Message, ToolUseBlock
 
+from src.entity_context_filter import EntityContext, build_entity_context_section
 from src.knowledge_base import KnowledgeUnit, RawDocument
 from src.llm import create_offline_llm_client, get_offline_max_tokens
 from src.time_normalization import TimeNormalizationContext, TimeNormalizer
@@ -26,6 +27,10 @@ SYSTEM_PROMPT = """你是一名金融知识工程助手，负责从新闻文档�
 3. source.doc_id、time.published_at、time.extracted_at 必填。
 4. entities 保留原始 mention，entity_id 可以为空。
 5. 发现不确定或冲突信息时，不要裁决对错，只标记 conflict_status。
+# 实体命名规范
+- 如果提示中包含「已知实体参考」，请优先使用其中的标准名称作为 entities.mention
+- 只有在已知实体列表中没有匹配项时，才使用文档中的原始表述
+- 这有助于保持实体命名的一致性
 # 输出要求
 - 只输出一个 JSON 对象，格式为 {"knowledge_units": [...]}
 - knowledge_units 可以为空列表
@@ -48,10 +53,13 @@ EXTRACTION_TOOL_SCHEMA: dict[str, Any] = {
 }
 
 
-def build_extraction_prompt(doc: RawDocument) -> str:
-    """Build the extraction prompt for one raw document."""
+def build_extraction_prompt(
+    doc: RawDocument,
+    entity_context: list[EntityContext] | None = None,
+) -> str:
+    """Build the extraction prompt for one raw document with optional entity context."""
     payload = doc.model_dump(mode="json")
-    return f"""请从下面文档中抽取 KnowledgeUnit。
+    prompt = f"""请从下面文档中抽取 KnowledgeUnit。
 ## 文档信息
 - doc_id: {payload["doc_id"]}
 - title: {payload["title"]}
@@ -61,6 +69,9 @@ def build_extraction_prompt(doc: RawDocument) -> str:
 ## 正文
 {payload["content"]}
 """
+    if entity_context:
+        prompt += build_entity_context_section(entity_context)
+    return prompt
 
 
 class KnowledgeExtractor:
@@ -75,16 +86,22 @@ class KnowledgeExtractor:
         self._time_normalizer = TimeNormalizer()  # Cache instance
         logger.debug(f"KnowledgeExtractor initialized (enable_llm={self.enable_llm}, max_retries={self.max_retries})")
 
-    def extract(self, document: RawDocument) -> list[KnowledgeUnit]:
-        """Extract KnowledgeUnits for one document."""
+    def extract(
+        self,
+        document: RawDocument,
+        entity_context: list[EntityContext] | None = None,
+    ) -> list[KnowledgeUnit]:
+        """Extract KnowledgeUnits for one document with optional entity context."""
         if not self.enable_llm:
             raise RuntimeError(
                 "KnowledgeExtractor is configured without LLM extraction; heuristic extraction has been removed"
             )
 
         logger.debug(f"Extracting KnowledgeUnits from document: {document.doc_id}")
+        if entity_context:
+            logger.debug(f"Using entity context with {len(entity_context)} entities")
         try:
-            units = self._extract_with_llm(document)
+            units = self._extract_with_llm(document, entity_context)
             logger.info(f"Extracted {len(units)} KnowledgeUnits from {document.doc_id}")
             return units
         except Exception as exc:
@@ -93,9 +110,16 @@ class KnowledgeExtractor:
                 f"KnowledgeUnit extraction failed for {document.doc_id}: {exc}"
             ) from exc
 
-    def extract_batch(self, documents: list[RawDocument]) -> dict[str, list[KnowledgeUnit]]:
-        """Extract documents in batch."""
-        return {document.doc_id: self.extract(document) for document in documents}
+    def extract_batch(
+        self,
+        documents: list[RawDocument],
+        entity_context: list[EntityContext] | None = None,
+    ) -> dict[str, list[KnowledgeUnit]]:
+        """Extract documents in batch with optional entity context."""
+        return {
+            document.doc_id: self.extract(document, entity_context)
+            for document in documents
+        }
 
     def _get_client(self) -> tuple[Any, str]:
         if self.client is None or self.model is None:
@@ -103,7 +127,11 @@ class KnowledgeExtractor:
             logger.debug(f"LLM client initialized with model: {self.model}")
         return self.client, self.model
 
-    def _extract_with_llm(self, document: RawDocument) -> list[KnowledgeUnit]:
+    def _extract_with_llm(
+        self,
+        document: RawDocument,
+        entity_context: list[EntityContext] | None = None,
+    ) -> list[KnowledgeUnit]:
         client, model = self._get_client()
         last_error: Exception | None = None
 
@@ -115,7 +143,10 @@ class KnowledgeExtractor:
                     system=SYSTEM_PROMPT,
                     tools=[EXTRACTION_TOOL_SCHEMA],  # type: ignore[arg-type]
                     tool_choice={"type": "tool", "name": "extract_knowledge_units"},
-                    messages=[{"role": "user", "content": build_extraction_prompt(document)}],
+                    messages=[{
+                        "role": "user",
+                        "content": build_extraction_prompt(document, entity_context),
+                    }],
                 )
                 return self._parse_llm_response(response, document)
             except ValueError as e:

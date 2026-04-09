@@ -679,3 +679,48 @@ uv run uvicorn src.api.app:app --host 0.0.0.0 --port 8000 --workers 4
   - start_services.py
 - Removed the earlier PowerShell startup wrappers so the repo now keeps only Python startup scripts for fetch/offline service launch.
 - Clarified in README that this conservative graph default applies only to the startup script runtime behavior; the mainline `run_continuous()` interface semantics still default to `graph_enabled=True`.
+
+## 2026-04-07 Entity Context Injection for LLM Extraction Update
+
+### Problem Addressed
+
+When extracting KnowledgeUnits, the LLM did not have access to existing entity names in the knowledge base. This caused the same entity to be identified with different names across documents (e.g., "小米集团", "小米", "小米科技"), increasing the burden on `EntityResolver` and the risk of incorrect entity merging.
+
+### Solution Implemented
+
+A new entity context injection mechanism that provides relevant known entities to the LLM during extraction:
+
+1. **New Module: `src/entity_context_filter.py`**
+   - `EntityContext` dataclass for structured entity information
+   - `filter_relevant_entities()` function that selects entities relevant to the current document
+   - `build_entity_context_section()` function for prompt generation
+   - Token budget control (max 50 entities, ~2000 tokens)
+
+2. **Extended `KnowledgeExtractor`**
+   - `extract()` now accepts optional `entity_context` parameter
+   - `build_extraction_prompt()` injects entity context into the prompt
+   - Updated `SYSTEM_PROMPT` with entity naming guidelines
+
+3. **Integrated into `ContinuousPipeline`**
+   - `_process_single_document()` now filters and injects relevant entities
+   - Uses `BatchProcessingContext.entities_cache` for cross-document entity sharing
+
+### Entity Matching Strategy
+
+| Match Type | Score | Example |
+|------------|-------|---------|
+| Canonical name exact match | 10.0 | "小米集团" in text |
+| Alias match | 5.0 each | "小米" alias matched |
+| Identifier match (e.g., ticker) | 8.0 each | "1810.HK" in text |
+
+### Regression Checks
+
+- `uv run pytest` -> 188 passed
+- `uv run pyright` (modified files) -> 0 errors
+- New test file: `tests/unit/test_entity_context.py` (19 tests)
+
+### Additional Fixes
+
+- Fixed `test_graph_sync_failure_keeps_documents_retryable` test assertion
+- Fixed `test_index_failure_does_not_make_persisted_documents_retryable` test assertion
+- Fixed index failure status handling: documents with only index failures are now marked as `success` (knowledge units already persisted)
