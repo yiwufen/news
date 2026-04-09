@@ -83,28 +83,9 @@ class StubExtractor(KnowledgeExtractor):
         ]
 
 
-class StubEmbeddingClient:
-    def __init__(self) -> None:
-        self.model = "test-embedding-3-small"
-
-    def embed_texts(self, texts: list[str]) -> list[list[float]]:
-        return [self._embed(text) for text in texts]
-
-    def _embed(self, text: str) -> list[float]:
-        lower = text.lower()
-        return [
-            float(len(lower)),
-            float(lower.count("xiaomi") + lower.count("\u5c0f\u7c73")),
-            float(lower.count("penalty") + lower.count("sanction") + lower.count("\u5904\u7f5a")),
-            float(lower.count("update") + lower.count("progress") + lower.count("\u66f4\u65b0")),
-        ]
-
-
 def build_index_builder(db_path: str) -> KnowledgeIndexBuilder:
     return KnowledgeIndexBuilder(
         knowledge_units=KnowledgeUnitRepository(db_path),
-        entities=EntityRepository(db_path),
-        embedding_client=StubEmbeddingClient(),
     )
 
 
@@ -134,7 +115,6 @@ def test_run_continuous_builds_knowledge_tables_without_legacy_backfill(tmp_path
     try:
         ku_count = connection.execute("SELECT COUNT(*) FROM knowledge_units").fetchone()[0]
         fts_count = connection.execute("SELECT COUNT(*) FROM knowledge_units_fts").fetchone()[0]
-        embedding_count = connection.execute("SELECT COUNT(*) FROM knowledge_unit_embeddings").fetchone()[0]
         entity_count = connection.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
         cluster_count = connection.execute("SELECT COUNT(*) FROM event_clusters").fetchone()[0]
         cluster_payload = json.loads(
@@ -150,7 +130,6 @@ def test_run_continuous_builds_knowledge_tables_without_legacy_backfill(tmp_path
 
     assert ku_count == 2
     assert fts_count == 2
-    assert embedding_count == 2
     assert entity_count >= 1
     assert cluster_count >= 1
     assert cluster_payload["member_count"] >= 1
@@ -205,7 +184,6 @@ def test_run_pipeline_queries_new_knowledge_store(tmp_path, monkeypatch) -> None
         def __init__(self) -> None:
             self._searcher = original_searcher_cls(
                 db_path=str(db_path),
-                embedding_client=StubEmbeddingClient(),
             )
 
         def search(self, request):
@@ -235,9 +213,8 @@ def test_run_pipeline_queries_new_knowledge_store(tmp_path, monkeypatch) -> None
     assert result["query"]["entities"] == ["Xiaomi Group"]
     assert len(result["knowledge_units"]) >= 1
     assert len(result["entities"]) >= 1
-    assert result["retrieval"]["retrieval_mode"] == "hybrid"
+    assert result["retrieval"]["retrieval_mode"] == "bm25"
     assert result["retrieval"]["bm25_count"] >= 1
-    assert result["retrieval"]["vector_count"] >= 1
     assert result["retrieval"]["graph_used"] is False
     assert result["retrieval"]["graph_candidate_count"] == 0
     assert result["timeline_data"]["entity"] == "Xiaomi Group"
@@ -255,65 +232,6 @@ def test_run_pipeline_queries_new_knowledge_store(tmp_path, monkeypatch) -> None
     assert "comparison_report" not in result
     assert "event_impact" not in result
     assert "particles_count" not in result
-
-
-def test_run_pipeline_falls_back_to_bm25_without_embedding_config(tmp_path, monkeypatch) -> None:
-    db_path = tmp_path / "data" / "news.db"
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    seed_articles(str(db_path))
-
-    pipeline = ContinuousPipeline(
-        batch_size=10,
-        graph_enabled=False,
-        incremental=True,
-        db_path=str(db_path),
-        extractor=StubExtractor(),
-        index_builder=build_index_builder(str(db_path)),
-    )
-    pipeline.run()
-
-    class FakeIntentClassifier:
-        def parse(self, raw_query: str) -> StructuredQuery:
-            return StructuredQuery(
-                intent=IntentType.ENTITY_TIMELINE,
-                entities=["Xiaomi Group"],
-                time_range=None,
-                filters=QueryFilters(),
-                original_query=raw_query,
-            )
-
-    import src.intent
-    import src.orchestration.graph as graph_module
-
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("OPENAI_EMBEDDING_API_KEY", raising=False)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.setattr(src.intent, "IntentClassifier", FakeIntentClassifier)
-    monkeypatch.setattr(graph_module, "IntentClassifier", FakeIntentClassifier)
-    monkeypatch.setattr(
-        graph_module,
-        "KnowledgeGraphRetriever",
-        type(
-            "FakeKnowledgeGraphRetriever",
-            (),
-            {
-                "__init__": lambda self, *args, **kwargs: None,
-                "search": lambda self, structured_query, *, start_entities: __import__(
-                    "src.graph.knowledge_retrieval",
-                    fromlist=["GraphRetrievalResult"],
-                ).GraphRetrievalResult.empty(start_entities=start_entities),
-            },
-        ),
-    )
-
-    result = run_pipeline(raw_query="Show the Xiaomi Group timeline")
-
-    assert result["source"] == "knowledge_base"
-    assert result["retrieval"]["retrieval_mode"] == "bm25_only"
-    assert result["retrieval"]["bm25_count"] >= 1
-    assert result["retrieval"]["vector_count"] == 0
-    assert len(result["knowledge_units"]) >= 1
-    assert "risk_assessment" not in result
 
 
 def test_run_pipeline_returns_transient_entities_for_direct_articles(monkeypatch) -> None:
@@ -336,7 +254,6 @@ def test_run_pipeline_returns_transient_entities_for_direct_articles(monkeypatch
         def __init__(self) -> None:
             self._searcher = original_searcher_cls(
                 extractor=StubExtractor(),
-                embedding_client=StubEmbeddingClient(),
             )
 
         def search(self, request):
@@ -369,7 +286,7 @@ def test_run_pipeline_returns_transient_entities_for_direct_articles(monkeypatch
     assert len(result["knowledge_units"]) == 1
     assert len(result["entities"]) == 1
     assert len(result["event_clusters"]) == 1
-    assert result["retrieval"]["retrieval_mode"] == "hybrid"
+    assert result["retrieval"]["retrieval_mode"] == "bm25"
     assert result["retrieval"]["graph_used"] is False
     assert result["entities"][0]["entity_id"] == result["knowledge_units"][0]["entities"][0]["entity_id"]
     assert result["event_clusters"][0]["cluster_id"] == result["knowledge_units"][0]["cluster_id"]
@@ -396,7 +313,6 @@ def test_run_pipeline_omits_graph_edges_when_disabled(monkeypatch) -> None:
         def __init__(self) -> None:
             self._searcher = original_searcher_cls(
                 extractor=StubExtractor(),
-                embedding_client=StubEmbeddingClient(),
             )
 
         def search(self, request):
@@ -606,7 +522,6 @@ def test_run_pipeline_supplements_entities_and_time_range_when_llm_response_is_i
         def __init__(self) -> None:
             self._searcher = original_searcher_cls(
                 db_path=str(db_path),
-                embedding_client=StubEmbeddingClient(),
             )
 
         def search(self, request):
@@ -735,7 +650,6 @@ def test_run_pipeline_repairs_legacy_event_cluster_payloads(tmp_path, monkeypatc
         def __init__(self) -> None:
             self._searcher = original_searcher_cls(
                 db_path=str(db_path),
-                embedding_client=StubEmbeddingClient(),
             )
 
         def search(self, request):
@@ -801,7 +715,6 @@ def test_run_pipeline_relationship_query_returns_formal_graph_results(tmp_path, 
         def __init__(self) -> None:
             self._searcher = original_searcher_cls(
                 db_path=str(db_path),
-                embedding_client=StubEmbeddingClient(),
             )
 
         def search(self, request):
@@ -994,10 +907,8 @@ def test_run_pipeline_event_impact_analysis_expands_from_focus_cluster_entities(
                 ],
                 "total_count": 1,
                 "retrieval": {
-                    "retrieval_mode": "hybrid",
+                    "retrieval_mode": "bm25",
                     "bm25_count": 1,
-                    "vector_count": 1,
-                    "fusion_count": 1,
                     "applied_filters": {
                         "entities": ["Xiaomi Group"],
                         "resolved_entity_ids": ["ent_xiaomi"],
@@ -1059,7 +970,6 @@ def test_run_pipeline_rejects_relationship_query_for_direct_articles(monkeypatch
         def __init__(self) -> None:
             self._searcher = original_searcher_cls(
                 extractor=StubExtractor(),
-                embedding_client=StubEmbeddingClient(),
             )
 
         def search(self, request):

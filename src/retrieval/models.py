@@ -16,7 +16,7 @@ class SearchResult:
 
     doc_id: str
     score: float
-    source: str  # "bm25" | "vector" | "fusion"
+    source: str  # "bm25" | "memory"
     article: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -53,8 +53,6 @@ class RetrievalResult:
     articles: list[dict[str, Any]]
     total_count: int
     bm25_count: int = 0
-    vector_count: int = 0
-    fusion_stats: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """转换为字典"""
@@ -62,8 +60,6 @@ class RetrievalResult:
             "articles": self.articles,
             "total_count": self.total_count,
             "bm25_count": self.bm25_count,
-            "vector_count": self.vector_count,
-            "fusion_stats": self.fusion_stats,
         }
 
     def is_empty(self) -> bool:

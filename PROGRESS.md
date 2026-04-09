@@ -22,7 +22,7 @@
 | 1. 原始文档接入 | ✅ 已完成 | 100% | SQLite 文档存储、测试数据与增量读取已具备 |
 | 2. 文档知识化抽取 | ✅ 主线可用 | 85% | `run_continuous()` 已切到 `RawDocument -> KnowledgeUnit` 新主线，时间标准化、冲突检测已集成 |
 | 3. 实体与事件归一 | ✅ 主线可用 | 85% | 已新增 `Entity` / `EventCluster` 保守归一与归并，多类型冲突检测与聚合视图已落地 |
-| 4. 检索层 | ✅ 主线可用 | 85% | `run_pipeline()` 已切到混合检索主线，`KnowledgeUnit` FTS + 向量索引、融合排序、统一检索元数据与 `Entity` / `EventCluster` 检索入口已落地 |
+| 4. 检索层 | ✅ 主线可用 | 90% | BM25 + 结构化过滤检索主线，分层打分（实体匹配 > 类型匹配 > 文本匹配 > 时效），移除了无实质贡献的向量检索层 |
 | 5. 图谱层 | ✅ 主线可用 | 90% | 新离线路径已同步 `Entity + EventCluster + INVOLVED_IN`，`run_pipeline()` 已接入正式图谱增强检索、关系结果集与稳定输出契约 |
 | 6. 消费层 | ✅ 已移除旧链路 | 100% | 不再兼容旧风险导向消费链路，入口直接面向知识检索 |
 
@@ -111,11 +111,10 @@
 - [x] 图谱默认开启
 
 ### 检索系统
-- [x] 建立 `KnowledgeUnit` 稀疏索引
-- [x] 建立 `KnowledgeUnit` 向量索引
+- [x] 建立 `KnowledgeUnit` BM25/FTS5 索引
 - [x] 建立 `Entity` 与 `EventCluster` 检索入口
 - [x] 定义统一检索返回契约
-- [x] 实现 BM25 / 向量检索 / 融合排序
+- [x] 实现 BM25 + 结构化过滤 + 分层打分
 
 ---
 
@@ -724,3 +723,37 @@ A new entity context injection mechanism that provides relevant known entities t
 - Fixed `test_graph_sync_failure_keeps_documents_retryable` test assertion
 - Fixed `test_index_failure_does_not_make_persisted_documents_retryable` test assertion
 - Fixed index failure status handling: documents with only index failures are now marked as `success` (knowledge units already persisted)
+
+---
+
+## 2026-04-09 Retrieval Simplification Update
+
+### Problem
+
+The retrieval layer used a hybrid BM25 + vector search architecture with reciprocal rank fusion. Analysis showed vector search contributed negligibly to retrieval quality:
+
+- Vector search input was nearly identical to BM25 input (same query text, entity names, event types)
+- Fusion scores (~0.016) were overwhelmed by structured bonuses (entity: 0.2, event_type: 0.1)
+- LLM normalization at indexing time already bridges vocabulary gaps, making query-time semantic matching redundant
+
+### Solution
+
+Removed the entire vector search layer, simplified to **BM25 + structured filtering + tiered scoring**:
+
+- Entity match (weight 5.0) > Event type match (weight 2.0) > BM25 text score (weight 1.0) > Recency (tie-breaker)
+
+### Changes
+
+- **Deleted** `src/retrieval/embedding_client.py` — no longer needed
+- **Simplified** `src/retrieval/knowledge_search.py` — removed vector search, fusion, cosine similarity; pure BM25 + structured scoring
+- **Simplified** `src/retrieval/indexing.py` — FTS-only indexing, no embedding generation
+- **Simplified** `src/retrieval/models.py` — removed vector/fusion fields
+- **Simplified** `src/orchestration/graph.py` — removed `_resolve_retrieval_mode()`
+- **Cleaned** `src/knowledge_base.py` — removed `KnowledgeUnitEmbedding` model, `save_embeddings()`, `get_embeddings()`, `knowledge_unit_embeddings` table
+- **Updated** all test files to remove `StubEmbeddingClient`, embedding assertions, and hybrid mode checks
+- **Updated** `docs/SHARED_RULES.md` — removed "向量索引" from index requirements
+
+### Regression Checks
+
+- `uv run pytest` -> 183 passed
+- `uv run pyright .` -> 0 errors

@@ -25,9 +25,10 @@ def _base_raw_result(*, intent: str) -> dict:
         },
         "source": "knowledge_base",
         "retrieval": {
-            "retrieval_mode": "hybrid",
+            "retrieval_mode": "bm25",
             "bm25_count": 2,
-            "vector_count": 2,
+            "applied_filters": {},
+            "hit_scores": {},
             "graph_used": True,
         },
         "graph": {

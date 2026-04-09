@@ -29,3 +29,4 @@ codex-manual-check-pipeline/
 .vscode/
 .idea/
 uv.lock
+.claude/settings.local.json

@@ -105,7 +105,6 @@ class ContinuousPipeline:
         self.graph_sync = KnowledgeGraphSync() if graph_enabled else None
         self.index_builder = index_builder or KnowledgeIndexBuilder(
             self.knowledge_units,
-            self.entity_repo,
         )
         logger.info(f"ContinuousPipeline initialized (batch_size={batch_size}, graph_enabled={graph_enabled}, incremental={incremental})")
 

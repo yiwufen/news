@@ -35,8 +35,6 @@ from src.knowledge_base import (
 )
 from src.knowledge_extractor import KnowledgeExtractor
 from src.knowledge_graph_sync import KnowledgeGraphSync
-from src.retrieval.embedding_client import OpenAIEmbeddingClient
-from src.retrieval.indexing import KnowledgeIndexBuilder
 from src.retrieval.knowledge_search import KnowledgeSearchRequest, KnowledgeSearcher
 from src.time_normalization import TimeNormalizationResult
 
@@ -64,23 +62,6 @@ def build_unit(
         ),
         confidence=0.86,
     )
-
-
-class StubEmbeddingClient:
-    def __init__(self) -> None:
-        self.model = "test-embedding-3-small"
-
-    def embed_texts(self, texts: list[str]) -> list[list[float]]:
-        return [self._embed(text) for text in texts]
-
-    def _embed(self, text: str) -> list[float]:
-        lower = text.lower()
-        return [
-            float(len(lower)),
-            float(lower.count("xiaomi") + lower.count("\u5c0f\u7c73")),
-            float(lower.count("impact") + lower.count("update") + lower.count("\u5f71\u54cd")),
-            float(lower.count("market") + lower.count("\u5e02\u573a")),
-        ]
 
 
 def test_adapt_article_to_raw_document_maps_fields() -> None:
@@ -1019,38 +1000,6 @@ def test_knowledge_unit_repository_repairs_stale_entity_ids_and_fts_rows(tmp_pat
     assert fts_count == 1
 
 
-def test_knowledge_index_builder_saves_embeddings(tmp_path) -> None:
-    db_path = tmp_path / "news.db"
-    entity_repo = EntityRepository(str(db_path))
-    repo = KnowledgeUnitRepository(str(db_path))
-    now = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
-    entity = Entity(
-        entity_id="ent_xiaomi",
-        entity_type="Company",
-        canonical_name="Xiaomi Group",
-        aliases=["\u5c0f\u7c73\u96c6\u56e2"],
-        identifiers={},
-        source_ku_ids=["ku_1"],
-        created_at=now,
-        updated_at=now,
-    )
-    entity_repo.save_batch([entity])
-
-    unit = build_unit()
-    unit.entities[0].entity_id = entity.entity_id
-    unit.entities[0].entity_type = entity.entity_type
-    repo.save_batch([unit])
-
-    builder = KnowledgeIndexBuilder(repo, entity_repo, embedding_client=StubEmbeddingClient())
-    saved = builder.build_for_units([unit])
-    embeddings = repo.get_embeddings(ku_ids=[unit.ku_id])
-
-    assert saved == 1
-    assert len(embeddings) == 1
-    assert embeddings[0].embedding_model == "test-embedding-3-small"
-    assert embeddings[0].embedding_dim == 4
-
-
 def test_entity_repository_find_by_names_and_cluster_repository_filters(tmp_path) -> None:
     db_path = tmp_path / "news.db"
     entity_repo = EntityRepository(str(db_path))
@@ -1130,16 +1079,10 @@ def test_knowledge_searcher_matches_alias_variants_and_reports_hybrid_sources(tm
         ),
     )
     KnowledgeUnitRepository(str(db_path)).save_batch([unit])
-    KnowledgeIndexBuilder(
-        KnowledgeUnitRepository(str(db_path)),
-        entity_repo,
-        embedding_client=StubEmbeddingClient(),
-    ).build_for_units([unit])
 
     searcher = KnowledgeSearcher(
         db_path=str(db_path),
         extractor=KnowledgeExtractor(enable_llm=False),
-        embedding_client=StubEmbeddingClient(),
     )
     result = searcher.search(
         KnowledgeSearchRequest(
@@ -1158,41 +1101,6 @@ def test_knowledge_searcher_matches_alias_variants_and_reports_hybrid_sources(tm
     assert result.total_count == 1
     assert len(result.knowledge_units) == 1
     assert result.bm25_count == 1
-    assert result.vector_count == 1
-    assert result.hit_scores[result.knowledge_units[0].ku_id]["sources"] == ["bm25", "vector"]
+    assert result.hit_scores[result.knowledge_units[0].ku_id]["sources"] == ["bm25"]
 
 
-def test_knowledge_searcher_requires_embedding_config_for_hybrid_search(tmp_path, monkeypatch) -> None:
-    db_path = tmp_path / "news.db"
-    monkeypatch.delenv("OPENAI_EMBEDDING_API_KEY", raising=False)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-
-    searcher = KnowledgeSearcher(
-        db_path=str(db_path),
-        extractor=KnowledgeExtractor(enable_llm=False),
-    )
-
-    with pytest.raises(ValueError, match="OPENAI_EMBEDDING_API_KEY or OPENAI_API_KEY"):
-        searcher.search(
-            KnowledgeSearchRequest(
-                structured_query=StructuredQuery(
-                    intent=IntentType.ENTITY_TIMELINE,
-                    entities=[],
-                    time_range=None,
-                    filters=QueryFilters(),
-                    original_query="show xiaomi timeline",
-                    confidence=1.0,
-                ),
-            )
-        )
-
-
-def test_embedding_client_prefers_embedding_specific_env(monkeypatch) -> None:
-    monkeypatch.setenv("OPENAI_EMBEDDING_API_KEY", "embed-key")
-    monkeypatch.setenv("OPENAI_API_KEY", "shared-key")
-    monkeypatch.setenv("OPENAI_EMBEDDING_BASE_URL", "https://embedding.example.com/v1")
-
-    client = OpenAIEmbeddingClient()
-
-    assert client.api_key == "embed-key"
-    assert client.base_url == "https://embedding.example.com/v1"

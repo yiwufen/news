@@ -1,14 +1,12 @@
 """
-Knowledge-centric hybrid retrieval over KnowledgeUnit, Entity, and EventCluster.
+Knowledge-centric BM25 retrieval over KnowledgeUnit, Entity, and EventCluster.
 """
 
 from __future__ import annotations
 
-import math
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Literal
 
 from src.entities import (
     Entity,
@@ -26,17 +24,12 @@ from src.knowledge_base import (
     build_knowledge_unit_search_text,
 )
 from src.knowledge_extractor import KnowledgeExtractor
-from src.retrieval.embedding_client import EmbeddingClient, OpenAIEmbeddingClient
-
-
-RetrievalMode = Literal["hybrid", "bm25_only", "vector_only"]
 
 
 @dataclass
 class KnowledgeSearchRequest:
     structured_query: StructuredQuery
     top_k: int = 20
-    retrieval_mode: RetrievalMode = "hybrid"
 
 
 @dataclass
@@ -45,10 +38,7 @@ class KnowledgeSearchResult:
     entities: list[Entity]
     event_clusters: list[EventCluster]
     total_count: int
-    retrieval_mode: str
     bm25_count: int = 0
-    vector_count: int = 0
-    fusion_count: int = 0
     applied_filters: dict[str, object] = field(default_factory=dict)
     hit_scores: dict[str, dict[str, object]] = field(default_factory=dict)
 
@@ -59,10 +49,8 @@ class KnowledgeSearchResult:
             "event_clusters": [cluster.model_dump(mode="json") for cluster in self.event_clusters],
             "total_count": self.total_count,
             "retrieval": {
-                "retrieval_mode": self.retrieval_mode,
+                "retrieval_mode": "bm25",
                 "bm25_count": self.bm25_count,
-                "vector_count": self.vector_count,
-                "fusion_count": self.fusion_count,
                 "applied_filters": self.applied_filters,
                 "hit_scores": self.hit_scores,
             },
@@ -70,13 +58,12 @@ class KnowledgeSearchResult:
 
 
 class KnowledgeSearcher:
-    """Search the normalized knowledge store instead of legacy particles."""
+    """Search the normalized knowledge store via BM25 + structured filtering."""
 
     def __init__(
         self,
         db_path: str = "data/news.db",
         extractor: KnowledgeExtractor | None = None,
-        embedding_client: EmbeddingClient | None = None,
     ):
         self.units = KnowledgeUnitRepository(db_path)
         self.entities = EntityRepository(db_path)
@@ -85,7 +72,6 @@ class KnowledgeSearcher:
             knowledge_units=self.units,
         )
         self.extractor = extractor or KnowledgeExtractor()
-        self.embedding_client = embedding_client or OpenAIEmbeddingClient()
         self.entity_resolver = EntityResolver(self.entities)
         self.clusterer = EventClusterer(
             self.clusters,
@@ -101,34 +87,19 @@ class KnowledgeSearcher:
 
         time_range = self._serialize_time_range(query)
         event_types = query.filters.event_types or None
-        candidate_limit = max(request.top_k * 5, request.top_k)
+        candidate_limit = max(request.top_k * 3, request.top_k)
 
-        bm25_hits: list[tuple[str, float]] = []
-        if request.retrieval_mode in ("hybrid", "bm25_only"):
-            match_query = self._build_fts_query(query, matched_entities)
-            bm25_hits = self.units.search_bm25(
-                match_query,
-                top_k=candidate_limit,
-                time_range=time_range,
-                event_types=event_types,
-                entity_ids=entity_id_filter or None,
-            )
-
-        vector_hits: list[tuple[str, float]] = []
-        if request.retrieval_mode in ("hybrid", "vector_only"):
-            vector_hits = self._vector_search(
-                query,
-                matched_entities=matched_entities,
-                top_k=candidate_limit,
-                time_range=time_range,
-                event_types=event_types,
-                entity_ids=entity_id_filter or None,
-            )
+        bm25_hits = self.units.search_bm25(
+            self._build_fts_query(query, matched_entities),
+            top_k=candidate_limit,
+            time_range=time_range,
+            event_types=event_types,
+            entity_ids=entity_id_filter or None,
+        )
 
         return self._build_ranked_result(
             request=request,
             bm25_hits=bm25_hits,
-            vector_hits=vector_hits,
             matched_entities=matched_entities,
         )
 
@@ -169,7 +140,6 @@ class KnowledgeSearcher:
             entities=matched_entities,
             event_clusters=[],
             total_count=0,
-            retrieval_mode=request.retrieval_mode,
             applied_filters=self._build_applied_filters(
                 request.structured_query,
                 matched_entities,
@@ -181,12 +151,9 @@ class KnowledgeSearcher:
         *,
         request: KnowledgeSearchRequest,
         bm25_hits: list[tuple[str, float]],
-        vector_hits: list[tuple[str, float]],
         matched_entities: list[Entity],
     ) -> KnowledgeSearchResult:
-        candidate_ids = list(
-            dict.fromkeys([ku_id for ku_id, _ in bm25_hits] + [ku_id for ku_id, _ in vector_hits])
-        )
+        candidate_ids = [ku_id for ku_id, _ in bm25_hits]
         if not candidate_ids:
             return self._empty_result(request, matched_entities)
 
@@ -194,7 +161,7 @@ class KnowledgeSearcher:
             unit.ku_id: unit
             for unit in self.units.get_by_ids(candidate_ids)
         }
-        fusion_scores = self._fuse_hits(bm25_hits, vector_hits)
+        bm25_lookup = dict(bm25_hits)
         ranked_hits: list[tuple[float, KnowledgeUnit, dict[str, object]]] = []
         matched_entity_ids = {entity.entity_id for entity in matched_entities}
 
@@ -205,9 +172,7 @@ class KnowledgeSearcher:
             final_score, metadata = self._score_final_hit(
                 unit,
                 request.structured_query,
-                fusion_scores.get(ku_id, 0.0),
-                bm25_hits=bm25_hits,
-                vector_hits=vector_hits,
+                bm25_lookup.get(ku_id, 0.0),
                 matched_entity_ids=matched_entity_ids,
             )
             ranked_hits.append((final_score, unit, metadata))
@@ -251,10 +216,7 @@ class KnowledgeSearcher:
             entities=selected_entities,
             event_clusters=selected_clusters,
             total_count=len(ranked_hits),
-            retrieval_mode=request.retrieval_mode,
             bm25_count=len(bm25_hits),
-            vector_count=len(vector_hits),
-            fusion_count=len(selected_unit_ids),
             applied_filters=self._build_applied_filters(
                 request.structured_query,
                 matched_entities,
@@ -314,8 +276,7 @@ class KnowledgeSearcher:
             entities=selected_entities,
             event_clusters=selected_clusters,
             total_count=len(ranked),
-            retrieval_mode=request.retrieval_mode,
-            fusion_count=len(selected_units),
+            bm25_count=len(selected_units),
             applied_filters=self._build_applied_filters(request.structured_query, selected_entities),
             hit_scores={
                 unit.ku_id: {
@@ -326,40 +287,6 @@ class KnowledgeSearcher:
                 for score, unit in ranked[: request.top_k]
             },
         )
-
-    def _vector_search(
-        self,
-        query: StructuredQuery,
-        *,
-        matched_entities: list[Entity],
-        top_k: int,
-        time_range: tuple[str, str] | None,
-        event_types: list[str] | None,
-        entity_ids: list[str] | None,
-    ) -> list[tuple[str, float]]:
-        query_text = self._build_query_embedding_text(query, matched_entities)
-        query_embedding = self.embedding_client.embed_texts([query_text])[0]
-        if not query_embedding:
-            raise RuntimeError("embedding API returned an empty query embedding")
-
-        embedding_model = getattr(self.embedding_client, "model", None)
-        indexed_embeddings = self.units.get_embeddings(
-            time_range=time_range,
-            event_types=event_types,
-            entity_ids=entity_ids,
-            embedding_model=embedding_model,
-        )
-        if not indexed_embeddings:
-            return []
-
-        scored: list[tuple[str, float]] = []
-        expected_dim = len(query_embedding)
-        for indexed in indexed_embeddings:
-            if indexed.embedding_dim != expected_dim or len(indexed.embedding) != expected_dim:
-                raise RuntimeError("embedding index contains incompatible embedding dimensions")
-            scored.append((indexed.ku_id, self._cosine_similarity(query_embedding, indexed.embedding)))
-        scored.sort(key=lambda item: item[1], reverse=True)
-        return scored[:top_k]
 
     def _build_fts_query(
         self,
@@ -379,78 +306,33 @@ class KnowledgeSearcher:
         unique_terms = list(dict.fromkeys(term for term in terms if term))
         return " OR ".join(unique_terms)
 
-    def _build_query_embedding_text(
-        self,
-        query: StructuredQuery,
-        matched_entities: list[Entity],
-    ) -> str:
-        pieces = [query.original_query.strip()]
-        if query.entities:
-            pieces.append("entities: " + ", ".join(query.entities))
-        if matched_entities:
-            pieces.append(
-                "entity_variants: "
-                + ", ".join(
-                    dict.fromkeys(
-                        name
-                        for entity in matched_entities
-                        for name in [entity.canonical_name, *entity.aliases]
-                        if name
-                    )
-                )
-            )
-        if query.filters.event_types:
-            pieces.append("event_types: " + ", ".join(query.filters.event_types))
-        return "\n".join(piece for piece in pieces if piece).strip()
-
-    def _fuse_hits(
-        self,
-        bm25_hits: list[tuple[str, float]],
-        vector_hits: list[tuple[str, float]],
-    ) -> dict[str, float]:
-        fused: dict[str, float] = {}
-        for hits in (bm25_hits, vector_hits):
-            for rank, (ku_id, _) in enumerate(hits, start=1):
-                fused[ku_id] = fused.get(ku_id, 0.0) + (1.0 / (60 + rank))
-        return fused
-
     def _score_final_hit(
         self,
         unit: KnowledgeUnit,
         query: StructuredQuery,
-        fusion_score: float,
+        bm25_score: float,
         *,
-        bm25_hits: list[tuple[str, float]],
-        vector_hits: list[tuple[str, float]],
         matched_entity_ids: set[str],
     ) -> tuple[float, dict[str, object]]:
-        component_scores: dict[str, float] = {"fusion": fusion_score}
-        sources: list[str] = []
-        bm25_lookup = dict(bm25_hits)
-        vector_lookup = dict(vector_hits)
-        if unit.ku_id in bm25_lookup:
-            sources.append("bm25")
-            component_scores["bm25_rank_score"] = 0.0 - bm25_lookup[unit.ku_id]
-        if unit.ku_id in vector_lookup:
-            sources.append("vector")
-            component_scores["vector_similarity"] = vector_lookup[unit.ku_id]
+        # 分层权重：实体匹配(5x) > 类型匹配(2x) > 文本匹配(bm25) > 时效(tiny)
+        component_scores: dict[str, float] = {"bm25_score": bm25_score}
+        final_score = bm25_score
 
-        final_score = fusion_score
         unit_entity_ids = {
             entity.entity_id for entity in unit.entities if entity.entity_id
         }
         if matched_entity_ids and unit_entity_ids & matched_entity_ids:
-            component_scores["entity_bonus"] = 0.2
-            final_score += 0.2
+            component_scores["entity_bonus"] = 5.0
+            final_score += 5.0
         if query.filters.event_types and unit.unit_type in query.filters.event_types:
-            component_scores["event_type_bonus"] = 0.1
-            final_score += 0.1
+            component_scores["event_type_bonus"] = 2.0
+            final_score += 2.0
         recency_bonus = self._unit_anchor(unit).timestamp() / 10_000_000_000_000
         component_scores["recency_bonus"] = recency_bonus
         final_score += recency_bonus
         metadata = {
             "score": final_score,
-            "sources": sources,
+            "sources": ["bm25"],
             "component_scores": component_scores,
         }
         return final_score, metadata
@@ -563,10 +445,3 @@ class KnowledgeSearcher:
 
     def _unit_anchor(self, unit: KnowledgeUnit) -> datetime:
         return unit.time.event_time or unit.time.published_at
-
-    def _cosine_similarity(self, left: list[float], right: list[float]) -> float:
-        left_norm = math.sqrt(sum(value * value for value in left))
-        right_norm = math.sqrt(sum(value * value for value in right))
-        if left_norm == 0.0 or right_norm == 0.0:
-            raise RuntimeError("cannot compute cosine similarity with zero-length embedding")
-        return sum(a * b for a, b in zip(left, right, strict=True)) / (left_norm * right_norm)

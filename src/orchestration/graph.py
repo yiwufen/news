@@ -16,21 +16,6 @@ from src.intent.models import IntentType, StructuredQuery
 from src.retrieval.knowledge_search import KnowledgeSearchRequest, KnowledgeSearcher
 
 
-def _resolve_retrieval_mode(
-    searcher: KnowledgeSearcher,
-    *,
-    has_direct_articles: bool,
-) -> Literal["hybrid", "bm25_only"]:
-    if has_direct_articles:
-        return "hybrid"
-
-    embedding_client = getattr(searcher, "embedding_client", None)
-    is_configured = getattr(embedding_client, "is_configured", None)
-    if callable(is_configured) and not is_configured():
-        return "bm25_only"
-    return "hybrid"
-
-
 @dataclass
 class PipelineGraphEnhancement:
     graph_result: GraphRetrievalResult
@@ -314,10 +299,6 @@ def run_pipeline(
     request = KnowledgeSearchRequest(
         structured_query=structured_query,
         top_k=20,
-        retrieval_mode=_resolve_retrieval_mode(
-            searcher,
-            has_direct_articles=bool(articles),
-        ),
     )
 
     if articles:

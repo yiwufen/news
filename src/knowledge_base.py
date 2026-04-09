@@ -179,16 +179,6 @@ class KnowledgeUnit(BaseModel):
         return self
 
 
-class KnowledgeUnitEmbedding(BaseModel):
-    """Stored vector index entry for one knowledge unit."""
-
-    ku_id: str
-    embedding_model: str
-    embedding_dim: int
-    embedding: list[float]
-    updated_at: datetime
-
-
 def ensure_datetime(value: str | datetime) -> datetime:
     """Normalize a string or datetime into a timezone-aware datetime."""
     if isinstance(value, datetime):
@@ -360,17 +350,6 @@ class KnowledgeUnitRepository(_SQLiteRepository):
             )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_knowledge_units_unit_type ON knowledge_units(unit_type)"
-            )
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS knowledge_unit_embeddings (
-                    ku_id TEXT PRIMARY KEY,
-                    embedding_model TEXT NOT NULL,
-                    embedding_dim INTEGER NOT NULL,
-                    embedding_json TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-                """
             )
             connection.execute(
                 """
@@ -603,80 +582,6 @@ class KnowledgeUnitRepository(_SQLiteRepository):
         with self._connect() as connection:
             rows = connection.execute(sql, params).fetchall()
         return [(row["ku_id"], float(row["bm25_score"])) for row in rows]
-
-    def save_embeddings(self, entries: Sequence[KnowledgeUnitEmbedding]) -> int:
-        if not entries:
-            return 0
-        rows = [
-            (
-                entry.ku_id,
-                entry.embedding_model,
-                entry.embedding_dim,
-                json.dumps(entry.embedding, ensure_ascii=False),
-                entry.updated_at.isoformat(),
-            )
-            for entry in entries
-        ]
-        with self._connect() as connection:
-            connection.executemany(
-                """
-                INSERT INTO knowledge_unit_embeddings (
-                    ku_id, embedding_model, embedding_dim, embedding_json, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(ku_id) DO UPDATE SET
-                    embedding_model = excluded.embedding_model,
-                    embedding_dim = excluded.embedding_dim,
-                    embedding_json = excluded.embedding_json,
-                    updated_at = excluded.updated_at
-                """,
-                rows,
-            )
-            connection.commit()
-        return len(entries)
-
-    def get_embeddings(
-        self,
-        *,
-        time_range: tuple[str, str] | None = None,
-        event_types: Sequence[str] | None = None,
-        entity_ids: Sequence[str] | None = None,
-        ku_ids: Sequence[str] | None = None,
-        embedding_model: str | None = None,
-    ) -> list[KnowledgeUnitEmbedding]:
-        where_clauses: list[str] = []
-        params: list[Any] = []
-        self._append_filter_clauses(
-            where_clauses,
-            params,
-            alias="ku",
-            time_range=time_range,
-            event_types=event_types,
-            entity_ids=entity_ids,
-            ku_ids=ku_ids,
-        )
-        if embedding_model:
-            where_clauses.append("emb.embedding_model = ?")
-            params.append(embedding_model)
-        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
-        sql = f"""
-            SELECT emb.ku_id, emb.embedding_model, emb.embedding_dim, emb.embedding_json, emb.updated_at
-            FROM knowledge_unit_embeddings AS emb
-            JOIN knowledge_units AS ku ON ku.ku_id = emb.ku_id
-            {where_sql}
-        """
-        with self._connect() as connection:
-            rows = connection.execute(sql, params).fetchall()
-        return [
-            KnowledgeUnitEmbedding(
-                ku_id=row["ku_id"],
-                embedding_model=row["embedding_model"],
-                embedding_dim=int(row["embedding_dim"]),
-                embedding=json.loads(row["embedding_json"]),
-                updated_at=ensure_datetime(row["updated_at"]),
-            )
-            for row in rows
-        ]
 
     def rebuild_fts_index(self) -> int:
         units = self.get_all()
