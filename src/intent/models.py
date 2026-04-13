@@ -80,3 +80,44 @@ class StructuredQuery:
 
     def get_target_entity(self) -> str | None:
         return self.entities[0] if self.entities else None
+
+
+def make_query(
+    entities: list[str],
+    intent: IntentType = IntentType.ENTITY_OVERVIEW,
+    time_range: tuple[str, str] | None = None,
+    event_types: list[str] | None = None,
+) -> StructuredQuery:
+    """Build a StructuredQuery without LLM parsing.
+
+    Convenience helper for agent / programmatic callers that already know
+    the intent, entities, and time constraints.
+
+    Parameters
+    ----------
+    entities:
+        Entity name list, e.g. ``["小米集团"]``.
+    intent:
+        Intent type enum value.  Also accepts the string form
+        (e.g. ``"ENTITY_TIMELINE"``) for backward compatibility.
+    time_range:
+        Optional ``(start_iso, end_iso)`` tuple, e.g.
+        ``("2025-04-01", "2026-04-01")``.
+    event_types:
+        Optional event type filter list.
+    """
+    if isinstance(intent, str):
+        intent = IntentType(intent)
+    tr: TimeRange | None = None
+    if time_range is not None:
+        tr = TimeRange(
+            start=date.fromisoformat(time_range[0]),
+            end=date.fromisoformat(time_range[1]),
+        )
+    return StructuredQuery(
+        intent=intent,
+        entities=entities,
+        time_range=tr,
+        filters=QueryFilters(event_types=event_types),
+        original_query=", ".join(entities),
+    )

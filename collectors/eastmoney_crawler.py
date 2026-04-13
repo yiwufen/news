@@ -16,10 +16,11 @@ import urllib.request
 from pathlib import Path
 import sys
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config import EventType, SourceType
-from database import Database
+from collectors.config import EventType, SourceType
+from collectors.database import Database
 
 # 延迟初始化的日志器
 _logger: logging.Logger | None = None

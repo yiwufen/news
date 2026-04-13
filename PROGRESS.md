@@ -8,7 +8,7 @@
 
 - 把原始消息加工为可检索状态
 - 建立 `KnowledgeUnit` / `EventCluster` / `Entity` 三层知识结构
-- 构建文本、语义、图谱三类正式索引
+- 构建 FTS/BM25 文本索引与图谱索引
 - 为后续 skill 驱动的分析 agent 提供统一知识底座
 
 风险分析、时间线、主题研究、关系扩展等能力均视为后续消费该底座的 skill。
@@ -189,7 +189,8 @@ print(result)
 - 上述入口当前仍可运行
 - `run_pipeline()` 已直接返回知识检索结果，不再兼容旧风险消费链路
 - `run_skill_query()` 已提供稳定的 skill-facing V1 契约，统一返回 `summary` / `capabilities` / `payload`
-- 图谱默认开启；显式传 `graph_enabled=False` 仅用于调试或测试
+- 图谱默认开启；显式传 `graph_enabled=False` 仅用于调试、测试或本地排查
+- `articles=...` 直传路径仅用于 ad-hoc/debug 查询；正式知识库主线应先通过 `run_continuous()` 完成离线入库
 - 在当前 PowerShell heredoc / stdin 场景下，中文查询字符串可能被宿主链路降级成 `?`；做真实命令验证时，优先显式 `load_dotenv('.env')`，并避免依赖终端内联中文传参做最终判断
 - 若要验证中文查询命中，优先在脚本文件中执行，或使用 Unicode 转义字符串，避免把 shell 编码问题误判为意图解析/检索问题
 
@@ -757,3 +758,52 @@ Removed the entire vector search layer, simplified to **BM25 + structured filter
 
 - `uv run pytest` -> 183 passed
 - `uv run pyright .` -> 0 errors
+
+## 2026-04-09 Retrieval-Skill Decoupling Update
+
+### Problem
+
+`run_pipeline` returned an untyped dict. The Skills layer consumed it via 30+ `raw_result.get(...)` calls with hardcoded keys. The orchestration layer (`graph.py`) mixed retrieval orchestration with consumption logic (timeline building, intent-specific output shaping). Adding a new Skill required modifying the orchestration layer.
+
+### Solution
+
+Decoupled the retrieval pipeline from the Skills consumption layer via a typed `PipelineResult` model:
+
+```
+run_pipeline → PipelineResult (typed) → Skills read typed fields
+```
+
+- Orchestration layer only does retrieval orchestration (BM25 + graph), no intent-aware output formatting
+- Skills layer accesses typed fields directly (`result.knowledge_units`, `result.query.intent.value`)
+- Consumption logic (timeline building, focus-cluster selection) removed from graph.py, already existed in Skills layer
+
+### Changes
+
+- **New** `src/orchestration/result.py` — `PipelineResult`, `RetrievalMeta`, `GraphMeta` dataclasses
+- **Rewritten** `src/orchestration/graph.py` — removed 4 functions (`_build_timeline_events`, `_build_pipeline_output`, `_merge_by_id` moved inline, `_select_focus_cluster_for_impact`), simplified `_enhance_with_graph` to be intent-agnostic; 335→150 lines
+- **Rewritten** `src/skills/service.py` — all `raw_result.get(...)` dict access replaced with typed field access; verification logic moved into Skills layer
+- **Cleaned** `src/retrieval/models.py` — removed unused `SearchResult`, `RetrievalRequest`, `RetrievalResult`
+- **Updated** `src/retrieval/__init__.py` — removed legacy exports
+- **Updated** all test files to construct `PipelineResult` instead of dicts
+
+### Regression Checks
+
+- `uv run pytest` -> 183 passed
+- `uv run pyright src/` -> 0 errors
+
+## 2026-04-13 Architecture Cleanup Update
+
+- README and `docs/STATUS_OVERVIEW.md` now describe the actual retrieval
+  mainline as FTS5/BM25 + structured filtering + tiered scoring, with no
+  current vector/hybrid retrieval claims.
+- The `articles=...` direct path is now documented as ad-hoc/debug only; the
+  formal knowledge-base path remains offline ingestion through
+  `run_continuous()`.
+- `graph_enabled=False` is now documented as a test/debug/local-triage switch,
+  not a separate business mode.
+- Skill payload construction has been split out of `src/skills/service.py`
+  into `src/skills/payloads.py`, leaving the service module focused on intent
+  mapping and the stable contract envelope.
+- Chinese guarantee keyword constants were checked as valid UTF-8 and covered
+  by regression tests so rule-based guarantee extraction does not silently
+  regress.

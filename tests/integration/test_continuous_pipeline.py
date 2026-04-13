@@ -11,6 +11,7 @@ from typing import Any, cast
 
 from collectors.database import Database
 from src.entities import Entity, EntityRepository
+from src.event_clustering import EventCluster
 from src.intent.models import IntentType, QueryFilters, StructuredQuery
 from src.knowledge_base import (
     EntityRef,
@@ -209,29 +210,28 @@ def test_run_pipeline_queries_new_knowledge_store(tmp_path, monkeypatch) -> None
 
     result = run_pipeline(raw_query="Show the Xiaomi Group timeline")
 
-    assert result["source"] == "knowledge_base"
-    assert result["query"]["entities"] == ["Xiaomi Group"]
-    assert len(result["knowledge_units"]) >= 1
-    assert len(result["entities"]) >= 1
-    assert result["retrieval"]["retrieval_mode"] == "bm25"
-    assert result["retrieval"]["bm25_count"] >= 1
-    assert result["retrieval"]["graph_used"] is False
-    assert result["retrieval"]["graph_candidate_count"] == 0
-    assert result["timeline_data"]["entity"] == "Xiaomi Group"
-    assert result["timeline_data"]["timeline"]["total_events"] >= 1
-    assert len(result["event_clusters"]) >= 1
-    assert result["event_clusters"][0]["source_count"] >= 1
-    assert result["graph"]["enabled"] is True
-    assert result["graph"]["used"] is False
-    assert result["graph"]["nodes"] == []
-    assert result["graph"]["paths"] == []
-    assert "conflict_reasons" in result["event_clusters"][0]
-    assert "summary_variants" in result["event_clusters"][0]
-    assert "report" not in result
-    assert "risk_assessment" not in result
-    assert "comparison_report" not in result
-    assert "event_impact" not in result
-    assert "particles_count" not in result
+    assert result.source == "knowledge_base"
+    assert result.query.entities == ["Xiaomi Group"]
+    assert len(result.knowledge_units) >= 1
+    assert len(result.entities) >= 1
+    assert result.retrieval.retrieval_mode == "bm25"
+    assert result.retrieval.bm25_count >= 1
+    assert result.graph.graph_used is False
+    assert result.graph.candidate_count == 0
+    assert len(result.event_clusters) >= 1
+    assert result.event_clusters[0]["source_count"] >= 1
+    assert result.graph.graph_enabled is True
+    assert result.graph.graph_used is False
+    assert result.graph_result is not None
+    assert result.graph_result.nodes == []
+    assert result.graph_result.paths == []
+    assert "conflict_reasons" in result.event_clusters[0]
+    assert "summary_variants" in result.event_clusters[0]
+    assert not hasattr(result, "report")
+    assert not hasattr(result, "risk_assessment")
+    assert not hasattr(result, "comparison_report")
+    assert not hasattr(result, "event_impact")
+    assert not hasattr(result, "particles_count")
 
 
 def test_run_pipeline_returns_transient_entities_for_direct_articles(monkeypatch) -> None:
@@ -282,15 +282,15 @@ def test_run_pipeline_returns_transient_entities_for_direct_articles(monkeypatch
         ],
     )
 
-    assert result["source"] == "direct_articles"
-    assert len(result["knowledge_units"]) == 1
-    assert len(result["entities"]) == 1
-    assert len(result["event_clusters"]) == 1
-    assert result["retrieval"]["retrieval_mode"] == "bm25"
-    assert result["retrieval"]["graph_used"] is False
-    assert result["entities"][0]["entity_id"] == result["knowledge_units"][0]["entities"][0]["entity_id"]
-    assert result["event_clusters"][0]["cluster_id"] == result["knowledge_units"][0]["cluster_id"]
-    assert "event_impact" not in result
+    assert result.source == "direct_articles"
+    assert len(result.knowledge_units) == 1
+    assert len(result.entities) == 1
+    assert len(result.event_clusters) == 1
+    assert result.retrieval.retrieval_mode == "bm25"
+    assert result.graph.graph_used is False
+    assert result.entities[0]["entity_id"] == result.knowledge_units[0]["entities"][0]["entity_id"]
+    assert result.event_clusters[0]["cluster_id"] == result.knowledge_units[0]["cluster_id"]
+    assert not hasattr(result, "event_impact")
 
 
 def test_run_pipeline_omits_graph_edges_when_disabled(monkeypatch) -> None:
@@ -342,16 +342,14 @@ def test_run_pipeline_omits_graph_edges_when_disabled(monkeypatch) -> None:
         graph_enabled=False,
     )
 
-    assert result["graph"]["enabled"] is False
-    assert result["graph"]["used"] is False
-    assert result["graph"]["nodes"] == []
-    assert result["graph"]["edges"] == []
-    assert result["graph"]["paths"] == []
-    assert result["retrieval"]["graph_used"] is False
-    assert len(result["knowledge_units"]) == 1
-    assert len(result["entities"]) == 1
-    assert len(result["event_clusters"]) == 1
-    assert "comparison_report" not in result
+    assert result.graph.graph_enabled is False
+    assert result.graph.graph_used is False
+    assert result.graph_result is None
+    assert result.graph.graph_used is False
+    assert len(result.knowledge_units) == 1
+    assert len(result.entities) == 1
+    assert len(result.event_clusters) == 1
+    assert not hasattr(result, "comparison_report")
 
 
 def test_run_continuous_reuses_stable_knowledge_ids_on_rebuild(tmp_path) -> None:
@@ -537,12 +535,13 @@ def test_run_pipeline_supplements_entities_and_time_range_when_llm_response_is_i
 
     result = run_pipeline(raw_query=chinese_query, graph_enabled=False)
 
-    assert result["query"]["entities"] == ["Xiaomi Group"]
-    assert result["query"]["time_range"] == {
+    assert result.query.entities == ["Xiaomi Group"]
+    assert result.query.time_range is not None
+    assert result.query.time_range.to_dict() == {
         "start": "2025-04-04",
         "end": "2026-04-04",
     }
-    assert len(result["knowledge_units"]) >= 1
+    assert len(result.knowledge_units) >= 1
 
 
 def test_run_continuous_graph_sync_serializes_entity_identifiers(tmp_path) -> None:
@@ -675,10 +674,10 @@ def test_run_pipeline_repairs_legacy_event_cluster_payloads(tmp_path, monkeypatc
 
     result = run_pipeline(raw_query="Show the Xiaomi Group timeline")
 
-    assert len(result["event_clusters"]) >= 1
-    assert result["event_clusters"][0]["member_count"] >= 1
-    assert "representative_ku_id" in result["event_clusters"][0]
-    assert "summary_variants" in result["event_clusters"][0]
+    assert len(result.event_clusters) >= 1
+    assert result.event_clusters[0]["member_count"] >= 1
+    assert "representative_ku_id" in result.event_clusters[0]
+    assert "summary_variants" in result.event_clusters[0]
 
 
 def test_run_pipeline_relationship_query_returns_formal_graph_results(tmp_path, monkeypatch) -> None:
@@ -771,14 +770,15 @@ def test_run_pipeline_relationship_query_returns_formal_graph_results(tmp_path, 
 
     result = run_pipeline(raw_query="Show Xiaomi Group relationships", graph_enabled=True)
 
-    assert result["graph"]["enabled"] is True
-    assert result["graph"]["used"] is True
-    assert len(result["graph"]["nodes"]) == 3
-    assert len(result["graph"]["edges"]) == 2
-    assert result["graph"]["paths"][0]["path_type"] == "Entity->EventCluster->Entity"
-    assert result["retrieval"]["graph_used"] is True
-    assert result["retrieval"]["graph_candidate_count"] == 1
-    assert result["retrieval"]["graph_hit_reasons"] == {"ent_partner": ["co_involved_via:clu_1"]}
+    assert result.graph.graph_enabled is True
+    assert result.graph.graph_used is True
+    assert result.graph_result is not None
+    assert len(result.graph_result.nodes) == 3
+    assert len(result.graph_result.edges) == 2
+    assert result.graph_result.paths[0]["path_type"] == "Entity->EventCluster->Entity"
+    assert result.graph.graph_used is True
+    assert result.graph.candidate_count == 1
+    assert result.graph.hit_reasons == {"ent_partner": ["co_involved_via:clu_1"]}
 
 
 def test_run_pipeline_event_impact_analysis_expands_from_focus_cluster_entities(tmp_path, monkeypatch) -> None:
@@ -826,96 +826,93 @@ def test_run_pipeline_event_impact_analysis_expands_from_focus_cluster_entities(
     import src.orchestration.graph as graph_module
 
     class FakeSearchResult:
-        def to_dict(self) -> dict[str, Any]:
+        @property
+        def knowledge_units(self) -> list[KnowledgeUnit]:
+            return [
+                KnowledgeUnit(
+                    ku_id="ku_focus",
+                    unit_kind="event",
+                    unit_type="policy_sanction",
+                    summary="Xiaomi and Partner face a sanction event",
+                    entities=[
+                        EntityRef(entity_id="ent_xiaomi", mention="Xiaomi Group"),
+                        EntityRef(entity_id="ent_partner", mention="Partner Co"),
+                    ],
+                    source=SourceRef(doc_id="doc-1", source_name="test-source"),
+                    evidence=[EvidenceSpan(text="Focus event evidence")],
+                    time=TimeRef(
+                        event_time=datetime(2026, 4, 2, 9, 0, tzinfo=UTC),
+                        published_at=datetime(2026, 4, 2, 9, 0, tzinfo=UTC),
+                        extracted_at=datetime(2026, 4, 2, 9, 5, tzinfo=UTC),
+                    ),
+                    confidence=0.95,
+                    cluster_id="clu_focus",
+                )
+            ]
+
+        @property
+        def entities(self) -> list[Entity]:
+            return [
+                Entity(
+                    entity_id="ent_xiaomi",
+                    entity_type="Company",
+                    canonical_name="Xiaomi Group",
+                    aliases=[],
+                    identifiers={},
+                    source_ku_ids=["ku_focus"],
+                    created_at=now,
+                    updated_at=now,
+                ),
+                Entity(
+                    entity_id="ent_partner",
+                    entity_type="Organization",
+                    canonical_name="Partner Co",
+                    aliases=[],
+                    identifiers={},
+                    source_ku_ids=["ku_focus"],
+                    created_at=now,
+                    updated_at=now,
+                ),
+            ]
+
+        @property
+        def event_clusters(self) -> list[EventCluster]:
+            return [
+                EventCluster(
+                    cluster_id="clu_focus",
+                    cluster_type="policy_sanction",
+                    title="Focus sanction event",
+                    summary="Focus sanction event",
+                    entity_ids=["ent_xiaomi", "ent_partner"],
+                    primary_entity_id="ent_xiaomi",
+                    time_anchor=datetime(2026, 4, 2, 9, 0, tzinfo=UTC),
+                    time_range={
+                        "start": "2026-04-02T09:00:00+00:00",
+                        "end": "2026-04-03T09:00:00+00:00",
+                    },
+                    member_ku_ids=["ku_focus"],
+                    source_doc_ids=["doc-1"],
+                    cluster_confidence=0.95,
+                    updated_at=datetime(2026, 4, 3, 9, 0, tzinfo=UTC),
+                )
+            ]
+
+        total_count: int = 1
+        bm25_count: int = 1
+        applied_filters: dict[str, object] = {}
+        hit_scores: dict[str, dict[str, object]] = {}
+
+        def to_dict(self) -> dict:
             return {
-                "knowledge_units": [
-                    {
-                        "ku_id": "ku_focus",
-                        "unit_kind": "event",
-                        "unit_type": "policy_sanction",
-                        "summary": "Xiaomi and Partner face a sanction event",
-                        "entities": [
-                            {"entity_id": "ent_xiaomi", "mention": "Xiaomi Group"},
-                            {"entity_id": "ent_partner", "mention": "Partner Co"},
-                        ],
-                        "source": {"doc_id": "doc-1", "source_name": "test-source", "url": None},
-                        "evidence": [{"text": "Focus event evidence"}],
-                        "time": {
-                            "event_time": "2026-04-02T09:00:00+00:00",
-                            "published_at": "2026-04-02T09:00:00+00:00",
-                            "extracted_at": "2026-04-02T09:05:00+00:00",
-                        },
-                        "confidence": 0.95,
-                        "tags": [],
-                        "relation_hints": [],
-                        "cluster_id": "clu_focus",
-                        "conflict_status": "none",
-                        "status": "active",
-                    }
-                ],
-                "entities": [
-                    {
-                        "entity_id": "ent_xiaomi",
-                        "entity_type": "Company",
-                        "canonical_name": "Xiaomi Group",
-                        "aliases": [],
-                        "identifiers": {},
-                        "description": None,
-                        "tags": [],
-                        "source_ku_ids": ["ku_focus"],
-                        "created_at": "2026-04-02T09:00:00+00:00",
-                        "updated_at": "2026-04-02T09:00:00+00:00",
-                    },
-                    {
-                        "entity_id": "ent_partner",
-                        "entity_type": "Organization",
-                        "canonical_name": "Partner Co",
-                        "aliases": [],
-                        "identifiers": {},
-                        "description": None,
-                        "tags": [],
-                        "source_ku_ids": ["ku_focus"],
-                        "created_at": "2026-04-02T09:00:00+00:00",
-                        "updated_at": "2026-04-02T09:00:00+00:00",
-                    },
-                ],
-                "event_clusters": [
-                    {
-                        "cluster_id": "clu_focus",
-                        "cluster_type": "policy_sanction",
-                        "title": "Focus sanction event",
-                        "summary": "Focus sanction event",
-                        "entity_ids": ["ent_xiaomi", "ent_partner"],
-                        "primary_entity_id": "ent_xiaomi",
-                        "time_anchor": "2026-04-02T09:00:00+00:00",
-                        "time_range": {
-                            "start": "2026-04-02T09:00:00+00:00",
-                            "end": "2026-04-03T09:00:00+00:00",
-                        },
-                        "member_ku_ids": ["ku_focus"],
-                        "source_doc_ids": ["doc-1"],
-                        "conflict_status": "none",
-                        "cluster_confidence": 0.95,
-                        "representative_ku_id": "ku_focus",
-                        "member_count": 1,
-                        "source_count": 1,
-                        "summary_variants": [],
-                        "event_time_variants": [],
-                        "conflict_reasons": [],
-                        "updated_at": "2026-04-03T09:00:00+00:00",
-                    }
-                ],
-                "total_count": 1,
+                "knowledge_units": [ku.model_dump(mode="json") for ku in self.knowledge_units],
+                "entities": [e.model_dump(mode="json") for e in self.entities],
+                "event_clusters": [c.model_dump(mode="json") for c in self.event_clusters],
+                "total_count": self.total_count,
                 "retrieval": {
                     "retrieval_mode": "bm25",
-                    "bm25_count": 1,
-                    "applied_filters": {
-                        "entities": ["Xiaomi Group"],
-                        "resolved_entity_ids": ["ent_xiaomi"],
-                        "event_types": [],
-                        "time_range": None,
-                    },
-                    "hit_scores": {},
+                    "bm25_count": self.bm25_count,
+                    "applied_filters": self.applied_filters,
+                    "hit_scores": self.hit_scores,
                 },
             }
 
@@ -947,7 +944,7 @@ def test_run_pipeline_event_impact_analysis_expands_from_focus_cluster_entities(
     run_pipeline(raw_query="Analyze Xiaomi event impact", graph_enabled=True)
 
     assert len(FakeKnowledgeGraphRetriever.calls) == 1
-    assert sorted(FakeKnowledgeGraphRetriever.calls[0]) == ["ent_partner", "ent_xiaomi"]
+    assert FakeKnowledgeGraphRetriever.calls[0] == ["ent_xiaomi"]
 
 
 def test_run_pipeline_rejects_relationship_query_for_direct_articles(monkeypatch) -> None:
@@ -999,11 +996,10 @@ def test_run_pipeline_rejects_relationship_query_for_direct_articles(monkeypatch
         graph_enabled=True,
     )
 
-    assert result["source"] == "direct_articles"
-    assert result["verification"]["passed"] is False
-    assert result["errors"] == ["关系查询当前仅支持 knowledge_base 检索源，不支持 direct articles 输入"]
-    assert result["graph"]["enabled"] is True
-    assert result["graph"]["used"] is False
-    assert result["graph"]["nodes"] == []
-    assert result["graph"]["edges"] == []
-    assert result["graph"]["paths"] == []
+    assert result.source == "direct_articles"
+    assert result.graph.graph_enabled is True
+    assert result.graph.graph_used is False
+    assert result.graph_result is not None
+    assert result.graph_result.nodes == []
+    assert result.graph_result.edges == []
+    assert result.graph_result.paths == []

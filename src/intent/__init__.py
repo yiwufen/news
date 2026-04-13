@@ -10,6 +10,7 @@ from src.intent.models import (
     QueryFilters,
     StructuredQuery,
     TimeRange,
+    make_query,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "QueryFilters",
     "StructuredQuery",
     "TimeRange",
+    "make_query",
 ]

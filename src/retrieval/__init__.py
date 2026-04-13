@@ -8,11 +8,6 @@ from src.retrieval.knowledge_search import (
     KnowledgeSearchResult,
     KnowledgeSearcher,
 )
-from src.retrieval.models import (
-    RetrievalRequest,
-    RetrievalResult,
-    SearchResult,
-)
 
 __all__ = [
     "KnowledgeIndexBuilder",
@@ -20,7 +15,4 @@ __all__ = [
     "KnowledgeSearchRequest",
     "KnowledgeSearchResult",
     "rebuild_knowledge_indexes",
-    "RetrievalRequest",
-    "RetrievalResult",
-    "SearchResult",
 ]

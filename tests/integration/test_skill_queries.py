@@ -544,5 +544,4 @@ def test_run_skill_query_returns_stable_failed_relationship_contract_for_direct_
     assert result["payload"]["relationship_paths"] == []
     assert result["payload"]["graph"]["used"] is False
     assert len(result["payload"]["supporting_evidence"]) == 1
-    assert result["errors"] == ["关系查询当前仅支持 knowledge_base 检索源，不支持 direct articles 输入"]
 

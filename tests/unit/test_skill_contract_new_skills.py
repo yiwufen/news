@@ -1,183 +1,213 @@
 from __future__ import annotations
 
+from datetime import date
+
+from src.graph.knowledge_retrieval import GraphRetrievalResult
+from src.intent.models import IntentType, QueryFilters, StructuredQuery, TimeRange
+from src.orchestration.result import GraphMeta, PipelineResult, PipelineSource, RetrievalMeta
 from src.skills.service import run_skill_query
 
 
-def _base_raw_result(*, intent: str) -> dict:
-    return {
-        "request_id": "req-1",
-        "query": {
-            "intent": intent,
-            "entities": ["Xiaomi Group"],
-            "time_range": {
-                "start": "2026-03-01",
-                "end": "2026-04-05",
-            },
-            "filters": {
-                "event_types": ["policy_sanction"],
-                "risk_levels": None,
-                "sources": None,
-                "min_credibility": 0.5,
-                "categories": None,
-            },
-            "original_query": "Show Xiaomi updates",
-            "confidence": 0.9,
+_KNOWLEDGE_UNITS = [
+    {
+        "ku_id": "ku-cluster-new",
+        "unit_kind": "event",
+        "unit_type": "policy_sanction",
+        "summary": "Xiaomi receives a regulatory penalty",
+        "entities": [{"entity_id": "ent-xiaomi", "mention": "Xiaomi Group"}],
+        "source": {"doc_id": "doc-1", "source_name": "test-source", "url": None},
+        "evidence": [{"text": "Xiaomi Group received a penalty."}],
+        "time": {
+            "event_time": "2026-04-02T09:00:00+00:00",
+            "published_at": "2026-04-02T09:00:00+00:00",
+            "extracted_at": "2026-04-02T09:05:00+00:00",
         },
-        "source": "knowledge_base",
-        "retrieval": {
-            "retrieval_mode": "bm25",
-            "bm25_count": 2,
-            "applied_filters": {},
-            "hit_scores": {},
-            "graph_used": True,
+        "confidence": 0.95,
+        "tags": [],
+        "relation_hints": [],
+        "cluster_id": "clu-new",
+        "conflict_status": "possible",
+        "status": "active",
+    },
+    {
+        "ku_id": "ku-cluster-old",
+        "unit_kind": "event",
+        "unit_type": "policy_sanction",
+        "summary": "Xiaomi starts remediation",
+        "entities": [{"entity_id": "ent-xiaomi", "mention": "Xiaomi Group"}],
+        "source": {"doc_id": "doc-2", "source_name": "test-source", "url": None},
+        "evidence": [{"text": "Xiaomi started remediation."}],
+        "time": {
+            "event_time": "2026-03-15T09:00:00+00:00",
+            "published_at": "2026-03-15T09:00:00+00:00",
+            "extracted_at": "2026-03-15T09:05:00+00:00",
         },
-        "graph": {
-            "enabled": True,
-            "used": True,
-            "nodes": [],
-            "edges": [],
-            "paths": [
-                {
-                    "path_type": "Entity->EventCluster->Entity",
-                    "start_entity_id": "ent-xiaomi",
-                    "start_entity_name": "Xiaomi Group",
-                    "cluster_id": "clu-new",
-                    "cluster_title": "Newer Xiaomi cluster",
-                    "cluster_type": "policy_sanction",
-                    "neighbor_entity_id": "ent-partner",
-                    "neighbor_entity_name": "Partner Co",
-                    "member_ku_ids": ["ku-cluster-new"],
-                }
-            ],
-            "summary": {},
+        "confidence": 0.8,
+        "tags": [],
+        "relation_hints": [],
+        "cluster_id": "clu-old",
+        "conflict_status": "none",
+        "status": "active",
+    },
+]
+
+_ENTITIES = [
+    {
+        "entity_id": "ent-xiaomi",
+        "entity_type": "Company",
+        "canonical_name": "Xiaomi Group",
+        "aliases": [],
+        "identifiers": {},
+        "description": None,
+        "tags": [],
+        "source_ku_ids": ["ku-cluster-new"],
+        "created_at": "2026-04-02T09:00:00+00:00",
+        "updated_at": "2026-04-02T09:00:00+00:00",
+    },
+    {
+        "entity_id": "ent-partner",
+        "entity_type": "Organization",
+        "canonical_name": "Partner Co",
+        "aliases": [],
+        "identifiers": {},
+        "description": None,
+        "tags": [],
+        "source_ku_ids": ["ku-cluster-new"],
+        "created_at": "2026-04-02T09:00:00+00:00",
+        "updated_at": "2026-04-02T09:00:00+00:00",
+    },
+]
+
+_EVENT_CLUSTERS = [
+    {
+        "cluster_id": "clu-old",
+        "cluster_type": "policy_sanction",
+        "title": "Older Xiaomi cluster",
+        "summary": "Older Xiaomi cluster",
+        "entity_ids": ["ent-xiaomi"],
+        "primary_entity_id": "ent-xiaomi",
+        "time_anchor": "2026-03-15T09:00:00+00:00",
+        "time_range": {
+            "start": "2026-03-15T09:00:00+00:00",
+            "end": "2026-03-16T09:00:00+00:00",
         },
-        "knowledge_units": [
-            {
-                "ku_id": "ku-cluster-new",
-                "unit_kind": "event",
-                "unit_type": "policy_sanction",
-                "summary": "Xiaomi receives a regulatory penalty",
-                "entities": [{"entity_id": "ent-xiaomi", "mention": "Xiaomi Group"}],
-                "source": {"doc_id": "doc-1", "source_name": "test-source", "url": None},
-                "evidence": [{"text": "Xiaomi Group received a penalty."}],
-                "time": {
-                    "event_time": "2026-04-02T09:00:00+00:00",
-                    "published_at": "2026-04-02T09:00:00+00:00",
-                    "extracted_at": "2026-04-02T09:05:00+00:00",
-                },
-                "confidence": 0.95,
-                "tags": [],
-                "relation_hints": [],
-                "cluster_id": "clu-new",
-                "conflict_status": "possible",
-                "status": "active",
-            },
-            {
-                "ku_id": "ku-cluster-old",
-                "unit_kind": "event",
-                "unit_type": "policy_sanction",
-                "summary": "Xiaomi starts remediation",
-                "entities": [{"entity_id": "ent-xiaomi", "mention": "Xiaomi Group"}],
-                "source": {"doc_id": "doc-2", "source_name": "test-source", "url": None},
-                "evidence": [{"text": "Xiaomi started remediation."}],
-                "time": {
-                    "event_time": "2026-03-15T09:00:00+00:00",
-                    "published_at": "2026-03-15T09:00:00+00:00",
-                    "extracted_at": "2026-03-15T09:05:00+00:00",
-                },
-                "confidence": 0.8,
-                "tags": [],
-                "relation_hints": [],
-                "cluster_id": "clu-old",
-                "conflict_status": "none",
-                "status": "active",
-            },
-        ],
-        "entities": [
-            {
-                "entity_id": "ent-xiaomi",
-                "entity_type": "Company",
-                "canonical_name": "Xiaomi Group",
-                "aliases": [],
-                "identifiers": {},
-                "description": None,
-                "tags": [],
-                "source_ku_ids": ["ku-cluster-new"],
-                "created_at": "2026-04-02T09:00:00+00:00",
-                "updated_at": "2026-04-02T09:00:00+00:00",
-            },
-            {
-                "entity_id": "ent-partner",
-                "entity_type": "Organization",
-                "canonical_name": "Partner Co",
-                "aliases": [],
-                "identifiers": {},
-                "description": None,
-                "tags": [],
-                "source_ku_ids": ["ku-cluster-new"],
-                "created_at": "2026-04-02T09:00:00+00:00",
-                "updated_at": "2026-04-02T09:00:00+00:00",
-            },
-        ],
-        "event_clusters": [
-            {
-                "cluster_id": "clu-old",
-                "cluster_type": "policy_sanction",
-                "title": "Older Xiaomi cluster",
-                "summary": "Older Xiaomi cluster",
-                "entity_ids": ["ent-xiaomi"],
-                "primary_entity_id": "ent-xiaomi",
-                "time_anchor": "2026-03-15T09:00:00+00:00",
-                "time_range": {
-                    "start": "2026-03-15T09:00:00+00:00",
-                    "end": "2026-03-16T09:00:00+00:00",
-                },
-                "member_ku_ids": ["ku-cluster-old"],
-                "source_doc_ids": ["doc-2"],
-                "conflict_status": "none",
-                "cluster_confidence": 0.8,
-                "representative_ku_id": "ku-cluster-old",
-                "member_count": 1,
-                "source_count": 1,
-                "summary_variants": [],
-                "event_time_variants": [],
-                "conflict_reasons": [],
-                "updated_at": "2026-03-16T09:00:00+00:00",
-            },
-            {
-                "cluster_id": "clu-new",
-                "cluster_type": "policy_sanction",
-                "title": "Newer Xiaomi cluster",
-                "summary": "Newer Xiaomi cluster",
-                "entity_ids": ["ent-xiaomi", "ent-partner"],
-                "primary_entity_id": "ent-xiaomi",
-                "time_anchor": "2026-04-02T09:00:00+00:00",
-                "time_range": {
-                    "start": "2026-04-02T09:00:00+00:00",
-                    "end": "2026-04-03T09:00:00+00:00",
-                },
-                "member_ku_ids": ["ku-cluster-new"],
-                "source_doc_ids": ["doc-1"],
-                "conflict_status": "possible",
-                "cluster_confidence": 0.95,
-                "representative_ku_id": "ku-cluster-new",
-                "member_count": 1,
-                "source_count": 1,
-                "summary_variants": [],
-                "event_time_variants": [],
-                "conflict_reasons": [],
-                "updated_at": "2026-04-03T09:00:00+00:00",
-            },
-        ],
-        "timeline_data": {},
-        "total_count": 6,
-        "verification": {"passed": True, "retry_count": 0, "issues": []},
-        "errors": [],
+        "member_ku_ids": ["ku-cluster-old"],
+        "source_doc_ids": ["doc-2"],
+        "conflict_status": "none",
+        "cluster_confidence": 0.8,
+        "representative_ku_id": "ku-cluster-old",
+        "member_count": 1,
+        "source_count": 1,
+        "summary_variants": [],
+        "event_time_variants": [],
+        "conflict_reasons": [],
+        "updated_at": "2026-03-16T09:00:00+00:00",
+    },
+    {
+        "cluster_id": "clu-new",
+        "cluster_type": "policy_sanction",
+        "title": "Newer Xiaomi cluster",
+        "summary": "Newer Xiaomi cluster",
+        "entity_ids": ["ent-xiaomi", "ent-partner"],
+        "primary_entity_id": "ent-xiaomi",
+        "time_anchor": "2026-04-02T09:00:00+00:00",
+        "time_range": {
+            "start": "2026-04-02T09:00:00+00:00",
+            "end": "2026-04-03T09:00:00+00:00",
+        },
+        "member_ku_ids": ["ku-cluster-new"],
+        "source_doc_ids": ["doc-1"],
+        "conflict_status": "possible",
+        "cluster_confidence": 0.95,
+        "representative_ku_id": "ku-cluster-new",
+        "member_count": 1,
+        "source_count": 1,
+        "summary_variants": [],
+        "event_time_variants": [],
+        "conflict_reasons": [],
+        "updated_at": "2026-04-03T09:00:00+00:00",
+    },
+]
+
+_GRAPH_PATHS = [
+    {
+        "path_type": "Entity->EventCluster->Entity",
+        "start_entity_id": "ent-xiaomi",
+        "start_entity_name": "Xiaomi Group",
+        "cluster_id": "clu-new",
+        "cluster_title": "Newer Xiaomi cluster",
+        "cluster_type": "policy_sanction",
+        "neighbor_entity_id": "ent-partner",
+        "neighbor_entity_name": "Partner Co",
+        "member_ku_ids": ["ku-cluster-new"],
     }
+]
+
+
+def _make_pipeline_result(
+    *,
+    intent: str,
+    source: PipelineSource = "knowledge_base",
+    knowledge_units: list[dict] | None = None,
+    entities: list[dict] | None = None,
+    event_clusters: list[dict] | None = None,
+    query_entities: list[str] | None = None,
+    query_filters: QueryFilters | None = None,
+    graph_result: GraphRetrievalResult | None = None,
+    graph_used: bool = True,
+    total_count: int = 6,
+) -> PipelineResult:
+    """Build a PipelineResult for monkeypatching run_pipeline in tests."""
+    effective_filters = query_filters or QueryFilters(event_types=["policy_sanction"])
+
+    default_graph_result = GraphRetrievalResult(
+        used=graph_used,
+        nodes=[
+            {"id": "ent-xiaomi", "type": "Entity", "name": "Xiaomi Group"},
+            {"id": "clu-new", "type": "EventCluster", "name": "Newer Xiaomi cluster"},
+            {"id": "ent-partner", "type": "Entity", "name": "Partner Co"},
+        ],
+        edges=[
+            {"source": "ent-xiaomi", "target": "clu-new", "type": "INVOLVED_IN"},
+            {"source": "ent-partner", "target": "clu-new", "type": "INVOLVED_IN"},
+        ],
+        paths=list(_GRAPH_PATHS),
+        summary={},
+    )
+
+    return PipelineResult(
+        request_id="req-1",
+        query=StructuredQuery(
+            intent=IntentType(intent),
+            entities=query_entities or ["Xiaomi Group"],
+            time_range=TimeRange(
+                start=date(2026, 3, 1),
+                end=date(2026, 4, 5),
+            ),
+            filters=effective_filters,
+            original_query="Show Xiaomi updates",
+            confidence=0.9,
+        ),
+        source=source,
+        knowledge_units=knowledge_units if knowledge_units is not None else list(_KNOWLEDGE_UNITS),
+        entities=entities if entities is not None else list(_ENTITIES),
+        event_clusters=event_clusters if event_clusters is not None else list(_EVENT_CLUSTERS),
+        total_count=total_count,
+        retrieval=RetrievalMeta(
+            retrieval_mode="bm25",
+            bm25_count=2,
+        ),
+        graph=GraphMeta(
+            graph_enabled=True,
+            graph_used=graph_used,
+        ),
+        graph_result=graph_result if graph_result is not None else default_graph_result,
+        errors=[],
+    )
 
 
 def test_run_skill_query_maps_risk_assessment_to_risk_payload(monkeypatch) -> None:
-    raw_result = _base_raw_result(intent="RISK_ASSESSMENT")
+    raw_result = _make_pipeline_result(intent="RISK_ASSESSMENT")
     monkeypatch.setattr("src.skills.service.run_pipeline", lambda **_: raw_result)
 
     result = run_skill_query(raw_query="Assess Xiaomi risk")
@@ -194,9 +224,7 @@ def test_run_skill_query_maps_risk_assessment_to_risk_payload(monkeypatch) -> No
 
 
 def test_run_skill_query_builds_guarantee_analysis_from_mainline_clusters(monkeypatch) -> None:
-    raw_result = _base_raw_result(intent="GUARANTEE_ANALYSIS")
-    raw_result["query"]["entities"] = ["A Holdings"]
-    raw_result["entities"] = [
+    guarantee_entities = [
         {
             "entity_id": "ent-a",
             "entity_type": "Company",
@@ -234,7 +262,7 @@ def test_run_skill_query_builds_guarantee_analysis_from_mainline_clusters(monkey
             "updated_at": "2026-04-01T09:00:00+00:00",
         },
     ]
-    raw_result["knowledge_units"] = [
+    guarantee_units = [
         {
             "ku_id": "ku-ab",
             "unit_kind": "event",
@@ -305,7 +333,7 @@ def test_run_skill_query_builds_guarantee_analysis_from_mainline_clusters(monkey
             "status": "active",
         },
     ]
-    raw_result["event_clusters"] = [
+    guarantee_clusters = [
         {
             "cluster_id": "clu-ab",
             "cluster_type": "guarantee",
@@ -370,6 +398,13 @@ def test_run_skill_query_builds_guarantee_analysis_from_mainline_clusters(monkey
             "updated_at": "2026-04-04T10:00:00+00:00",
         },
     ]
+    raw_result = _make_pipeline_result(
+        intent="GUARANTEE_ANALYSIS",
+        query_entities=["A Holdings"],
+        entities=guarantee_entities,
+        knowledge_units=guarantee_units,
+        event_clusters=guarantee_clusters,
+    )
     monkeypatch.setattr("src.skills.service.run_pipeline", lambda **_: raw_result)
 
     result = run_skill_query(raw_query="Analyze A Holdings guarantee network")
@@ -383,8 +418,10 @@ def test_run_skill_query_builds_guarantee_analysis_from_mainline_clusters(monkey
 
 
 def test_run_skill_query_maps_topic_research_to_topic_payload(monkeypatch) -> None:
-    raw_result = _base_raw_result(intent="TOPIC_RESEARCH")
-    raw_result["query"]["filters"]["categories"] = ["新能源", "光伏"]
+    raw_result = _make_pipeline_result(
+        intent="TOPIC_RESEARCH",
+        query_filters=QueryFilters(event_types=["policy_sanction"], categories=["新能源", "光伏"]),
+    )
     monkeypatch.setattr("src.skills.service.run_pipeline", lambda **_: raw_result)
 
     result = run_skill_query(raw_query="分析新能源行业的发展趋势")
@@ -399,7 +436,7 @@ def test_run_skill_query_maps_topic_research_to_topic_payload(monkeypatch) -> No
 
 
 def test_run_skill_query_maps_event_impact_analysis_to_impact_payload(monkeypatch) -> None:
-    raw_result = _base_raw_result(intent="EVENT_IMPACT_ANALYSIS")
+    raw_result = _make_pipeline_result(intent="EVENT_IMPACT_ANALYSIS")
     monkeypatch.setattr("src.skills.service.run_pipeline", lambda **_: raw_result)
 
     result = run_skill_query(raw_query="分析小米集团事件的影响")
@@ -417,10 +454,12 @@ def test_run_skill_query_maps_event_impact_analysis_to_impact_payload(monkeypatc
 
 
 def test_run_skill_query_event_impact_analysis_empty_clusters(monkeypatch) -> None:
-    raw_result = _base_raw_result(intent="EVENT_IMPACT_ANALYSIS")
-    raw_result["event_clusters"] = []
-    raw_result["knowledge_units"] = []
-    raw_result["entities"] = []
+    raw_result = _make_pipeline_result(
+        intent="EVENT_IMPACT_ANALYSIS",
+        event_clusters=[],
+        knowledge_units=[],
+        entities=[],
+    )
     monkeypatch.setattr("src.skills.service.run_pipeline", lambda **_: raw_result)
 
     result = run_skill_query(raw_query="分析事件影响")
@@ -434,9 +473,7 @@ def test_run_skill_query_event_impact_analysis_empty_clusters(monkeypatch) -> No
 
 def test_run_skill_query_event_impact_analysis_with_indirect_impact(monkeypatch) -> None:
     """Test event impact analysis with indirect impact paths."""
-    raw_result = _base_raw_result(intent="EVENT_IMPACT_ANALYSIS")
-    # Add an entity outside the focus cluster
-    raw_result["entities"].append({
+    extra_entity = {
         "entity_id": "ent-supplier",
         "entity_type": "Company",
         "canonical_name": "Supplier Co",
@@ -447,9 +484,8 @@ def test_run_skill_query_event_impact_analysis_with_indirect_impact(monkeypatch)
         "source_ku_ids": ["ku-supplier"],
         "created_at": "2026-04-02T09:00:00+00:00",
         "updated_at": "2026-04-02T09:00:00+00:00",
-    })
-    # Add a path to an entity NOT in the focus cluster
-    raw_result["graph"]["paths"].append({
+    }
+    extra_path = {
         "path_type": "Entity->EventCluster->Entity",
         "start_entity_id": "ent-xiaomi",
         "start_entity_name": "Xiaomi Group",
@@ -459,7 +495,29 @@ def test_run_skill_query_event_impact_analysis_with_indirect_impact(monkeypatch)
         "neighbor_entity_id": "ent-supplier",
         "neighbor_entity_name": "Supplier Co",
         "member_ku_ids": ["ku-supplier"],
-    })
+    }
+    raw_result = _make_pipeline_result(
+        intent="EVENT_IMPACT_ANALYSIS",
+        entities=[*_ENTITIES, extra_entity],
+        graph_result=GraphRetrievalResult(
+            used=True,
+            nodes=[
+                {"id": "ent-xiaomi", "type": "Entity", "name": "Xiaomi Group"},
+                {"id": "clu-new", "type": "EventCluster", "name": "Newer Xiaomi cluster"},
+                {"id": "ent-partner", "type": "Entity", "name": "Partner Co"},
+                {"id": "clu-supplier", "type": "EventCluster", "name": "Supplier relationship"},
+                {"id": "ent-supplier", "type": "Entity", "name": "Supplier Co"},
+            ],
+            edges=[
+                {"source": "ent-xiaomi", "target": "clu-new", "type": "INVOLVED_IN"},
+                {"source": "ent-partner", "target": "clu-new", "type": "INVOLVED_IN"},
+                {"source": "ent-xiaomi", "target": "clu-supplier", "type": "INVOLVED_IN"},
+                {"source": "ent-supplier", "target": "clu-supplier", "type": "INVOLVED_IN"},
+            ],
+            paths=[*_GRAPH_PATHS, extra_path],
+            summary={},
+        ),
+    )
     monkeypatch.setattr("src.skills.service.run_pipeline", lambda **_: raw_result)
 
     result = run_skill_query(raw_query="分析小米集团事件的影响")

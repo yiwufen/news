@@ -13,7 +13,7 @@
 - `EventCluster` 保守归并
 - `Entity` 标准化
 - 图谱更新
-- 文本、语义、图谱多索引建库
+- FTS/BM25 文本索引与图谱索引建库
 
 第一版图谱是正式产物，采用 `Entity + EventCluster` 双核心建模；底层证据统一由 statement-level `KnowledgeUnit` 承载。
 
@@ -36,8 +36,7 @@
 当前检索主线已包含：
 
 - `KnowledgeUnit` FTS 稀疏索引
-- `KnowledgeUnit` embedding 向量索引
-- BM25 / 向量召回与融合排序
+- BM25 + 结构化过滤 + 分层打分
 - `Entity -> EventCluster` 图谱增强检索与正式关系结果集输出
 - 旧 SQLite 库的检索物化状态自愈：仓库打开时会自动回填缺失的 `entity_ids` 并重建缺失的 FTS 行，避免出现“图里有实体、知识库检索为空”的状态漂移
 
@@ -115,9 +114,9 @@ print(result)
   - `GUARANTEE_ANALYSIS` - 担保分析
 - `run_pipeline(graph_enabled=True)` 会在主检索结果上叠加正式图谱增强，返回稳定的 `graph.nodes` / `graph.edges` / `graph.paths`
 - `run_skill_query()` 会返回统一的 `contract_version` / `summary` / `capabilities` / `payload` 结构，并显式区分 `knowledge_base` 与 `direct_articles` 的图谱能力差异
-- 图谱默认开启
+- 图谱默认开启；显式传 `graph_enabled=False` 仅用于测试、调试或本地排查，不代表业务语义
+- `articles=...` 直传路径仅用于 ad-hoc/debug 查询，会在线临时抽取并以内存方式检索；正式知识库主线应先通过 `run_continuous()` 入库
 - 若未配置 `ANTHROPIC_API_KEY`，`run_pipeline()` 的意图解析会按 fail-fast 约束直接失败
-- 若未配置 embedding 凭据，`run_pipeline()` 与 `run_skill_query()` 都会退化到 BM25-only 检索，而不会让默认知识库查询路径整体失败
 
 ### Windows 启动脚本
 

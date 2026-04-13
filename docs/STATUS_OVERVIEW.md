@@ -39,9 +39,7 @@ Legacy risk-oriented outputs are no longer part of the supported public interfac
 - `knowledge_units`
 - `entities`
 - `event_clusters`
-- `timeline_data`
 - `total_count`
-- `verification`
 - `errors`
 
 It does not return legacy wrapper fields such as `particles_count`, `report`, `risk_assessment`, `comparison_report`, or `event_impact`.
@@ -67,12 +65,20 @@ The following are already on the mainline:
 - fail-fast `KnowledgeUnit` extraction
 - conservative entity resolution and event clustering
 - Neo4j sync for `Entity` and `EventCluster`
-- FTS5 plus embedding-backed retrieval storage
-- BM25 + vector hybrid retrieval with fusion ranking
+- FTS5 retrieval storage
+- BM25 + structured filtering + tiered scoring
 - graph-enhanced retrieval over `Entity -> EventCluster` with formal `nodes` / `edges` / `paths` output
 - timeline projection from retrieved knowledge units
 - stable skill-facing contract V1 for `ENTITY_OVERVIEW`, `ENTITY_TIMELINE`, `EVENT_ANALYSIS`, `RELATIONSHIP_QUERY`, `RISK_ASSESSMENT`, and `GUARANTEE_ANALYSIS`
 - self-healing repair for older materialized rows and legacy cluster payloads
+
+`articles=...` direct input remains an ad-hoc/debug path. It performs temporary
+online extraction and in-memory retrieval, does not use graph enhancement, and
+is not the formal knowledge-base ingestion path.
+
+`graph_enabled=False` is reserved for tests, debugging, and local operational
+triage. The supported mainline treats graph sync/retrieval as enabled by
+default and fail-open on read-path graph errors.
 
 ## Remaining Product Work
 

@@ -17,13 +17,14 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
 
-from config import (
+from collectors.config import (
     COMPANIES, GOVERNMENTS, TECHNOLOGIES, REGIONS,
     NEWS_SOURCES, EVENT_TYPE_WEIGHTS, EventType, GENERATION_CONFIG
 )
-from database import Database
+from collectors.database import Database
 from src.llm import create_offline_llm_client, get_offline_max_tokens
 
 from anthropic.types import TextBlock
