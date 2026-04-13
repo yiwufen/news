@@ -1,4 +1,9 @@
-"""Core data models for intent parsing and structured retrieval queries."""
+"""Core data models for structured retrieval queries.
+
+Moved from ``src.intent.models`` — intent parsing (LLM) has been removed
+from the retrieval service.  These pure-data models are kept because the
+retrieval pipeline still consumes them.
+"""
 
 from dataclasses import dataclass
 from datetime import date
@@ -59,7 +64,7 @@ class QueryFilters:
 
 @dataclass
 class StructuredQuery:
-    """Normalized query object produced by the intent layer."""
+    """Normalized query object produced by the caller."""
 
     intent: IntentType
     entities: list[str]
@@ -67,6 +72,8 @@ class StructuredQuery:
     filters: QueryFilters
     original_query: str
     confidence: float = 1.0
+    hops: int = 1  # Entity-to-Entity hop count (1=default=current behavior, 2-5)
+    target_entity: str | None = None  # For A-B relationship path queries
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -76,10 +83,12 @@ class StructuredQuery:
             "filters": self.filters.to_dict(),
             "original_query": self.original_query,
             "confidence": self.confidence,
+            "hops": self.hops,
+            "target_entity": self.target_entity,
         }
 
     def get_target_entity(self) -> str | None:
-        return self.entities[0] if self.entities else None
+        return self.target_entity
 
 
 def make_query(
@@ -87,11 +96,13 @@ def make_query(
     intent: IntentType = IntentType.ENTITY_OVERVIEW,
     time_range: tuple[str, str] | None = None,
     event_types: list[str] | None = None,
+    hops: int = 1,
+    target_entity: str | None = None,
 ) -> StructuredQuery:
     """Build a StructuredQuery without LLM parsing.
 
-    Convenience helper for agent / programmatic callers that already know
-    the intent, entities, and time constraints.
+    Convenience helper for programmatic callers (CLI, agents) that already
+    know the intent, entities, and time constraints.
 
     Parameters
     ----------
@@ -99,12 +110,16 @@ def make_query(
         Entity name list, e.g. ``["小米集团"]``.
     intent:
         Intent type enum value.  Also accepts the string form
-        (e.g. ``"ENTITY_TIMELINE"``) for backward compatibility.
+        (e.g. ``"ENTITY_OVERVIEW"``) for backward compatibility.
     time_range:
         Optional ``(start_iso, end_iso)`` tuple, e.g.
         ``("2025-04-01", "2026-04-01")``.
     event_types:
         Optional event type filter list.
+    hops:
+        Entity-to-Entity hop count for graph expansion (1-5, default: 1).
+    target_entity:
+        For A-B relationship path queries, the second entity name.
     """
     if isinstance(intent, str):
         intent = IntentType(intent)
@@ -120,4 +135,6 @@ def make_query(
         time_range=tr,
         filters=QueryFilters(event_types=event_types),
         original_query=", ".join(entities),
+        hops=hops,
+        target_entity=target_entity,
     )

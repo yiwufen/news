@@ -12,7 +12,12 @@ from typing import Any, ContextManager, Iterable, Protocol, cast
 from src.entities import Entity, EntityRepository
 from src.event_clustering import EventCluster, EventClusterRepository
 from src.graph.connection import get_connection
-from src.intent.models import StructuredQuery
+from src.schemas.query import StructuredQuery
+
+
+DEFAULT_HOPS = 1
+MAX_HOPS = 5
+MAX_PATH_RESULTS = 50
 
 
 class GraphSessionLike(Protocol):
@@ -36,9 +41,15 @@ class GraphRetrievalResult:
     expanded_clusters: list[EventCluster] = field(default_factory=list)
     hit_reasons: dict[str, list[str]] = field(default_factory=dict)
     candidate_count: int = 0
-    expanded_cluster_count: int = 0
-    expanded_entity_count: int = 0
     errors: list[str] = field(default_factory=list)
+
+    @property
+    def expanded_cluster_count(self) -> int:
+        return len(self.expanded_clusters)
+
+    @property
+    def expanded_entity_count(self) -> int:
+        return len(self.expanded_entities)
 
     def to_graph_dict(self, enabled: bool) -> dict[str, Any]:
         return {
@@ -83,6 +94,23 @@ def _build_summary(
     }
 
 
+def _build_path_summary(
+    entity_a: Entity,
+    entity_b: Entity,
+    *,
+    cluster_count: int = 0,
+    entity_count: int = 0,
+    path_count: int = 0,
+) -> dict[str, Any]:
+    return {
+        "start_entities": [{"entity_id": entity_a.entity_id, "name": entity_a.canonical_name}],
+        "target_entity": {"entity_id": entity_b.entity_id, "name": entity_b.canonical_name},
+        "event_cluster_count": cluster_count,
+        "expanded_entity_count": entity_count,
+        "path_count": path_count,
+    }
+
+
 def _parse_date(value: str | None) -> date | None:
     if not value:
         return None
@@ -116,12 +144,16 @@ class KnowledgeGraphRetriever:
         if not start_entities:
             return GraphRetrievalResult.empty(start_entities=[])
 
+        effective_hops = max(min(structured_query.hops, MAX_HOPS), 1)
+        max_edges = 2 * effective_hops - 1  # N Entity-hops = 2N-1 max edges to farthest EC
+
         try:
             with self.connection.session() as session:
                 raw_records = session.run(
-                    """
-                    MATCH (start:Entity)-[:INVOLVED_IN]->(cluster:EventCluster)
+                    f"""
+                    MATCH path = (start:Entity)-[:INVOLVED_IN*1..{max_edges}]-(cluster:EventCluster)
                     WHERE start.id IN $start_entity_ids
+                    WITH start, cluster
                     OPTIONAL MATCH (cluster)<-[:INVOLVED_IN]-(neighbor:Entity)
                     RETURN
                         start.id AS start_entity_id,
@@ -210,8 +242,6 @@ class KnowledgeGraphRetriever:
             expanded_clusters=list(cluster_map.values()),
             hit_reasons=hit_reasons,
             candidate_count=candidate_count,
-            expanded_cluster_count=len(cluster_map),
-            expanded_entity_count=len(expanded_entities),
         )
 
     def _group_cluster_rows(self, records: list[Any]) -> dict[str, dict[str, Any]]:
@@ -408,3 +438,152 @@ class KnowledgeGraphRetriever:
                         f"co_involved_via:{cluster.cluster_id}"
                     )
         return paths, hit_reasons
+
+    def search_relationship_path(
+        self,
+        *,
+        entity_a: Entity,
+        entity_b: Entity,
+        max_hops: int = 3,
+    ) -> GraphRetrievalResult:
+        """Find all paths between two entities in the bipartite graph.
+
+        Returns paths connecting entity_a to entity_b within max_hops Entity-to-Entity distance.
+        Each path alternates between Entity and EventCluster nodes.
+        """
+        if entity_a.entity_id == entity_b.entity_id:
+            return GraphRetrievalResult(
+                used=True,
+                candidate_count=0,
+                summary=_build_path_summary(entity_a, entity_b),
+            )
+
+        effective_hops = max(min(max_hops, MAX_HOPS), 1)
+        max_edges = 2 * effective_hops  # N Entity-hops = 2N max edges for A-to-B path
+
+        try:
+            with self.connection.session() as session:
+                raw_records = session.run(
+                    f"""
+                    MATCH path = (a:Entity {{id: $entity_a_id}})-[:INVOLVED_IN*1..{max_edges}]-(b:Entity {{id: $entity_b_id}})
+                    WHERE a.id <> b.id
+                    RETURN
+                        [n IN nodes(path) | {{
+                            id: n.id,
+                            type: CASE WHEN n:Entity THEN 'Entity' ELSE 'EventCluster' END,
+                            name: coalesce(n.name, n.title),
+                            entity_type: n.entity_type,
+                            cluster_type: n.cluster_type
+                        }}] AS path_nodes,
+                        [r IN relationships(path) | type(r)] AS path_rels,
+                        length(path) AS path_length
+                    ORDER BY path_length
+                    LIMIT {MAX_PATH_RESULTS}
+                    """,
+                    entity_a_id=entity_a.entity_id,
+                    entity_b_id=entity_b.entity_id,
+                )
+                records = list(cast(Iterable[Any], raw_records))
+        except Exception as exc:
+            return GraphRetrievalResult(
+                used=False,
+                errors=[str(exc)],
+                summary=_build_path_summary(entity_a, entity_b),
+            )
+
+        if not records:
+            return GraphRetrievalResult(
+                used=True,
+                candidate_count=0,
+                summary=_build_path_summary(entity_a, entity_b),
+            )
+
+        nodes_map: dict[str, dict[str, Any]] = {}
+        edges_set: set[tuple[str, str]] = set()
+        all_paths: list[dict[str, Any]] = []
+        expanded_entity_ids: set[str] = set()
+        expanded_cluster_ids: set[str] = set()
+
+        for record in records:
+            path_nodes = record["path_nodes"]
+            path_rels = record["path_rels"]
+            path_length = record["path_length"]
+
+            for node in path_nodes:
+                node_id = node["id"]
+                if node_id not in nodes_map:
+                    nodes_map[node_id] = {
+                        "id": node_id,
+                        "type": node["type"],
+                        "name": node["name"],
+                        **({"entity_type": node["entity_type"]} if node["type"] == "Entity" else {}),
+                        **({"cluster_type": node["cluster_type"]} if node["type"] == "EventCluster" else {}),
+                    }
+                if node["type"] == "Entity":
+                    expanded_entity_ids.add(node_id)
+                else:
+                    expanded_cluster_ids.add(node_id)
+
+            for i in range(len(path_nodes) - 1):
+                edge = (path_nodes[i]["id"], path_nodes[i + 1]["id"])
+                edges_set.add(edge)
+
+            all_paths.append({
+                "path_type": "relationship_path",
+                "path_length": path_length,
+                "path_nodes": path_nodes,
+                "path_rels": path_rels,
+                "entity_hops": (path_length // 2) + 1 if path_length >= 2 else 0,
+            })
+
+        expanded_entities = self.entity_repo.get_by_ids(list(expanded_entity_ids))
+        expanded_clusters = self.cluster_repo.get_by_ids(list(expanded_cluster_ids))
+
+        entity_map = {e.entity_id: e for e in expanded_entities}
+        cluster_map = {c.cluster_id: c for c in expanded_clusters}
+
+        nodes: list[dict[str, Any]] = []
+        for node_id, node in nodes_map.items():
+            if node["type"] == "Entity" and node_id in entity_map:
+                entity = entity_map[node_id]
+                nodes.append({
+                    "id": entity.entity_id,
+                    "type": "Entity",
+                    "name": entity.canonical_name,
+                    "entity_type": entity.entity_type,
+                    "is_start": entity.entity_id == entity_a.entity_id,
+                    "is_target": entity.entity_id == entity_b.entity_id,
+                })
+            elif node["type"] == "EventCluster" and node_id in cluster_map:
+                cluster = cluster_map[node_id]
+                nodes.append({
+                    "id": cluster.cluster_id,
+                    "type": "EventCluster",
+                    "name": cluster.title,
+                    "cluster_type": cluster.cluster_type,
+                    "member_ku_ids": cluster.member_ku_ids,
+                })
+
+        edges: list[dict[str, Any]] = []
+        for source, target in edges_set:
+            edges.append({
+                "source": source,
+                "target": target,
+                "type": "INVOLVED_IN",
+            })
+
+        return GraphRetrievalResult(
+            used=True,
+            nodes=nodes,
+            edges=edges,
+            paths=all_paths,
+            summary=_build_path_summary(
+                entity_a, entity_b,
+                cluster_count=len(expanded_clusters),
+                entity_count=len(expanded_entities),
+                path_count=len(all_paths),
+            ),
+            expanded_entities=expanded_entities,
+            expanded_clusters=expanded_clusters,
+            candidate_count=len(expanded_clusters),
+        )

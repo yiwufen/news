@@ -15,7 +15,7 @@ from src.entities import (
     build_entity_name_variants,
 )
 from src.event_clustering import EventCluster, EventClusterRepository, EventClusterer
-from src.intent.models import StructuredQuery
+from src.schemas.query import StructuredQuery
 from src.knowledge_base import (
     KnowledgeUnit,
     KnowledgeUnitRepository,

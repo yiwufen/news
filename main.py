@@ -1,6 +1,4 @@
-def main():
-    print("Hello from news-collector!")
-
+from src.cli import main
 
 if __name__ == "__main__":
     main()

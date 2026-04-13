@@ -4,14 +4,13 @@ Knowledge retrieval entrypoint for ``run_pipeline``.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 from uuid import uuid4
 
 from src.entities import EntityRepository
 from src.graph import GraphRetrievalResult, KnowledgeGraphRetriever
-from src.intent import IntentClassifier
-from src.intent.models import StructuredQuery
+from src.schemas.query import IntentType, StructuredQuery
 from src.orchestration.result import GraphMeta, PipelineResult, RetrievalMeta
 from src.retrieval.knowledge_search import KnowledgeSearchRequest, KnowledgeSearcher
 
@@ -56,8 +55,32 @@ def _enhance_with_graph(
             errors=[],
         )
 
-    retriever = KnowledgeGraphRetriever(db_path=db_path)
-    graph_result = retriever.search(structured_query, start_entities=start_entities)
+    retriever = KnowledgeGraphRetriever(db_path=db_path, entity_repo=entity_repo)
+
+    # Handle A-B relationship path queries
+    if (
+        structured_query.target_entity
+        and structured_query.intent == IntentType.RELATIONSHIP_QUERY
+        and len(start_entities) == 1
+    ):
+        target_entities = entity_repo.find_by_names([structured_query.target_entity])
+        if not target_entities:
+            return _GraphEnhancement(
+                graph_result=GraphRetrievalResult.empty(start_entities=start_entities),
+                entities=[],
+                event_clusters=[],
+                errors=[f"[graph] target entity '{structured_query.target_entity}' not found"],
+            )
+        graph_result = retriever.search_relationship_path(
+            entity_a=start_entities[0],
+            entity_b=target_entities[0],
+            max_hops=structured_query.hops,
+        )
+    else:
+        graph_result = retriever.search(
+            structured_query,
+            start_entities=start_entities,
+        )
     return _GraphEnhancement(
         graph_result=graph_result,
         entities=[entity.model_dump(mode="json") for entity in graph_result.expanded_entities],
@@ -85,10 +108,11 @@ def _merge_by_id(
 
 
 def run_pipeline(
-    raw_query: str = "",
     articles: list[dict] | None = None,
     graph_enabled: bool = True,
     structured_query: StructuredQuery | None = None,
+    top_k: int = 20,
+    hops: int | None = None,
 ) -> PipelineResult:
     """Run the knowledge retrieval pipeline over normalized evidence.
 
@@ -102,22 +126,22 @@ def run_pipeline(
     operational triage. Product code should treat graph retrieval as enabled by
     default and fail-open on graph read errors.
 
-    When *structured_query* is provided, the internal LLM intent-parsing
-    step is skipped entirely.  This is the recommended call path for
-    programmatic / agent consumers that already know the intent, entities,
-    and time constraints.
+    *structured_query* is required.  Programmatic callers (CLI, agents)
+    construct it directly; natural-language intent parsing is no longer
+    embedded in the pipeline.
     """
-    if not raw_query and not articles and structured_query is None:
-        raise ValueError("missing query input")
-
     if structured_query is None:
-        classifier = IntentClassifier()
-        structured_query = classifier.parse(raw_query or "")
+        raise ValueError("structured_query is required (LLM intent parsing has been removed)")
+
+    effective_query = structured_query
+    if hops is not None:
+        effective_query = replace(structured_query, hops=hops)
 
     searcher = KnowledgeSearcher()
+
     request = KnowledgeSearchRequest(
-        structured_query=structured_query,
-        top_k=20,
+        structured_query=effective_query,
+        top_k=top_k,
     )
 
     if articles:
@@ -132,7 +156,7 @@ def run_pipeline(
     graph_enhancement: _GraphEnhancement | None = None
     if graph_enabled:
         graph_enhancement = _enhance_with_graph(
-            structured_query=structured_query,
+            structured_query=effective_query,
             source=source,
         )
 
@@ -149,17 +173,18 @@ def run_pipeline(
             expanded_cluster_count=graph_enhancement.graph_result.expanded_cluster_count,
             expanded_entity_count=graph_enhancement.graph_result.expanded_entity_count,
             hit_reasons=graph_enhancement.graph_result.hit_reasons,
+            hops=effective_query.hops,
         )
     else:
-        graph_meta = GraphMeta(graph_enabled=graph_enabled)
+        graph_meta = GraphMeta(graph_enabled=graph_enabled, hops=effective_query.hops)
 
     errors = list(graph_enhancement.errors) if graph_enhancement else []
-    if source == "direct_articles" and structured_query.intent.value == "RELATIONSHIP_QUERY":
+    if source == "direct_articles" and effective_query.intent == IntentType.RELATIONSHIP_QUERY:
         errors.append("关系查询当前仅支持 knowledge_base 检索源，不支持 direct articles 输入")
 
     return PipelineResult(
         request_id=str(uuid4())[:8],
-        query=structured_query,
+        query=effective_query,
         source=source,  # type: ignore[arg-type]
         knowledge_units=serialized["knowledge_units"],
         entities=merged_entities,

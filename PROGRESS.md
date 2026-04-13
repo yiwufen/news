@@ -2,16 +2,16 @@
 
 ## 当前定位
 
-项目已从“金融风险研判 Agent”重定位为“金融知识检索底座”。
+项目已从”金融风险研判 Agent”重定位为”金融知识检索底座 CLI 工具”。
 
 当前阶段目标：
 
 - 把原始消息加工为可检索状态
 - 建立 `KnowledgeUnit` / `EventCluster` / `Entity` 三层知识结构
 - 构建 FTS/BM25 文本索引与图谱索引
-- 为后续 skill 驱动的分析 agent 提供统一知识底座
+- 通过 `knowledge-cli` CLI 工具供 Claude Code 等 agent 调用
 
-风险分析、时间线、主题研究、关系扩展等能力均视为后续消费该底座的 skill。
+LLM 意图解析已从项目中分离。调用方直接传入结构化查询参数（实体名称、时间范围、事件类型等），检索服务不再内部调用 LLM。
 
 ---
 
@@ -24,7 +24,7 @@
 | 3. 实体与事件归一 | ✅ 主线可用 | 85% | 已新增 `Entity` / `EventCluster` 保守归一与归并，多类型冲突检测与聚合视图已落地 |
 | 4. 检索层 | ✅ 主线可用 | 90% | BM25 + 结构化过滤检索主线，分层打分（实体匹配 > 类型匹配 > 文本匹配 > 时效），移除了无实质贡献的向量检索层 |
 | 5. 图谱层 | ✅ 主线可用 | 90% | 新离线路径已同步 `Entity + EventCluster + INVOLVED_IN`，`run_pipeline()` 已接入正式图谱增强检索、关系结果集与稳定输出契约 |
-| 6. 消费层 | ✅ 已移除旧链路 | 100% | 不再兼容旧风险导向消费链路，入口直接面向知识检索 |
+| 6. CLI 工具 | ✅ 已完成 | 100% | `knowledge-cli search` / `knowledge-cli ingest`，结构化参数入 JSON 出，供 agent 调用 |
 
 ---
 
@@ -120,14 +120,7 @@
 
 ## P1 后续任务
 
-- [x] 设计面向 skill 的统一检索接口
-- [x] 将风险分析改造为消费知识底座的 skill（`RISK_ASSESSMENT`）
-- [x] 将时间线生成功能改造为消费知识底座的 skill（`ENTITY_TIMELINE`）
-- [x] 支持关系扩展 skill（`RELATIONSHIP_QUERY`）
-- [x] 支持担保分析 skill（`GUARANTEE_ANALYSIS`）
-- [x] 支持主题研究、事件影响分析 skill（`TOPIC_RESEARCH`、`EVENT_IMPACT_ANALYSIS`）
-- [x] 设计多轮任务消费层
-- [x] 提供 API 封装
+Skill 层和 API 层已删除，不再作为当前项目范围。后续由调用 agent（如 Claude Code）负责意图解析和分析逻辑。
 
 ---
 
@@ -143,14 +136,21 @@
 
 ## 运行说明
 
-### 当前可用入口
+### CLI 入口（推荐）
+
+```bash
+# 离线知识化建库
+uv run knowledge-cli ingest
+
+# 检索知识库
+uv run knowledge-cli search --entities "小米集团" --time-range 2025-04-01:2026-04-13
+```
+
+### Python API 入口
 
 ```bash
 uv run python -c "
-from dotenv import load_dotenv
-load_dotenv('.env')
 from src.pipeline import run_continuous
-
 result = run_continuous(graph_enabled=True)
 print(result)
 "
@@ -158,41 +158,23 @@ print(result)
 
 ```bash
 uv run python -c "
-from dotenv import load_dotenv
-load_dotenv('.env')
 from src.orchestration import run_pipeline
+from src.schemas.query import make_query
 
 result = run_pipeline(
-    raw_query='查看小米集团过去一年做的事情',
+    structured_query=make_query(entities=['小米集团'], time_range=('2025-04-01', '2026-04-13')),
     graph_enabled=True,
 )
-print(result)
-"
-```
-
-```bash
-uv run python -c "
-from dotenv import load_dotenv
-load_dotenv('.env')
-from src.skills import run_skill_query
-
-result = run_skill_query(
-    raw_query='查看小米集团过去一年做的事情',
-    graph_enabled=True,
-)
-print(result)
+print(result.to_dict())
 "
 ```
 
 说明：
 
-- 上述入口当前仍可运行
-- `run_pipeline()` 已直接返回知识检索结果，不再兼容旧风险消费链路
-- `run_skill_query()` 已提供稳定的 skill-facing V1 契约，统一返回 `summary` / `capabilities` / `payload`
-- 图谱默认开启；显式传 `graph_enabled=False` 仅用于调试、测试或本地排查
-- `articles=...` 直传路径仅用于 ad-hoc/debug 查询；正式知识库主线应先通过 `run_continuous()` 完成离线入库
-- 在当前 PowerShell heredoc / stdin 场景下，中文查询字符串可能被宿主链路降级成 `?`；做真实命令验证时，优先显式 `load_dotenv('.env')`，并避免依赖终端内联中文传参做最终判断
-- 若要验证中文查询命中，优先在脚本文件中执行，或使用 Unicode 转义字符串，避免把 shell 编码问题误判为意图解析/检索问题
+- CLI 工具 `knowledge-cli` 是面向 agent 的标准调用方式
+- `run_pipeline()` 需要传入 `structured_query` 参数，不再支持自然语言查询
+- 图谱默认开启；`--no-graph` 或 `graph_enabled=False` 仅用于调试、测试
+- 正式知识库应先通过 `knowledge-cli ingest` 或 `run_continuous()` 完成离线入库
 
 ---
 
@@ -807,3 +789,39 @@ run_pipeline → PipelineResult (typed) → Skills read typed fields
 - Chinese guarantee keyword constants were checked as valid UTF-8 and covered
   by regression tests so rule-based guarantee extraction does not silently
   regress.
+
+## 2026-04-13 LLM Intent Decoupling & CLI Tool Update
+
+### Summary
+
+Separated LLM intent parsing from the retrieval service and created `knowledge-cli` CLI tool for agent consumption.
+
+### Deleted Modules (7 directories)
+
+- `src/intent/` — LLM intent parsing (`IntentClassifier`)
+- `src/skills/` — Skill consumption layer
+- `src/session/` — Multi-turn session management
+- `src/api/` — FastAPI REST API
+- `src/routing/` — Task routing
+- `src/risk/` — Risk analysis (only used by skills)
+- `src/agents/` — Legacy agent system
+
+### New Files
+
+- `src/schemas/query.py` — Query models (`IntentType`, `StructuredQuery`, `TimeRange`, `QueryFilters`, `make_query()`) moved from `src/intent/models.py`
+- `src/cli.py` — CLI entry point with `search` and `ingest` subcommands
+
+### Key Changes
+
+- `run_pipeline()` now requires `structured_query` parameter; LLM intent parsing removed
+- `PipelineResult.to_dict()` added for JSON serialization
+- `run_pipeline()` accepts `top_k` parameter
+- `pyproject.toml`: added `[project.scripts]` for `knowledge-cli`, removed unused deps (`fastapi`, `uvicorn`, `redis`, `langgraph`)
+- Query model imports updated across 5 source files: `src.intent.models` → `src.schemas.query`
+- All integration tests refactored to pass `structured_query=` directly instead of monkeypatching `IntentClassifier`
+- Deleted 10 test files for removed modules, added `tests/unit/test_cli.py`
+
+### Regression Checks
+
+- `uv run pytest` -> 100 passed
+- `uv run pyright .` -> 0 errors

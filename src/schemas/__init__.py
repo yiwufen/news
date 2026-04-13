@@ -12,6 +12,13 @@ from src.schemas.enums import (
     classify_risk_score,
 )
 from src.schemas.graph import GraphEdge, GraphNode, GraphUpdates
+from src.schemas.query import (
+    IntentType,
+    QueryFilters,
+    StructuredQuery,
+    TimeRange,
+    make_query,
+)
 
 __all__ = [
     # 枚举
@@ -24,4 +31,10 @@ __all__ = [
     "GraphNode",
     "GraphEdge",
     "GraphUpdates",
+    # 查询模型
+    "IntentType",
+    "TimeRange",
+    "QueryFilters",
+    "StructuredQuery",
+    "make_query",
 ]

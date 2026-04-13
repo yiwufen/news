@@ -21,8 +21,7 @@ from src.event_clustering import (
     build_event_cluster_snapshot,
 )
 from src.graph.knowledge_retrieval import KnowledgeGraphRetriever
-from src.intent.classifier import IntentClassifier
-from src.intent.models import IntentType, QueryFilters, StructuredQuery, TimeRange
+from src.schemas.query import IntentType, QueryFilters, StructuredQuery, TimeRange
 from src.knowledge_base import (
     EntityRef,
     EvidenceSpan,
@@ -590,7 +589,10 @@ class FakeResultSession:
         self.calls.append((query, params))
         if self.error is not None:
             raise self.error
+        # Check for both old and new Cypher patterns
         if "MATCH (start:Entity)-[:INVOLVED_IN]->(cluster:EventCluster)" in query:
+            return self.records
+        if "MATCH path = (start:Entity)-[:INVOLVED_IN*1.." in query:
             return self.records
         return []
 
@@ -853,98 +855,8 @@ def test_knowledge_graph_retriever_does_not_write_schema_on_read_path(tmp_path) 
 
     assert result.used is True
     assert len(session.calls) == 1
-    assert "MATCH (start:Entity)-[:INVOLVED_IN]->(cluster:EventCluster)" in session.calls[0][0]
-
-
-def test_intent_classifier_parses_chinese_and_english_time_ranges() -> None:
-    classifier = IntentClassifier()
-    ref = datetime(2026, 4, 4, tzinfo=UTC).date()
-
-    last_year = classifier.parse_time_range(
-        "\u67e5\u770b\u5c0f\u7c73\u96c6\u56e2\u8fc7\u53bb\u4e00\u5e74\u505a\u7684\u4e8b\u60c5",
-        ref=ref,
-    )
-    assert last_year == TimeRange(start=datetime(2025, 4, 4, tzinfo=UTC).date(), end=ref)
-
-    ytd = classifier.parse_time_range("show xiaomi group year to date timeline", ref=ref)
-    assert ytd == TimeRange(start=datetime(2026, 1, 1, tzinfo=UTC).date(), end=ref)
-
-
-def test_intent_classifier_supplements_entities_from_repository_when_llm_is_incomplete(tmp_path) -> None:
-    db_path = tmp_path / "news.db"
-    repo = EntityRepository(str(db_path))
-    now = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
-    repo.save_batch(
-        [
-            Entity(
-                entity_type="Company",
-                canonical_name="\u5c0f\u7c73\u96c6\u56e2",
-                aliases=["\u5c0f\u7c73", "Xiaomi Group"],
-                identifiers={},
-                source_ku_ids=["seed"],
-                created_at=now,
-                updated_at=now,
-            )
-        ]
-    )
-
-    classifier = IntentClassifier(entity_repository=repo)
-    classifier._call_llm = lambda query: {  # type: ignore[method-assign]
-        "intent": "ENTITY_TIMELINE",
-        "entities": [],
-        "time_expression": "",
-        "filters": {},
-        "confidence": 0.2,
-    }
-
-    parsed = classifier.parse("\u67e5\u770b\u5c0f\u7c73\u96c6\u56e2\u8fc7\u53bb\u4e00\u5e74\u505a\u7684\u4e8b\u60c5")
-
-    assert parsed.intent is IntentType.ENTITY_TIMELINE
-    assert parsed.entities == ["\u5c0f\u7c73\u96c6\u56e2"]
-    assert parsed.time_range is not None
-
-
-def test_intent_classifier_routes_new_skill_intents() -> None:
-    classifier = IntentClassifier()
-    classifier._call_llm = lambda query: {  # type: ignore[method-assign]
-        "intent": "RISK_ASSESSMENT",
-        "entities": ["Xiaomi Group"],
-        "time_expression": "",
-        "filters": {},
-        "confidence": 0.9,
-    }
-
-    risk_parsed = classifier.parse("Show Xiaomi Group risk assessment")
-    assert risk_parsed.intent is IntentType.RISK_ASSESSMENT
-
-    classifier._call_llm = lambda query: {  # type: ignore[method-assign]
-        "intent": "GUARANTEE_ANALYSIS",
-        "entities": ["Xiaomi Group"],
-        "time_expression": "",
-        "filters": {},
-        "confidence": 0.9,
-    }
-
-    guarantee_parsed = classifier.parse("Analyze Xiaomi Group guarantee network")
-    assert guarantee_parsed.intent is IntentType.GUARANTEE_ANALYSIS
-
-
-def test_intent_classifier_preserves_topic_categories() -> None:
-    classifier = IntentClassifier()
-    classifier._call_llm = lambda query: {  # type: ignore[method-assign]
-        "intent": "TOPIC_RESEARCH",
-        "entities": [],
-        "time_expression": "",
-        "filters": {
-            "categories": ["新能源", "光伏"],
-        },
-        "confidence": 0.9,
-    }
-
-    parsed = classifier.parse("分析新能源行业的发展趋势")
-
-    assert parsed.intent is IntentType.TOPIC_RESEARCH
-    assert parsed.filters.categories == ["新能源", "光伏"]
+    # Check for the new variable-length path pattern
+    assert "MATCH path = (start:Entity)-[:INVOLVED_IN*1.." in session.calls[0][0]
 
 
 def test_knowledge_unit_repository_syncs_fts_rows(tmp_path) -> None:

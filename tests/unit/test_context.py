@@ -4,7 +4,7 @@ PipelineContext 数据结构单元测试。
 
 from datetime import date
 
-from src.intent.models import IntentType, QueryFilters, TimeRange
+from src.schemas.query import IntentType, QueryFilters, TimeRange
 from src.orchestration.state import PipelineContext, QueryInput, StageOutput
 
 

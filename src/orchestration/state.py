@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from src.intent.models import IntentType, QueryFilters, TimeRange
+from src.schemas.query import IntentType, QueryFilters, TimeRange
 
 
 @dataclass
