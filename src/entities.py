@@ -38,6 +38,7 @@ _ENTITY_SUFFIXES = (
     "有限公司",
     "集团",
     "控股",
+    "公司",
     "companylimited",
     "colimited",
     "coltd",
@@ -51,6 +52,148 @@ _ENTITY_SUFFIXES = (
     "corporation",
     "corp",
 )
+
+# 应作为标签而非实体的国家/地区/货币/抽象概念
+_COUNTRY_REGION_CURRENCY: frozenset[str] = frozenset({
+    # 主要国家
+    "中国", "美国", "俄罗斯", "伊朗", "以色列", "日本", "韩国", "英国",
+    "法国", "德国", "印度", "巴西", "加拿大", "澳大利亚", "意大利",
+    "西班牙", "墨西哥", "沙特阿拉伯", "阿联酋", "土耳其", "泰国",
+    "越南", "印尼", "马来西亚", "新加坡", "菲律宾", "巴基斯坦",
+    "朝鲜", "乌克兰", "波兰", "荷兰", "瑞士", "瑞典", "挪威",
+    "芬兰", "丹麦", "比利时", "奥地利", "爱尔兰", "葡萄牙",
+    "希腊", "捷克", "罗马尼亚", "匈牙利", "新西兰", "南非",
+    "埃及", "尼日利亚", "肯尼亚", "阿根廷", "智利", "哥伦比亚",
+    "秘鲁", "委内瑞拉", "古巴", "蒙古", "缅甸", "柬埔寨",
+    "老挝", "孟加拉国", "斯里兰卡", "尼泊尔", "伊拉克", "叙利亚",
+    "约旦", "黎巴嫩", "也门", "阿曼", "卡塔尔", "巴林", "科威特",
+    "阿富汗", "利比亚", "苏丹", "刚果", "坦桑尼亚",
+    # 常见简称
+    "美方", "中方", "俄方", "伊方", "以方", "欧方", "日方", "韩方",
+    "印方", "巴方", "英方", "法方", "德方", "乌方", "朝方",
+    "美伊", "中美", "中俄", "中欧", "美俄", "美以",
+    # 地区
+    "台湾", "香港", "澳门", "中东", "欧洲", "亚洲", "非洲", "拉美",
+    "东南亚", "南亚", "东亚", "中亚", "西亚", "北非", "东欧", "西欧",
+    "霍尔木兹海峡", "马六甲海峡", "苏伊士运河", "巴拿马运河",
+    "加沙", "加沙地带", "约旦河西岸", "红海",
+    # 省/市/区
+    "山东", "广东", "江苏", "浙江", "河南", "四川", "湖北", "湖南",
+    "河北", "福建", "安徽", "辽宁", "陕西", "江西", "山西", "广西",
+    "云南", "贵州", "甘肃", "海南", "宁夏", "青海", "西藏", "新疆",
+    "内蒙古", "黑龙江", "吉林",
+    "山东省", "广东省", "江苏省", "浙江省", "河南省", "四川省",
+    "湖北省", "湖南省", "河北省", "福建省", "安徽省", "辽宁省",
+    "陕西省", "江西省", "重庆市", "天津市", "北京市", "上海市",
+    "深圳", "广州", "南京", "杭州", "成都", "武汉", "苏州", "青岛",
+    "大连", "宁波", "厦门", "济南", "郑州", "长沙", "基辅", "北京",
+    "上海",
+    # 货币
+    "美元", "欧元", "日元", "英镑", "港元", "人民币", "韩元", "卢布",
+    "卢比", "泰铢", "新元", "澳元", "加元", "瑞郎",
+    # 代词/指代词
+    "我国", "本国", "该国", "对方", "各方", "双方", "多方", "一方",
+    "己方", "我方", "你方", "他方", "本集团", "本公司", "该公司",
+    "集团", "公司",
+})
+
+# 不应作为 Person 实体的泛指词/角色词
+_GENERIC_ROLE_WORDS: frozenset[str] = frozenset({
+    "记者", "员工", "用户", "考生", "消费者", "投资者", "客户",
+    "学生", "工人", "农民", "司机", "医生", "护士", "教师",
+    "总统", "最高领袖", "实控人", "董事长", "总裁", "CEO",
+    "创始人", "负责人", "发言人", "代表", "官员", "分析师",
+    "受伤人员", "救援人员", "遇难者", "目击者", "当事人",
+    "申请人", "被告", "原告", "嫌疑人", "受害人",
+    "股东", "男性", "女性", "入围城市", "中国学者", "十大机构",
+    "供应商", "合作方", "竞争者", "对手", "同行", "董事会",
+    "土耳其籍船长",
+})
+
+# 纯数字/金额/百分比/价格/股票代码/时间/季度/指数 的正则
+_NON_ENTITY_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"^[\d,.]+%$"),                          # 百分比: 1.38%
+    re.compile(r"^[\d,.]+\s*(元|万元|亿元|美元|港元|欧元|日元|英镑|人民币|万|亿)"),  # 金额
+    re.compile(r"^[\d,.]+\s*(美元|港元)/?(股|桶|盎司|吨|克|千克)?"),  # 价格
+    re.compile(r"^[\d,.]+点$"),                         # 指数点数
+    re.compile(r"^[\d,.]+万?股$"),                      # 股数
+    re.compile(r"^\d{6}\.(SZ|SH|HK|BJ)$"),             # 股票代码
+    re.compile(r"^\d+年?$"),                            # 年份
+    re.compile(r"^\d+年?\s*[\d月日期]"),                 # 年月/年期/日期
+    re.compile(r"^\d{1,2}月"),                          # 月份
+    re.compile(r"^\d{1,2}:\d{2}$"),                     # 时间
+    re.compile(r"^\d+%—?\d+%$"),                        # 比率范围
+    re.compile(r"^[\d,.]+$"),                           # 纯数字
+    re.compile(r"^[一二三四五六七八九十百千万亿几多数]+$"),  # 中文数字
+    re.compile(r"^第[一二三四]季度$"),                    # 第X季度
+    re.compile(r"^[上下]半年$"),                         # 上/下半年
+    re.compile(r"^[去今明]年$"),                         # 去/今/明年
+    re.compile(r"^[上本]周$"),                           # 上/本周
+    re.compile(r"(指数|ETF|合约)$"),                     # 以指数/ETF/合约结尾
+    re.compile(r"^[A-Za-z0-9]{1,2}$"),                  # 极短无意义: Q4, H1
+    re.compile(r"ETF"),                                 # 含ETF
+]
+
+# 通用非实体模式（仅匹配完整字符串）
+_NON_ENTITY_GENERIC_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"^(翻倍|破发|退市|停牌|复牌|涨停|跌停|熔断)$"),
+    re.compile(r"^(冲突|战争|战斗|交火|打击|袭击|攻击|入侵|轰炸)$"),
+    re.compile(r"^(封锁|制裁|禁运|抵制|抗议)$"),
+    re.compile(r"^(增长|下降|上涨|下跌|暴跌|暴涨|大涨|大跌|回调|反弹)$"),
+    re.compile(r"^(采访|谈判|对话|协商|会谈|会议|交流)$"),
+    re.compile(r"^(经验|能力|技术|策略|政策|措施|方案|计划|改革)$"),
+    re.compile(r"^(经济|金融|科技|教育|医疗|军事|政治|文化|社会|体育)$"),
+]
+
+# 应排除的抽象概念/通用名词/财务指标
+_ABSTRACT_CONCEPTS: frozenset[str] = frozenset({
+    "市场", "价格", "行业", "停火", "增长", "下降", "上涨", "下跌",
+    "通胀", "通缩", "衰退", "复苏", "制裁", "关税", "加息", "降息",
+    "全球", "全国", "世界", "国内", "国外", "海外",
+    "同比", "环比", "同比增长", "环比增长",
+    # 财务指标
+    "营业收入", "净利润", "归属于上市公司股东的净利润", "现金红利", "股票",
+    "营收", "利润", "分红", "股息", "市值", "估值", "市盈率",
+    "成交量", "成交额", "涨幅", "跌幅", "振幅", "换手率",
+    "流通市值", "总市值", "收盘价", "开盘价", "最高价", "最低价",
+    "均价", "出厂价", "批发价", "零售价", "期货", "现货", "结算价",
+    "毛利率", "综合毛利率", "总资产", "净资产", "负债率", "社会消费品零售总额",
+    "全国房地产开发投资",
+    # 通用商品/大类/指数简称
+    "人工智能", "新能源", "沥青", "玉米", "主力合约", "新房",
+    "经济增长", "重点企业",
+    "A股", "深成指", "现货白银", "现货黄金", "现货",
+    # 军事泛指
+    "伊朗军队", "伊朗武装部队", "美军", "美方军事力量", "持久战",
+    # 业务类型/泛指
+    "算力租赁", "船只",
+    # 政策/计划泛指
+    "强基计划",
+})
+
+
+def is_valid_entity_mention(mention: str) -> bool:
+    """Check if a mention is a valid entity name (not a number/amount/abstract concept)."""
+    stripped = mention.strip()
+    if not stripped:
+        return False
+
+    if stripped in _COUNTRY_REGION_CURRENCY:
+        return False
+    if stripped in _GENERIC_ROLE_WORDS:
+        return False
+    if stripped in _ABSTRACT_CONCEPTS:
+        return False
+
+    for pattern in _NON_ENTITY_PATTERNS:
+        if pattern.search(stripped):
+            return False
+
+    for pattern in _NON_ENTITY_GENERIC_PATTERNS:
+        if pattern.search(stripped):
+            return False
+
+    return True
 
 
 def _strip_separators(value: str) -> str:
@@ -135,13 +278,18 @@ class Entity(BaseModel):
 
 
 def _infer_entity_type(name: str) -> EntityKind:
+    # Person: 2-4字纯汉字（常见中文姓名长度）或带称谓后缀
     if re.search(r"(先生|女士|总裁|董事长|CEO|创始人)$", name, re.IGNORECASE):
+        return "Person"
+    if re.fullmatch(r"[\u4e00-\u9fff]{2,4}", name):
+        return "Person"
+    if re.search(r"^[A-Z][a-z]+\s+[A-Z]", name):
         return "Person"
     if re.search(r"(产品|计划|基金|债券)$", name, re.IGNORECASE):
         return "Product"
     if re.search(r"(资产|地块|厂房|专利)$", name, re.IGNORECASE):
         return "Asset"
-    if re.search(r"(协会|机构|研究院|部门|政府)$", name, re.IGNORECASE):
+    if re.search(r"(协会|机构|研究院|部门|政府|委员会|联盟|银行|证券|基金公司)$", name):
         return "Organization"
     return "Company"
 
@@ -284,12 +432,19 @@ class EntityResolver:
         now = datetime.now(UTC)
         touched_entities: dict[str, Entity] = {}
 
+        # Pre-compute normalized names to avoid repeated normalization per mention
+        norm_cache: dict[str, str] = {
+            eid: normalize_entity_name(e.canonical_name)
+            for eid, e in entities_cache.items()
+        }
+
         for unit in units:
             for entity_ref in unit.entities:
                 matched = self._find_match(
                     entity_ref.mention,
                     entity_ref.identifiers,
-                    entities_cache.values(),
+                    entities_cache,
+                    norm_cache,
                 )
                 if matched is None:
                     matched = Entity(
@@ -304,6 +459,7 @@ class EntityResolver:
                         updated_at=now,
                     )
                     entities_cache[matched.entity_id] = matched
+                    norm_cache[matched.entity_id] = normalize_entity_name(matched.canonical_name)
                 else:
                     if entity_ref.mention not in matched.aliases:
                         matched.aliases.append(entity_ref.mention)
@@ -324,17 +480,19 @@ class EntityResolver:
         self,
         mention: str,
         identifiers: dict[str, str],
-        existing_entities: Iterable[Entity],
+        entities_cache: dict[str, Entity],
+        norm_cache: dict[str, str],
     ) -> Entity | None:
         normalized = normalize_entity_name(mention)
         inferred_type = _infer_entity_type(mention)
-        for entity in existing_entities:
+        for entity in entities_cache.values():
             if identifiers and entity.identifiers:
                 for key, value in identifiers.items():
                     if entity.identifiers.get(key) == value:
                         return entity
 
-            if normalized == normalize_entity_name(entity.canonical_name):
+            norm_name = norm_cache[entity.entity_id]
+            if normalized == norm_name:
                 return entity
 
             alias_match = next(
@@ -351,7 +509,7 @@ class EntityResolver:
             similarity = SequenceMatcher(
                 None,
                 normalized,
-                normalize_entity_name(entity.canonical_name),
+                norm_name,
             ).ratio()
             if similarity >= 0.95 and entity.entity_type == inferred_type:
                 return entity

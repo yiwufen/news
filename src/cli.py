@@ -4,19 +4,43 @@ Usage::
 
     knowledge-cli search --entities "小米集团" --time-range 2025-04-01:2026-04-13
     knowledge-cli ingest --dry-run
+    knowledge-cli start --graph-enabled
+    knowledge-cli stop
+    knowledge-cli status
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
+import time
+from dataclasses import asdict, is_dataclass
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 from src.orchestration.graph import run_pipeline
 from src.orchestration.result import PipelineResult
 from src.pipeline.continuous import run_continuous
+from src.process_manager import (
+    SERVICES,
+    is_process_alive,
+    read_pid,
+    remove_pid,
+    spawn_process,
+    stop_process,
+    write_pid,
+)
 from src.schemas.query import IntentType, make_query
 
+
+# ---------------------------------------------------------------------------
+# search
+# ---------------------------------------------------------------------------
 
 def cmd_search(args: argparse.Namespace) -> None:
     """Search knowledge base and output PipelineResult as JSON to stdout."""
@@ -57,6 +81,10 @@ def cmd_search(args: argparse.Namespace) -> None:
     sys.stdout.write("\n")
 
 
+# ---------------------------------------------------------------------------
+# ingest (single-shot)
+# ---------------------------------------------------------------------------
+
 def cmd_ingest(args: argparse.Namespace) -> None:
     """Run the continuous ingestion pipeline."""
     result = run_continuous(
@@ -81,6 +109,136 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     )
     sys.stdout.write("\n")
 
+
+# ---------------------------------------------------------------------------
+# start / stop / status — process management
+# ---------------------------------------------------------------------------
+
+def _spawn_service(service: str, extra_args: list[str]) -> None:
+    """Spawn a child process running ``_run_<service>`` and record its PID."""
+    info = read_pid(service)
+    if info and is_process_alive(info["pid"]):
+        print(f"{service}: already running (PID {info['pid']})", file=sys.stderr)
+        return
+
+    # Clean up stale PID file
+    if info:
+        remove_pid(service)
+
+    command = [sys.executable, "-m", "src.cli", f"_run_{service}", *extra_args]
+    pid = spawn_process(command)
+    write_pid(service, pid, command)
+    print(f"{service}: started (PID {pid})")
+
+
+def cmd_start(args: argparse.Namespace) -> None:
+    """Start fetch and/or offline services."""
+    start_fetch = not args.offline_only
+    start_offline = not args.fetch_only
+
+    if start_fetch:
+        fetch_args = [
+            "--limit", str(args.fetch_limit),
+            "--interval", str(args.fetch_interval),
+            "--db", args.db,
+        ]
+        _spawn_service("fetch", fetch_args)
+
+    if start_offline:
+        offline_args = [
+            "--batch-size", str(args.process_batch_size),
+            "--interval", str(args.process_interval),
+            "--db", args.db,
+        ]
+        if args.graph_enabled:
+            offline_args.append("--graph-enabled")
+        if args.time_window:
+            offline_args.extend(["--time-window", args.time_window])
+        _spawn_service("offline", offline_args)
+
+
+def cmd_stop(args: argparse.Namespace) -> None:
+    """Stop running services."""
+    targets = []
+    if args.fetch:
+        targets.append("fetch")
+    if args.offline:
+        targets.append("offline")
+    if not targets:
+        targets = list(SERVICES)
+
+    for svc in targets:
+        info = read_pid(svc)
+        if not info:
+            print(f"{svc}: not running")
+            continue
+        if not is_process_alive(info["pid"]):
+            remove_pid(svc)
+            print(f"{svc}: not running (cleaned stale PID file)")
+            continue
+        stop_process(info["pid"])
+        remove_pid(svc)
+        print(f"{svc}: stopped (PID {info['pid']})")
+
+
+def cmd_status(args: argparse.Namespace) -> None:
+    """Show running process status."""
+    for svc in SERVICES:
+        info = read_pid(svc)
+        if not info:
+            print(f"{svc}: not running")
+            continue
+        if not is_process_alive(info["pid"]):
+            remove_pid(svc)
+            print(f"{svc}: not running (cleaned stale PID file)")
+            continue
+        started = info.get("started_at", "unknown")
+        print(f"{svc}: running (PID {info['pid']}, since {started})")
+
+
+# ---------------------------------------------------------------------------
+# Hidden subcommands — child process entry points
+# ---------------------------------------------------------------------------
+
+def _setup_child_logging(log_path: str) -> None:
+    """Configure logging for a child process to write to a log file."""
+    from src.utils.logging import setup_logging
+
+    setup_logging(level=logging.INFO, log_file=log_path, use_color=False)
+
+
+def cmd_run_fetch(args: argparse.Namespace) -> None:
+    """Internal: continuous fetch loop (launched as subprocess by ``start``)."""
+    _setup_child_logging("data/logs/fetch.log")
+    from collectors.eastmoney_crawler import EastMoneyCrawler
+
+    crawler = EastMoneyCrawler(db_path=args.db)
+    crawler.run(page_size=args.limit, continuous=True, interval=args.interval)
+
+
+def cmd_run_offline(args: argparse.Namespace) -> None:
+    """Internal: continuous offline loop (launched as subprocess by ``start``)."""
+    _setup_child_logging("data/logs/offline.log")
+    from src.pipeline.continuous import ContinuousPipeline
+
+    pipeline = ContinuousPipeline(
+        batch_size=args.batch_size,
+        graph_enabled=args.graph_enabled,
+        incremental=True,
+        db_path=args.db,
+    )
+
+    print("Starting offline processing loop ...", flush=True)
+    while True:
+        result = pipeline.run(time_window=args.time_window or None, dry_run=False)
+        payload = asdict(result) if is_dataclass(result) else result
+        print(json.dumps(payload, ensure_ascii=False), flush=True)
+        time.sleep(args.interval)
+
+
+# ---------------------------------------------------------------------------
+# Argument parser
+# ---------------------------------------------------------------------------
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -147,6 +305,55 @@ def main() -> None:
         "--dry-run", action="store_true", help="Preview without writing"
     )
     ingest_parser.set_defaults(func=cmd_ingest)
+
+    # --- start ---
+    start_parser = subparsers.add_parser("start", help="Start fetch + offline services")
+    start_parser.add_argument("--fetch-limit", type=int, default=100,
+                              help="Items per fetch (default: 100)")
+    start_parser.add_argument("--fetch-interval", type=int, default=900,
+                              help="Fetch interval in seconds (default: 900)")
+    start_parser.add_argument("--process-batch-size", type=int, default=10,
+                              help="Offline batch size (default: 10)")
+    start_parser.add_argument("--process-interval", type=int, default=300,
+                              help="Offline loop interval in seconds (default: 300)")
+    start_parser.add_argument("--db", type=str, default="data/news.db",
+                              help="SQLite database path")
+    start_parser.add_argument("--graph-enabled", action="store_true",
+                              help="Enable knowledge graph sync for offline process")
+    start_parser.add_argument("--time-window", type=str, default="",
+                              help="Optional ISO week window for offline process")
+    start_parser.add_argument("--fetch-only", action="store_true",
+                              help="Start fetch only (skip offline)")
+    start_parser.add_argument("--offline-only", action="store_true",
+                              help="Start offline only (skip fetch)")
+    start_parser.set_defaults(func=cmd_start)
+
+    # --- stop ---
+    stop_parser = subparsers.add_parser("stop", help="Stop running services")
+    stop_parser.add_argument("--fetch", action="store_true", help="Stop fetch only")
+    stop_parser.add_argument("--offline", action="store_true", help="Stop offline only")
+    stop_parser.set_defaults(func=cmd_stop)
+
+    # --- status ---
+    status_parser = subparsers.add_parser("status", help="Show running process status")
+    status_parser.set_defaults(func=cmd_status)
+
+    # --- hidden: _run_fetch ---
+    run_fetch_parser = subparsers.add_parser("_run_fetch")
+    run_fetch_parser.add_argument("--limit", type=int, default=100)
+    run_fetch_parser.add_argument("--interval", type=int, default=900)
+    run_fetch_parser.add_argument("--db", type=str, default="data/news.db")
+    run_fetch_parser.set_defaults(func=cmd_run_fetch)
+
+    # --- hidden: _run_offline ---
+    run_offline_parser = subparsers.add_parser("_run_offline")
+    run_offline_parser.add_argument("--batch-size", type=int, default=10)
+    run_offline_parser.add_argument("--interval", type=int, default=300)
+    run_offline_parser.add_argument("--db", type=str, default="data/news.db")
+    run_offline_parser.add_argument("--time-window", type=str, default="")
+    run_offline_parser.add_argument("--graph-enabled", dest="graph_enabled",
+                                     action="store_true", default=False)
+    run_offline_parser.set_defaults(func=cmd_run_offline)
 
     args = parser.parse_args()
     args.func(args)

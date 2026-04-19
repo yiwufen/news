@@ -19,10 +19,13 @@
 
 ## 2. 核心架构
 
-项目提供 CLI 工具 `knowledge-cli`，包含两个子命令：
+项目提供 CLI 工具 `knowledge-cli`，包含以下子命令：
 
 - `knowledge-cli search`：结构化参数检索，输出 JSON
-- `knowledge-cli ingest`：离线知识化建库
+- `knowledge-cli ingest`：单次离线知识化建库
+- `knowledge-cli start`：启动爬取 + 离线处理后台进程
+- `knowledge-cli stop`：停止后台进程
+- `knowledge-cli status`：查看进程运行状态
 
 底层 API：
 

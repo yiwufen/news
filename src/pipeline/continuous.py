@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Literal
 
-from src.entities import Entity, EntityRepository, EntityResolver
+from src.entities import Entity, EntityRepository, EntityResolver, is_valid_entity_mention
 from src.entity_context_filter import filter_relevant_entities
 from src.event_clustering import EventCluster, EventClusterRepository, EventClusterer
 from src.knowledge_base import (
@@ -242,6 +242,26 @@ class ContinuousPipeline:
             result.error_message = f"extract failed: {exc}"
             logger.error(f"[{document.doc_id}] Extract failed: {exc}")
             return result
+
+        if not units:
+            result.status = "success"
+            result.failed_stage = "complete"
+            return result
+
+        # Post-extraction: filter invalid entity mentions, redirect to tags
+        valid_units: list[KnowledgeUnit] = []
+        for unit in units:
+            valid_entities = []
+            for entity_ref in unit.entities:
+                if is_valid_entity_mention(entity_ref.mention):
+                    valid_entities.append(entity_ref)
+                elif entity_ref.mention.strip() not in unit.tags:
+                    unit.tags.append(entity_ref.mention.strip())
+            unit.entities = valid_entities
+            if unit.entities:
+                valid_units.append(unit)
+        units = valid_units
+        result.units = units
 
         if not units:
             result.status = "success"

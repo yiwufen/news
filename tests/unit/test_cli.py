@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.cli import cmd_ingest, cmd_search, main
+from src.cli import cmd_ingest, cmd_search, cmd_start, cmd_stop, cmd_status, main
 from src.orchestration.result import GraphMeta, PipelineResult, RetrievalMeta
 from src.schemas.query import IntentType
 
@@ -195,3 +196,183 @@ class TestMainArgparse:
         monkeypatch.setattr(sys, "argv", ["knowledge-cli"])
         with pytest.raises(SystemExit):
             main()
+
+    def test_start_subcommand_dispatches(self, monkeypatch) -> None:
+        calls = []
+
+        def fake_cmd_start(args):
+            calls.append("start")
+
+        monkeypatch.setattr("src.cli.cmd_start", fake_cmd_start)
+        monkeypatch.setattr(sys, "argv", ["knowledge-cli", "start"])
+
+        main()
+        assert calls == ["start"]
+
+    def test_stop_subcommand_dispatches(self, monkeypatch) -> None:
+        calls = []
+
+        def fake_cmd_stop(args):
+            calls.append("stop")
+
+        monkeypatch.setattr("src.cli.cmd_stop", fake_cmd_stop)
+        monkeypatch.setattr(sys, "argv", ["knowledge-cli", "stop"])
+
+        main()
+        assert calls == ["stop"]
+
+    def test_status_subcommand_dispatches(self, monkeypatch) -> None:
+        calls = []
+
+        def fake_cmd_status(args):
+            calls.append("status")
+
+        monkeypatch.setattr("src.cli.cmd_status", fake_cmd_status)
+        monkeypatch.setattr(sys, "argv", ["knowledge-cli", "status"])
+
+        main()
+        assert calls == ["status"]
+
+
+class TestCmdStart:
+    """Tests for the start subcommand."""
+
+    def test_start_spawns_both_services(self, monkeypatch) -> None:
+        spawned = []
+        pids_written = []
+
+        def fake_spawn(command):
+            pid = len(spawned) + 1000
+            spawned.append(command)
+            return pid
+
+        def fake_write_pid(service, pid, command):
+            pids_written.append((service, pid))
+
+        monkeypatch.setattr("src.cli.read_pid", lambda s: None)
+        monkeypatch.setattr("src.cli.spawn_process", fake_spawn)
+        monkeypatch.setattr("src.cli.write_pid", fake_write_pid)
+        monkeypatch.setattr("builtins.print", lambda *a, **kw: None)
+
+        args = argparse.Namespace(
+            fetch_limit=100,
+            fetch_interval=900,
+            process_batch_size=10,
+            process_interval=300,
+            db="data/news.db",
+            graph_enabled=True,
+            time_window="",
+            fetch_only=False,
+            offline_only=False,
+        )
+        cmd_start(args)
+
+        assert len(spawned) == 2
+        assert ("fetch", 1000) in pids_written
+        assert ("offline", 1001) in pids_written
+
+    def test_start_skips_already_running(self, monkeypatch) -> None:
+        spawned = []
+
+        monkeypatch.setattr("src.cli.read_pid", lambda s: {"pid": 999, "started_at": "t"} if s == "fetch" else None)
+        monkeypatch.setattr("src.cli.is_process_alive", lambda pid: True)
+        monkeypatch.setattr("src.cli.spawn_process", lambda cmd: spawned.append(cmd) or 1000)
+        monkeypatch.setattr("src.cli.write_pid", lambda *a: None)
+        monkeypatch.setattr("src.cli.remove_pid", lambda s: None)
+        monkeypatch.setattr("builtins.print", lambda *a, **kw: None)
+
+        args = argparse.Namespace(
+            fetch_limit=100, fetch_interval=900,
+            process_batch_size=10, process_interval=300,
+            db="data/news.db", graph_enabled=False, time_window="",
+            fetch_only=False, offline_only=False,
+        )
+        cmd_start(args)
+
+        # fetch skipped, offline spawned
+        assert len(spawned) == 1
+
+    def test_start_fetch_only(self, monkeypatch) -> None:
+        spawned = []
+
+        monkeypatch.setattr("src.cli.read_pid", lambda s: None)
+        monkeypatch.setattr("src.cli.spawn_process", lambda cmd: spawned.append(cmd) or 1000)
+        monkeypatch.setattr("src.cli.write_pid", lambda *a: None)
+        monkeypatch.setattr("builtins.print", lambda *a, **kw: None)
+
+        args = argparse.Namespace(
+            fetch_limit=100, fetch_interval=900,
+            process_batch_size=10, process_interval=300,
+            db="data/news.db", graph_enabled=False, time_window="",
+            fetch_only=True, offline_only=False,
+        )
+        cmd_start(args)
+        assert len(spawned) == 1
+        assert "_run_fetch" in spawned[0][-1] or any("_run_fetch" in a for a in spawned[0])
+
+    def test_start_offline_only(self, monkeypatch) -> None:
+        spawned = []
+
+        monkeypatch.setattr("src.cli.read_pid", lambda s: None)
+        monkeypatch.setattr("src.cli.spawn_process", lambda cmd: spawned.append(cmd) or 1000)
+        monkeypatch.setattr("src.cli.write_pid", lambda *a: None)
+        monkeypatch.setattr("builtins.print", lambda *a, **kw: None)
+
+        args = argparse.Namespace(
+            fetch_limit=100, fetch_interval=900,
+            process_batch_size=10, process_interval=300,
+            db="data/news.db", graph_enabled=False, time_window="",
+            fetch_only=False, offline_only=True,
+        )
+        cmd_start(args)
+        assert len(spawned) == 1
+        assert "_run_offline" in spawned[0][-1] or any("_run_offline" in a for a in spawned[0])
+    """Tests for the stop subcommand."""
+
+    def test_stop_terminates_running_process(self, monkeypatch) -> None:
+        monkeypatch.setattr("src.cli.read_pid", lambda s: {"pid": 1234, "started_at": "t"})
+        monkeypatch.setattr("src.cli.is_process_alive", lambda pid: True)
+
+        stopped = []
+        removed = []
+        monkeypatch.setattr("src.cli.stop_process", lambda pid: stopped.append(pid))
+        monkeypatch.setattr("src.cli.remove_pid", lambda s: removed.append(s))
+
+        args = argparse.Namespace(fetch=False, offline=False)
+        cmd_stop(args)
+
+        assert 1234 in stopped
+        assert "fetch" in removed
+        assert "offline" in removed
+
+    def test_stop_handles_not_running(self, monkeypatch, capsys) -> None:
+        monkeypatch.setattr("src.cli.read_pid", lambda s: None)
+        args = argparse.Namespace(fetch=False, offline=False)
+        cmd_stop(args)
+
+        captured = capsys.readouterr()
+        assert "not running" in captured.out
+
+
+class TestCmdStatus:
+    """Tests for the status subcommand."""
+
+    def test_status_reports_running(self, monkeypatch, capsys) -> None:
+        monkeypatch.setattr("src.cli.read_pid",
+                            lambda s: {"pid": 1234, "started_at": "2026-04-19T12:00:00"} if s == "fetch" else None)
+        monkeypatch.setattr("src.cli.is_process_alive", lambda pid: True)
+
+        args = argparse.Namespace()
+        cmd_status(args)
+
+        captured = capsys.readouterr()
+        assert "running" in captured.out
+        assert "1234" in captured.out
+
+    def test_status_reports_not_running(self, monkeypatch, capsys) -> None:
+        monkeypatch.setattr("src.cli.read_pid", lambda s: None)
+        args = argparse.Namespace()
+        cmd_status(args)
+
+        captured = capsys.readouterr()
+        assert "not running" in captured.out

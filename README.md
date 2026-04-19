@@ -118,44 +118,36 @@ print(result)
 - `articles=...` 直传路径仅用于 ad-hoc/debug 查询，会在线临时抽取并以内存方式检索；正式知识库主线应先通过 `run_continuous()` 入库
 - 若未配置 `ANTHROPIC_API_KEY`，`run_pipeline()` 的意图解析会按 fail-fast 约束直接失败
 
-### Windows 启动脚本
+### 服务管理
 
-仓库现在仅保留 3 个 Python 启动脚本，默认都围绕 `data/news.db` 工作：
+通过 `knowledge-cli` 统一管理爬取和离线处理进程：
 
 ```bash
-uv run python scripts/start_fetch.py --limit 100 --interval 900
-uv run python scripts/start_offline.py --batch-size 10 --interval 300
-uv run python scripts/start_services.py --fetch-limit 100 --fetch-interval 900 --process-batch-size 10 --process-interval 300
+# 启动（爬取 + 离线处理，各自独立控制台窗口）
+uv run knowledge-cli start --graph-enabled
+
+# 查看进程状态
+uv run knowledge-cli status
+
+# 停止所有进程
+uv run knowledge-cli stop
+
+# 仅停止爬取
+uv run knowledge-cli stop --fetch
+
+# 仅停止离线处理
+uv run knowledge-cli stop --offline
 ```
 
-说明：
+`start` 参数说明：
 
-- `start_fetch.py`：启动东方财富快讯持续抓取
-- `start_offline.py`：启动离线知识化轮询处理；默认增量处理
-- `start_offline.py --graph-enabled`：在 Neo4j 已配置可用时启用图谱同步
-- `start_services.py`：一键拉起“消息源抓取 + 离线处理”两个独立控制台窗口
-
-参数说明：
-
-- `start_fetch.py`
-- `--limit`：每次抓取的消息条数，默认 `100`
-- `--interval`：连续抓取间隔，单位秒，默认 `900`
+- `--fetch-limit`：每次抓取的消息条数，默认 `100`
+- `--fetch-interval`：连续抓取间隔（秒），默认 `900`
+- `--process-batch-size`：每轮离线处理的批大小，默认 `10`
+- `--process-interval`：离线轮询间隔（秒），默认 `300`
 - `--db`：SQLite 数据库路径，默认 `data/news.db`
-
-- `start_offline.py`
-- `--batch-size`：每轮离线处理的批大小，默认 `10`
-- `--interval`：离线轮询间隔，单位秒，默认 `300`
-- `--db`：SQLite 数据库路径，默认 `data/news.db`
+- `--graph-enabled`：给离线处理进程启用 Neo4j 图谱同步
 - `--time-window`：可选的 ISO 周过滤，例如 `2026-W14`
-- `--graph-enabled`：启用 Neo4j 图谱同步；不传时按脚本默认关闭
-
-- `start_services.py`
-- `--fetch-limit`：传给 `start_fetch.py --limit`，默认 `100`
-- `--fetch-interval`：传给 `start_fetch.py --interval`，默认 `900`
-- `--process-batch-size`：传给 `start_offline.py --batch-size`，默认 `10`
-- `--process-interval`：传给 `start_offline.py --interval`，默认 `300`
-- `--db`：统一传给抓取和离线处理脚本的数据库路径，默认 `data/news.db`
-- `--graph-enabled`：给离线处理进程启用图谱同步
 
 
 - 项目级规则统一维护在 `docs/SHARED_RULES.md`
