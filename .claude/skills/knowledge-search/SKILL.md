@@ -39,19 +39,19 @@ Search the financial knowledge base via `knowledge-cli search`.
 Construct the command based on the user's request:
 
 ```bash
-uv run knowledge-cli search --entities "小米集团"
+knowledge-cli search --entities "小米集团"
 ```
 
 ```bash
-uv run knowledge-cli search --entities "小米集团" --time-range 2025-04-01:2026-04-13 --intent ENTITY_TIMELINE
+knowledge-cli search --entities "小米集团" --time-range 2025-04-01:2026-04-13 --intent ENTITY_TIMELINE
 ```
 
 ```bash
-uv run knowledge-cli search --entities "小米集团" --intent RELATIONSHIP_QUERY --target-entity "苹果公司" --hops 3
+knowledge-cli search --entities "小米集团" --intent RELATIONSHIP_QUERY --target-entity "苹果公司" --hops 3
 ```
 
 ```bash
-uv run knowledge-cli search --entities "小米集团" "腾讯" --intent COMPARATIVE_ANALYSIS
+knowledge-cli search --entities "小米集团" "腾讯" --intent COMPARATIVE_ANALYSIS
 ```
 
 ## Output
@@ -68,7 +68,7 @@ Returns JSON with:
 ## Instructions
 
 1. Parse the user's request to determine the appropriate `--intent`, `--entities`, and optional filters.
-2. Run the command using `uv run knowledge-cli search ...`.
+2. Run the command using `knowledge-cli search ...`.
 3. The output is JSON printed to stdout. Parse it and present the key findings to the user.
 4. If the user's query mentions two entities and their relationship, use `--intent RELATIONSHIP_QUERY --target-entity "B" --hops N`.
 5. If the user asks about time progression, use `--intent ENTITY_TIMELINE` with a `--time-range`.
@@ -79,11 +79,11 @@ Returns JSON with:
 If the user invokes `/knowledge-search 小米集团`, run:
 
 ```bash
-uv run knowledge-cli search --entities "小米集团"
+knowledge-cli search --entities "小米集团"
 ```
 
 If the user invokes `/knowledge-search 小米和腾讯的关系`, determine intent and entities, then run:
 
 ```bash
-uv run knowledge-cli search --entities "小米集团" --intent RELATIONSHIP_QUERY --target-entity "腾讯" --hops 2
+knowledge-cli search --entities "小米集团" --intent RELATIONSHIP_QUERY --target-entity "腾讯" --hops 2
 ```
