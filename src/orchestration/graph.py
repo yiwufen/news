@@ -179,6 +179,7 @@ def run_pipeline(
         graph_meta = GraphMeta(graph_enabled=graph_enabled, hops=effective_query.hops)
 
     errors = list(graph_enhancement.errors) if graph_enhancement else []
+    warnings: list[dict[str, str]] = []
     if source == "direct_articles" and effective_query.intent == IntentType.RELATIONSHIP_QUERY:
         errors.append("关系查询当前仅支持 knowledge_base 检索源，不支持 direct articles 输入")
 
@@ -192,6 +193,22 @@ def run_pipeline(
             "关系查询需要图谱服务，当前不可用，返回的结果为降级的文本搜索而非关系路径"
         )
 
+    # Structured warnings for empty results
+    if search_result.total_count == 0 and effective_query.entities:
+        entity_repo = EntityRepository()
+        matched = entity_repo.find_by_names(effective_query.entities)
+        if not matched:
+            entity_names = ", ".join(effective_query.entities)
+            warnings.append({
+                "code": "ENTITY_NOT_FOUND",
+                "message": f"未找到实体'{entity_names}'，已降级为文本搜索",
+            })
+        if search_result.total_count == 0:
+            warnings.append({
+                "code": "NO_RESULTS",
+                "message": "查询未返回任何结果",
+            })
+
     return PipelineResult(
         request_id=str(uuid4())[:8],
         query=effective_query,
@@ -201,7 +218,7 @@ def run_pipeline(
         event_clusters=merged_clusters,
         total_count=search_result.total_count,
         retrieval=RetrievalMeta(
-            retrieval_mode="bm25",
+            retrieval_mode=search_result.retrieval_path,
             bm25_count=search_result.bm25_count,
             applied_filters=search_result.applied_filters,
             hit_scores=search_result.hit_scores,
@@ -209,4 +226,5 @@ def run_pipeline(
         graph=graph_meta,
         graph_result=graph_enhancement.graph_result if graph_enhancement else None,
         errors=errors,
+        warnings=warnings,
     )

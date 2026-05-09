@@ -53,6 +53,7 @@ class PipelineResult:
     graph: GraphMeta
     graph_result: GraphRetrievalResult | None = None
     errors: list[str] = field(default_factory=list)
+    warnings: list[dict[str, str]] = field(default_factory=list)
 
     @property
     def graph_dict(self) -> dict[str, Any]:
@@ -90,4 +91,5 @@ class PipelineResult:
             },
             "graph_data": self.graph_dict,
             "errors": self.errors,
+            "warnings": self.warnings,
         }

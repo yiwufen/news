@@ -304,6 +304,42 @@ def _resolve_entity_type(entity_type: str | None, mention: str) -> EntityKind:
 class EntityRepository:
     """SQLite repository for normalized entities."""
 
+    # Cross-lingual aliases: English name (lowercase) → canonical Chinese name
+    _CROSS_LINGUAL_ALIASES: dict[str, str] = {
+        "byd": "比亚迪",
+        "byd company": "比亚迪",
+        "catl": "宁德时代",
+        "xiaomi": "小米集团",
+        "tencent": "腾讯控股",
+        "alibaba": "阿里巴巴",
+        "alibaba group": "阿里巴巴",
+        "geely": "吉利汽车",
+        "nio": "蔚来",
+        "xpeng": "小鹏汽车",
+        "xpeng motors": "小鹏汽车",
+        "li auto": "理想汽车",
+        "baidu": "百度",
+        "jd.com": "京东",
+        "jd": "京东",
+        "pinduoduo": "拼多多",
+        "didi": "滴滴",
+        "huawei": "华为",
+        "zte": "中兴通讯",
+        "smic": "中芯国际",
+        "hsr": "中国中车",
+        "evergrande": "恒大集团",
+        "china evergrande": "恒大集团",
+        "country garden": "碧桂园",
+        "byd electronic": "比亚迪电子",
+        "suning": "苏宁",
+        "midea": "美的集团",
+        "gree": "格力电器",
+        "haier": "海尔智家",
+        "foxconn": "富士康",
+        "tsmc": "台积电",
+        "samsung": "三星",
+    }
+
     def __init__(self, db_path: str = "data/news.db"):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -390,17 +426,50 @@ class EntityRepository:
         if not names:
             return []
         candidates = self.get_all()
-        return [
-            entity
-            for entity in candidates
-            if any(
-                entity_matches_query_name(
+
+        # Pre-build identifier reverse lookup: identifier_value → entity
+        identifier_lookup: dict[str, Entity] = {}
+        for entity in candidates:
+            for value in entity.identifiers.values():
+                identifier_lookup[value.lower()] = entity
+
+        matched: list[Entity] = []
+        matched_ids: set[str] = set()
+
+        for query_name in names:
+            q_lower = query_name.strip().lower()
+
+            # Layer 1: standard name matching (unchanged behavior)
+            for entity in candidates:
+                if entity.entity_id in matched_ids:
+                    continue
+                if entity_matches_query_name(
                     [entity.canonical_name, *entity.aliases],
                     query_name,
-                )
-                for query_name in names
-            )
-        ]
+                ):
+                    matched.append(entity)
+                    matched_ids.add(entity.entity_id)
+
+            # Layer 2: cross-lingual alias → resolve to Chinese name → match again
+            chinese_name = self._CROSS_LINGUAL_ALIASES.get(q_lower)
+            if chinese_name:
+                for entity in candidates:
+                    if entity.entity_id in matched_ids:
+                        continue
+                    if entity_matches_query_name(
+                        [entity.canonical_name, *entity.aliases],
+                        chinese_name,
+                    ):
+                        matched.append(entity)
+                        matched_ids.add(entity.entity_id)
+
+            # Layer 3: identifier reverse lookup (ticker, ISIN, etc.)
+            entity_by_id = identifier_lookup.get(q_lower)
+            if entity_by_id and entity_by_id.entity_id not in matched_ids:
+                matched.append(entity_by_id)
+                matched_ids.add(entity_by_id.entity_id)
+
+        return matched
 
 
 class EntityResolver:

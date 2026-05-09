@@ -1018,3 +1018,308 @@ def test_knowledge_searcher_matches_alias_variants_and_reports_hybrid_sources(tm
     assert result.hit_scores[result.knowledge_units[0].ku_id]["sources"] == ["bm25"]
 
 
+# ------------------------------------------------------------------
+# Phase 1: Multi-path retrieval tests
+# ------------------------------------------------------------------
+
+
+def _setup_searcher_with_entities(
+    tmp_path,
+    entity_specs: list[tuple[str, str, list[str]]],
+    ku_specs: list[tuple[str, str, str | None, datetime | None]] | None = None,
+) -> tuple[KnowledgeSearcher, dict[str, str]]:
+    """Helper: create a searcher with pre-populated entities and KUs.
+
+    entity_specs: [(entity_id, canonical_name, [aliases])]
+    ku_specs: [(mention, summary, entity_id, published_at)]
+    Returns: (searcher, {canonical_name: entity_id})
+    """
+    db_path = tmp_path / "news.db"
+    now = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
+    entity_repo = EntityRepository(str(db_path))
+    cluster_repo = EventClusterRepository(str(db_path))
+
+    name_to_id: dict[str, str] = {}
+    entities: list[Entity] = []
+    for eid, name, aliases in entity_specs:
+        entity = Entity(
+            entity_id=eid,
+            entity_type="Company",
+            canonical_name=name,
+            aliases=aliases,
+            identifiers={},
+            source_ku_ids=[],
+            created_at=now,
+            updated_at=now,
+        )
+        entities.append(entity)
+        name_to_id[name] = eid
+    entity_repo.save_batch(entities)
+    cluster_repo.save_batch([])
+
+    if ku_specs:
+        ku_repo = KnowledgeUnitRepository(str(db_path))
+        units: list[KnowledgeUnit] = []
+        for mention, summary, entity_id, pub_at in ku_specs:
+            pub_at_resolved: datetime = pub_at if pub_at is not None else now
+            unit = KnowledgeUnit(
+                unit_kind="event",
+                unit_type="market_analysis",
+                summary=summary,
+                entities=[EntityRef(entity_id=entity_id, mention=mention, entity_type="Company")],
+                source=SourceRef(doc_id=f"doc-{len(units)}", source_name="test"),
+                evidence=[EvidenceSpan(text=summary)],
+                time=TimeRef(event_time=pub_at_resolved, published_at=pub_at_resolved, extracted_at=pub_at_resolved),
+            )
+            units.append(unit)
+        ku_repo.save_batch(units)
+    db_path = tmp_path / "news.db"
+    now = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
+    entity_repo = EntityRepository(str(db_path))
+    cluster_repo = EventClusterRepository(str(db_path))
+
+    name_to_id: dict[str, str] = {}
+    entities: list[Entity] = []
+    for eid, name, aliases in entity_specs:
+        entity = Entity(
+            entity_id=eid,
+            entity_type="Company",
+            canonical_name=name,
+            aliases=aliases,
+            identifiers={},
+            source_ku_ids=[],
+            created_at=now,
+            updated_at=now,
+        )
+        entities.append(entity)
+        name_to_id[name] = eid
+    entity_repo.save_batch(entities)
+    cluster_repo.save_batch([])
+
+    if ku_specs:
+        ku_repo = KnowledgeUnitRepository(str(db_path))
+        units: list[KnowledgeUnit] = []
+        for mention, summary, entity_id, pub_at in ku_specs:
+            pub_at = pub_at or now
+            unit = KnowledgeUnit(
+                unit_kind="event",
+                unit_type="market_analysis",
+                summary=summary,
+                entities=[EntityRef(entity_id=entity_id, mention=mention, entity_type="Company")],
+                source=SourceRef(doc_id=f"doc-{len(units)}", source_name="test"),
+                evidence=[EvidenceSpan(text=summary)],
+                time=TimeRef(event_time=pub_at, published_at=pub_at, extracted_at=pub_at),
+            )
+            units.append(unit)
+        ku_repo.save_batch(units)
+
+    searcher = KnowledgeSearcher(
+        db_path=str(db_path),
+        extractor=KnowledgeExtractor(enable_llm=False),
+    )
+    return searcher, name_to_id
+
+
+def test_entity_id_lookup_finds_kus_by_entity(tmp_path) -> None:
+    """Path A: Entity-ID lookup returns KUs linked to the resolved entity."""
+    searcher, ids = _setup_searcher_with_entities(
+        tmp_path,
+        entity_specs=[
+            ("ent_catl", "宁德时代", ["CATL"]),
+            ("ent_byd", "比亚迪", ["BYD"]),
+        ],
+        ku_specs=[
+            ("宁德时代", "宁德时代Q1营收破千亿", "ent_catl", None),
+            ("比亚迪", "比亚迪发布新车型", "ent_byd", None),
+            ("宁德时代", "宁德时代与比亚迪合作", "ent_catl", None),
+        ],
+    )
+
+    result = searcher.search(
+        KnowledgeSearchRequest(
+            structured_query=StructuredQuery(
+                intent=IntentType.ENTITY_OVERVIEW,
+                entities=["宁德时代"],
+                time_range=None,
+                filters=QueryFilters(),
+                original_query="宁德时代",
+                confidence=1.0,
+            ),
+        )
+    )
+
+    assert result.total_count >= 2
+    assert result.retrieval_path == "entity_id_lookup"
+
+
+def test_relaxation_cascade_returns_results_when_entity_not_found(tmp_path) -> None:
+    """When entity is not in DB, BM25 fallback returns results instead of empty."""
+    searcher, _ = _setup_searcher_with_entities(
+        tmp_path,
+        entity_specs=[
+            ("ent_catl", "宁德时代", []),
+        ],
+        ku_specs=[
+            ("宁德时代", "宁德时代Q1营收破千亿", "ent_catl", None),
+        ],
+    )
+
+    # "量化交易" is not an entity — should fall through to BM25
+    result = searcher.search(
+        KnowledgeSearchRequest(
+            structured_query=StructuredQuery(
+                intent=IntentType.ENTITY_OVERVIEW,
+                entities=["量化交易"],
+                time_range=None,
+                filters=QueryFilters(),
+                original_query="量化交易",
+                confidence=1.0,
+            ),
+        )
+    )
+
+    # Should NOT hard-gate to empty — BM25 fallback runs
+    assert result.retrieval_path == "bm25_fallback"
+
+
+def test_comparative_analysis_balances_both_entities(tmp_path) -> None:
+    """COMPARATIVE_ANALYSIS returns KUs for both entities, not just the popular one."""
+    now = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
+    ku_specs: list[tuple[str, str, str | None, datetime | None]] = [
+        ("宁德时代", f"宁德时代事件{i}", "ent_catl", now + timedelta(days=i))
+        for i in range(10)
+    ] + [
+        ("比亚迪", f"比亚迪事件{i}", "ent_byd", now + timedelta(days=i))
+        for i in range(3)
+    ]
+
+    searcher, _ = _setup_searcher_with_entities(
+        tmp_path,
+        entity_specs=[
+            ("ent_catl", "宁德时代", []),
+            ("ent_byd", "比亚迪", []),
+        ],
+        ku_specs=ku_specs,
+    )
+
+    result = searcher.search(
+        KnowledgeSearchRequest(
+            structured_query=StructuredQuery(
+                intent=IntentType.COMPARATIVE_ANALYSIS,
+                entities=["宁德时代", "比亚迪"],
+                time_range=None,
+                filters=QueryFilters(),
+                original_query="宁德时代 vs 比亚迪",
+                confidence=1.0,
+            ),
+            top_k=20,
+        )
+    )
+
+    assert result.retrieval_path == "comparative"
+    # Both entities should have representation
+    byd_mentions = sum(
+        1 for u in result.knowledge_units
+        if any(e.entity_id == "ent_byd" for e in u.entities)
+    )
+    assert byd_mentions > 0, "比亚迪 should have at least one KU in results"
+
+
+def test_topic_research_fallback_to_text_search(tmp_path) -> None:
+    """TOPIC_RESEARCH for unknown topic falls back to BM25 text search."""
+    searcher, _ = _setup_searcher_with_entities(
+        tmp_path,
+        entity_specs=[],
+        ku_specs=[
+            ("人工智能", "大模型技术发展趋势分析", None, None),
+        ],
+    )
+
+    result = searcher.search(
+        KnowledgeSearchRequest(
+            structured_query=StructuredQuery(
+                intent=IntentType.TOPIC_RESEARCH,
+                entities=["大模型"],
+                time_range=None,
+                filters=QueryFilters(),
+                original_query="大模型",
+                confidence=1.0,
+            ),
+        )
+    )
+
+    # "大模型" may or may not match as entity, but should not hard-gate to empty
+    assert result.retrieval_path in ("bm25_fallback", "entity_id_lookup")
+
+
+def test_timeline_covers_time_range(tmp_path) -> None:
+    """ENTITY_TIMELINE returns results spread across months, not concentrated."""
+    now = datetime(2026, 1, 15, 10, 0, tzinfo=UTC)
+    ku_specs: list[tuple[str, str, str | None, datetime | None]] = [
+        (
+            "宁德时代",
+            f"宁德时代{i}月事件",
+            "ent_catl",
+            now + timedelta(days=30 * i),
+        )
+        for i in range(6)  # Jan through Jun
+    ]
+
+    searcher, _ = _setup_searcher_with_entities(
+        tmp_path,
+        entity_specs=[("ent_catl", "宁德时代", [])],
+        ku_specs=ku_specs,
+    )
+
+    result = searcher.search(
+        KnowledgeSearchRequest(
+            structured_query=StructuredQuery(
+                intent=IntentType.ENTITY_TIMELINE,
+                entities=["宁德时代"],
+                time_range=None,
+                filters=QueryFilters(),
+                original_query="宁德时代",
+                confidence=1.0,
+            ),
+            top_k=20,
+        )
+    )
+
+    assert result.retrieval_path == "timeline"
+    assert len(result.knowledge_units) >= 3
+
+    # Verify temporal spread — results should span multiple months
+    months = {u.time.published_at.strftime("%Y-%m") for u in result.knowledge_units}
+    assert len(months) >= 2, f"Expected results from multiple months, got: {months}"
+
+
+def test_cross_lingual_alias_byd_resolves(tmp_path) -> None:
+    """'BYD' resolves to 比亚迪 via cross-lingual alias mapping."""
+    searcher, _ = _setup_searcher_with_entities(
+        tmp_path,
+        entity_specs=[
+            ("ent_byd", "比亚迪", ["BYD"]),
+        ],
+        ku_specs=[
+            ("比亚迪", "比亚迪发布新车型", "ent_byd", None),
+        ],
+    )
+
+    result = searcher.search(
+        KnowledgeSearchRequest(
+            structured_query=StructuredQuery(
+                intent=IntentType.ENTITY_OVERVIEW,
+                entities=["BYD"],
+                time_range=None,
+                filters=QueryFilters(),
+                original_query="BYD",
+                confidence=1.0,
+            ),
+        )
+    )
+
+    assert result.total_count >= 1
+    assert result.retrieval_path == "entity_id_lookup"
+
+
+

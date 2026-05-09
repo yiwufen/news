@@ -583,6 +583,46 @@ class KnowledgeUnitRepository(_SQLiteRepository):
             rows = connection.execute(sql, params).fetchall()
         return [(row["ku_id"], float(row["bm25_score"])) for row in rows]
 
+    def find_by_entity_ids(
+        self,
+        entity_ids: Sequence[str],
+        *,
+        time_range: tuple[str, str] | None = None,
+        event_types: Sequence[str] | None = None,
+        limit: int = 100,
+    ) -> list[str]:
+        """Return ku_ids for KUs associated with any of the given entity_ids.
+
+        Uses json_each for precise matching instead of LIKE pattern matching.
+        """
+        if not entity_ids:
+            return []
+        placeholders = ", ".join("?" for _ in entity_ids)
+        where_parts: list[str] = [
+            f"je.value IN ({placeholders})"
+        ]
+        params: list[Any] = list(entity_ids)
+        if time_range is not None:
+            where_parts.append(
+                "substr(COALESCE(ku.event_time, ku.published_at), 1, 10) BETWEEN ? AND ?"
+            )
+            params.extend(time_range)
+        if event_types:
+            type_placeholders = ", ".join("?" for _ in event_types)
+            where_parts.append(f"ku.unit_type IN ({type_placeholders})")
+            params.extend(event_types)
+        params.append(limit)
+        sql = f"""
+            SELECT DISTINCT ku.ku_id
+            FROM knowledge_units ku, json_each(ku.entity_ids) je
+            WHERE {' AND '.join(where_parts)}
+            ORDER BY ku.published_at DESC
+            LIMIT ?
+        """
+        with self._connect() as connection:
+            rows = connection.execute(sql, params).fetchall()
+        return [row["ku_id"] for row in rows]
+
     def rebuild_fts_index(self) -> int:
         units = self.get_all()
         with self._connect() as connection:
