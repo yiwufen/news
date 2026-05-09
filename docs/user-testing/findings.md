@@ -328,3 +328,132 @@ Received notification from DBMS server: <GqlStatusObject gql_status='01N52', sta
 
 ### Impact
 MEDIUM。任何将 knowledge-cli 集成到程序化系统中的开发者都会遇到 JSON 解析失败。必须使用 `2>/dev/null` 或手动过滤才能获得合法 JSON。这与 Defect #13（legacy 死代码引用不存在的属性）相关——`primary_entity_id` 属性在 Neo4j 中不存在，说明代码与图模型不同步。
+
+---
+
+## F20260509-010
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-09 |
+| **Session** | ut-developer-20260509-154500 |
+| **Persona** | developer |
+| **Scenario** | ad-hoc (新能源探索) |
+| **Severity** | CRITICAL |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #15 |
+
+### Summary
+COMPARATIVE_ANALYSIS 意图查询"宁德时代"和"比亚迪"时，返回的 20 条 KU 全部只涉及宁德时代，比亚迪完全不出现在任何 KU 中。对比分析退化为单实体搜索。
+
+### Reproduction
+```
+uv run knowledge-cli search --entities "宁德时代" "比亚迪" --intent COMPARATIVE_ANALYSIS
+```
+- 宁德时代 mentioned in KUs: 20/20
+- 比亚迪 mentioned in KUs: 0/20
+- entities 列表中包含 128 个实体，但返回的 KU 没有覆盖两个查询实体
+
+### Expected Behavior
+COMPARATIVE_ANALYSIS 应返回同时涉及两个实体的 KU，或至少各实体的代表性 KU 交替出现。20 条结果中 0 条提及比亚迪是完全不可接受的。
+
+### Impact
+CRITICAL。对比分析是分析师核心需求之一。当用户明确要求比较 A 和 B 时，系统只返回 A 的信息，完全失去"对比"意义。这与 Defect #15（无意图感知检索）直接相关——COMPARATIVE_ANALYSIS 意图没有专门的检索策略，只是普通 BM25 搜索。宁德时代 KU 更多（total_count=53 vs 15），BM25 分数碾压比亚迪。
+
+---
+
+## F20260509-011
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-09 |
+| **Session** | ut-developer-20260509-154500 |
+| **Persona** | developer |
+| **Scenario** | ad-hoc (新能源探索) |
+| **Severity** | HIGH |
+| **Category** | output-quality |
+| **Status** | OPEN |
+| **Related Defect** | #2 |
+
+### Summary
+unit_type 字段中英文严重混用，73 个唯一值中 38 个中文、35 个英文，同一概念用不同语言标注。
+
+### Reproduction
+跨 6 组新能源搜索，unit_type 示例：
+- 中文：薪酬增长、合作内容、商务合作、发布会、股权投资、假消息传播
+- 英文：stock_price_change、financial_performance、fire_incident、company_announcement
+- 语义重复：中文"股价上涨" vs 英文"stock_price_change" vs 英文"price_movement" vs 中文"价格上涨"
+
+### Expected Behavior
+unit_type 应使用统一的词表（全中文或全英文），并通过标准化映射确保语义一致性。
+
+### Impact
+HIGH。这与 Defect #2（词表断层）同根——LLM 抽取时自由选择中英文，导致下游过滤、聚合、统计全部失效。用户按 event_type 过滤时必须猜测系统用的是哪种语言。
+
+---
+
+## F20260509-012
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-09 |
+| **Session** | ut-developer-20260509-154500 |
+| **Persona** | developer |
+| **Scenario** | ad-hoc (新能源探索) |
+| **Severity** | MEDIUM |
+| **Category** | output-quality |
+| **Status** | OPEN |
+| **Related Defect** | - |
+
+### Summary
+event_time 大量缺失，跨 6 组搜索共 103 条 KU 中有 56 条（54%）event_time 为 None。
+
+### Reproduction
+各组搜索的 event_time 缺失率：
+| 搜索 | 有时间 | 无时间 | 缺失率 |
+|------|--------|--------|--------|
+| 比亚迪 OVERVIEW | 6 | 9 | 60% |
+| 宁德时代 OVERVIEW | 10 | 10 | 50% |
+| 新能源汽车 TOPIC | 8 | 12 | 60% |
+| 光伏 TOPIC | 6 | 8 | 57% |
+| 比亚迪 TIMELINE | 5 | 9 | 64% |
+| 宁德时代vs比亚迪 | 12 | 8 | 40% |
+
+### Expected Behavior
+超过一半的 KU 缺少 event_time 是严重的数据质量问题。published_at 在大多数情况下可用，应作为回退时间源。
+
+### Impact
+MEDIUM。时间线查询（ENTITY_TIMELINE）尤其受影响——缺失时间的 KU 无法被定位在时间轴上，导致时间线出现虚假空白。
+
+---
+
+## F20260509-013
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-09 |
+| **Session** | ut-developer-20260509-154500 |
+| **Persona** | developer |
+| **Scenario** | ad-hoc (新能源探索) |
+| **Severity** | LOW |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #10 |
+
+### Summary
+宁德时代搜索返回 96 个 event_clusters，远超 KU 数量（20），大量 cluster 与宁德时代无直接关联。
+
+### Reproduction
+```
+uv run knowledge-cli search --entities "宁德时代" --intent ENTITY_OVERVIEW
+```
+- total_count: 53, 返回 KU: 20
+- event_clusters: 96（cluster 数量是 KU 的近 5 倍）
+- 对比搜索返回 entities: 101
+
+### Expected Behavior
+cluster 补全应限制在与查询实体直接相关的范围内。96 个 cluster 中大量是通过 Defect #10（过度扩展）从 KU 中提及的次要实体拉取的无关 cluster。
+
+### Impact
+LOW。cluster 过度扩展问题在上一轮已记录（F20260509-001），此处确认宁德时代也存在同样问题，且比例更高（96 clusters / 20 KUs vs 小米的 141/12）。
