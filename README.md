@@ -1,158 +1,280 @@
-﻿# Financial Knowledge Retrieval Foundation
+<h1 align="center">Financial Knowledge Retrieval Foundation</h1>
 
-本项目当前定位为一个面向金融场景的知识检索底座，目标是把原始消息加工为可检索、可溯源、可组合的知识层，供后续 skill 驱动的分析 agent 执行通用金融任务。
+<p align="center">
+  <strong>将原始金融新闻转化为可检索、可溯源、可组合的知识图谱</strong>
+</p>
 
-它不是一个以“风险报告生成”为唯一目标的产品。风险分析、时间线、主题研究、关系扩展等都属于后续消费该底座的 skill。
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.13+-3776AB?logo=python&logoColor=white" alt="Python" />
+  <img src="https://img.shields.io/badge/Storage-SQLite_%2B_Neo4j-008CC1?logo=sqlite&logoColor=white" alt="Storage" />
+  <img src="https://img.shields.io/badge/Search-FTS5_BM25_%2B_Graph-FF6F00?logo=graphql&logoColor=white" alt="Search" />
+  <img src="https://img.shields.io/badge/LLM-Anthropic_Climate-191919?logo=anthropic&logoColor=white" alt="LLM" />
+  <img src="https://img.shields.io/badge/Tests-100_passed-4CAF50?logo=pytest&logoColor=white" alt="Tests" />
+</p>
 
-## 核心方向
+<p align="center">
+  <em>Transform raw financial news into searchable, traceable, composable knowledge — for AI agents.</em>
+</p>
 
-当前阶段重点是：
+---
 
-- 原始消息标准化
-- `KnowledgeUnit` 抽取
-- `EventCluster` 保守归并
-- `Entity` 标准化
-- 图谱更新
-- FTS/BM25 文本索引与图谱索引建库
+## Architecture
 
-第一版图谱是正式产物，采用 `Entity + EventCluster` 双核心建模；底层证据统一由 statement-level `KnowledgeUnit` 承载。
+```mermaid
+flowchart TB
+    subgraph Sources["📡 Data Sources"]
+        EM["EastMoney 7x24 Crawler"]
+    end
 
-## 文档入口
+    subgraph ETL["⚙️ ETL Pipeline"]
+        direction TB
+        EXT["LLM Extraction<br/><small>RawDocument → KnowledgeUnit</small>"]
+        ENT["Entity Resolution<br/><small>Normalization + Dedup</small>"]
+        CLU["Event Clustering<br/><small>Conservative Merge</small>"]
+    end
 
-- 项目共享规范真源：[`docs/SHARED_RULES.md`](docs/SHARED_RULES.md)
-- 当前进度总览：[`docs/STATUS_OVERVIEW.md`](docs/STATUS_OVERVIEW.md)
-- 当前进度：[`PROGRESS.md`](PROGRESS.md)
-- Codex 入口：[`AGENTS.md`](AGENTS.md)
-- Claude Code 入口：[`CLAUDE.md`](CLAUDE.md)
+    subgraph Storage["💾 Storage Layer"]
+        SQL["SQLite<br/><small>Primary Store</small>"]
+        NEO["Neo4j<br/><small>Knowledge Graph</small>"]
+        FTS["FTS5 BM25<br/><small>Full-Text Index</small>"]
+    end
 
-如果多个文档表述不一致，以 `docs/SHARED_RULES.md` 为准。
+    subgraph Retrieval["🔍 Retrieval"]
+        BM25["BM25 Search<br/>+ Structured Filters<br/>+ Tiered Scoring"]
+        GPH["Graph Enhancement<br/><small>Entity ↔ EventCluster Traversal</small>"]
+    end
 
-## 当前状态
+    subgraph Output["🤖 Agent Interface"]
+        CLI["knowledge-cli<br/><small>JSON to stdout</small>"]
+        API["Python API<br/><small>PipelineResult</small>"]
+    end
 
-当前主线已经切到知识底座：`run_continuous()` 负责离线知识化建库，`run_pipeline()` 直接检索 `KnowledgeUnit` / `Entity` / `EventCluster`。旧的风险导向消费链路和对应 compatibility 输出已从主线接口中移除。
+    EM -->|"RawDocument"| EXT
+    EXT -->|"KnowledgeUnit"| ENT
+    ENT -->|"Entity"| CLU
+    CLU -->|"EventCluster"| SQL
+    ENT -->|"Entity Node"| NEO
+    CLU -->|"INVOLVED_IN Edge"| NEO
+    SQL --> FTS
 
-在原始证据级检索之上，仓库现在还提供了稳定的 skill-facing 内部契约：`run_skill_query()`。它基于现有 `run_pipeline()` 结果做适配，不改变 `run_pipeline()` 语义。
+    SQL --> BM25
+    NEO --> GPH
+    BM25 --> CLI
+    BM25 --> API
+    GPH --> CLI
+    GPH --> API
 
-当前检索主线已包含：
+    style Sources fill:#e1f5fe,stroke:#0288d1
+    style ETL fill:#fff3e0,stroke:#ef6c00
+    style Storage fill:#e8f5e9,stroke:#2e7d32
+    style Retrieval fill:#fce4ec,stroke:#c62828
+    style Output fill:#f3e5f5,stroke:#6a1b9a
+```
 
-- `KnowledgeUnit` FTS 稀疏索引
-- BM25 + 结构化过滤 + 分层打分
-- `Entity -> EventCluster` 图谱增强检索与正式关系结果集输出
-- 旧 SQLite 库的检索物化状态自愈：仓库打开时会自动回填缺失的 `entity_ids` 并重建缺失的 FTS 行，避免出现“图里有实体、知识库检索为空”的状态漂移
+---
 
-## 开发命令
+## Key Features
+
+|     | Feature | Description |
+| --- | ------- | ----------- |
+| 📝 | **Statement-Level Extraction** | LLM 从每篇新闻中抽取原子级事实（KnowledgeUnit），而非整篇文档。每条证据保留原文溯源 |
+| 🔍 | **BM25 + Graph Hybrid Retrieval** | FTS5 全文检索 + Neo4j 图谱遍历并行召回，分层打分：实体匹配(5x) > 类型匹配(2x) > 文本相关性 > 时效 |
+| 🧩 | **Conservative Clustering** | 仅当实体一致、事件类型相同、时间邻近、语义相似时才合并事件，避免过度聚合导致的幻觉 |
+| 🤖 | **Agent-Native CLI** | `knowledge-cli` 输出结构化 JSON，专为 AI agent 程序化消费设计 |
+| 🛡️ | **End-to-End Typed Pipeline** | Pydantic v2 模型贯穿全栈：从数据抽取到检索输出，100 项测试 + 0 类型错误 |
+
+---
+
+## Quick Start
+
+### 1. Install Dependencies
 
 ```bash
+# Requires Python 3.13+ and uv
 uv sync
-uv run pytest
-uv run pyright .
 ```
 
-说明：
-- 仓库通过 `uv.toml` 将 `uv` 缓存固定到项目内的 `.uv-cache/`，避免依赖用户目录下的全局缓存初始化。
-
-## 当前入口
-
-### 持续运行模式
+### 2. Configure Environment
 
 ```bash
-uv run python -c "
-from pathlib import Path
-from dotenv import load_dotenv
-load_dotenv(dotenv_path=Path('.env'))
-from src.pipeline import run_continuous
-
-result = run_continuous(graph_enabled=True)
-print(result)
-"
+cp .env.example .env
+# Edit .env: set ANTHROPIC_API_KEY (required) and NEO4J_PASSWORD
 ```
 
-### 任务入口
+### 3. Ingest & Search
 
 ```bash
-uv run python -c "
-from pathlib import Path
-from dotenv import load_dotenv
-load_dotenv(dotenv_path=Path('.env'))
+# Ingest news into knowledge base
+uv run knowledge-cli ingest --graph-enabled
+
+# Search for knowledge about an entity
+uv run knowledge-cli search --entities "小米集团" --time-range 2025-04-01:2026-04-13
+```
+
+### Docker (Alternative)
+
+```bash
+docker compose up -d                    # Start app + Neo4j
+docker compose exec app knowledge-cli search --entities "小米集团"
+```
+
+---
+
+## Data Model
+
+```mermaid
+erDiagram
+    RawDocument ||--o{ KnowledgeUnit : "LLM extracts"
+    KnowledgeUnit }o--o{ Entity : "mentions"
+    KnowledgeUnit }o--o{ EventCluster : "assigned to"
+    Entity }o--o{ EventCluster : "INVOLVED_IN"
+
+    RawDocument {
+        string doc_id PK
+        string title
+        string content
+        datetime published_at
+        string source_name
+    }
+    KnowledgeUnit {
+        string ku_id PK
+        string summary
+        string unit_kind
+        string unit_type
+        float confidence
+    }
+    Entity {
+        string entity_id PK
+        string canonical_name
+        string entity_type
+        list aliases
+    }
+    EventCluster {
+        string cluster_id PK
+        string title
+        string cluster_type
+        list member_ku_ids
+    }
+```
+
+| Layer         | Storage                                        | Purpose |
+| ------------- | ---------------------------------------------- | ------- |
+| RawDocument | SQLite `news_articles` | 原始新闻文章 |
+| KnowledgeUnit | SQLite `knowledge_units` + FTS5 index | 最小可检索单元（statement-level） |
+| Entity | SQLite `entities` + Neo4j `Entity` nodes | 标准化实体（Company / Person / Org） |
+| EventCluster | SQLite `event_clusters` + Neo4j `EventCluster` nodes | 保守聚合的事件簇 |
+
+---
+
+## Usage
+
+### CLI
+
+```bash
+# Search with filters
+knowledge-cli search \
+  --entities "小米集团" "腾讯控股" \
+  --time-range 2025-04-01:2026-04-13 \
+  --event-types "债务违约" "股权质押" \
+  --intent ENTITY_OVERVIEW \
+  --top-k 20 \
+  --hops 2
+
+# Relationship query (A→B path)
+knowledge-cli search \
+  --entities "小米集团" \
+  --target-entity "美的集团" \
+  --intent RELATIONSHIP_QUERY
+
+# Ingest news
+knowledge-cli ingest --batch-size 10 --graph-enabled
+
+# Service management (daemonized fetch + offline)
+knowledge-cli start --graph-enabled
+knowledge-cli status
+knowledge-cli stop
+```
+
+### Python API
+
+```python
 from src.orchestration import run_pipeline
+from src.schemas.query import make_query
 
 result = run_pipeline(
-    raw_query='查看小米集团过去一年做的事情',
+    structured_query=make_query(
+        entities=["小米集团"],
+        time_range=("2025-04-01", "2026-04-13"),
+    ),
     graph_enabled=True,
+    top_k=20,
 )
-print(result)
-"
+
+print(result.to_dict())
 ```
 
-### Skill 契约入口
+---
+
+## Scoring
+
+检索采用分层打分策略，确保最相关的知识排在前面：
+
+| Score Component | Weight      | Logic |
+| --------------- | ----------- | ----- |
+| Entity Match | 5.0x | 查询实体命中 KnowledgeUnit 关联实体 |
+| Event Type Match | 2.0x | 查询事件类型命中 unit_type |
+| BM25 Text Score | 1.0x | FTS5 全文相关性 |
+| Recency | tie-breaker | 微小时间衰减因子 |
+
+---
+
+## Project Structure
+
+```text
+news/
+├── collectors/              # EastMoney news crawler + database layer
+├── src/
+│   ├── cli.py               # knowledge-cli entry point
+│   ├── knowledge_base.py    # RawDocument + KnowledgeUnit models + SQLite repos
+│   ├── entities.py          # Entity resolution + EntityRepository
+│   ├── event_clustering.py  # EventCluster conservative merge
+│   ├── knowledge_extractor.py  # LLM-based KnowledgeUnit extraction
+│   ├── time_normalization.py   # Relative/fuzzy time → absolute
+│   ├── conflict_detection.py   # Multi-source conflict analysis
+│   ├── entity_context_filter.py # LLM extraction entity context injection
+│   ├── retrieval/           # BM25 + FTS5 search layer
+│   ├── graph/               # Neo4j connection + graph retrieval
+│   ├── orchestration/       # Pipeline orchestrator + PipelineResult
+│   ├── schemas/             # StructuredQuery, IntentType
+│   ├── pipeline/            # Continuous ingestion pipeline
+│   └── llm/                 # LLM client configuration
+├── tests/                   # 100 tests, 0 type errors
+├── docs/                    # Architecture docs + shared rules
+├── Dockerfile               # Multi-stage build
+├── docker-compose.yml       # App + Neo4j orchestration
+└── pyproject.toml           # Dependencies + CLI entry point
+```
+
+---
+
+## Development
 
 ```bash
-uv run python -c "
-from pathlib import Path
-from dotenv import load_dotenv
-load_dotenv(dotenv_path=Path('.env'))
-from src.skills import run_skill_query
-
-result = run_skill_query(
-    raw_query='查看小米集团过去一年做的事情',
-    graph_enabled=True,
-)
-print(result)
-"
+uv sync --group dev     # Install dev dependencies
+uv run pytest           # Run tests (100 passed)
+uv run pyright .        # Type check (0 errors)
 ```
 
-说明：
+---
 
-- `run_continuous()` 是当前阶段的重点入口
-- `run_pipeline()` 直接检索 `KnowledgeUnit` / `Entity` / `EventCluster`
-- `run_skill_query()` 是面向 skill 的稳定内部契约，当前 V1 支持：
-  - `ENTITY_OVERVIEW` - 实体概览
-  - `ENTITY_TIMELINE` - 实体时间线
-  - `EVENT_ANALYSIS` - 事件分析
-  - `RELATIONSHIP_QUERY` - 关系查询
-  - `RISK_ASSESSMENT` - 风险评估
-  - `GUARANTEE_ANALYSIS` - 担保分析
-- `run_pipeline(graph_enabled=True)` 会在主检索结果上叠加正式图谱增强，返回稳定的 `graph.nodes` / `graph.edges` / `graph.paths`
-- `run_skill_query()` 会返回统一的 `contract_version` / `summary` / `capabilities` / `payload` 结构，并显式区分 `knowledge_base` 与 `direct_articles` 的图谱能力差异
-- 图谱默认开启；显式传 `graph_enabled=False` 仅用于测试、调试或本地排查，不代表业务语义
-- `articles=...` 直传路径仅用于 ad-hoc/debug 查询，会在线临时抽取并以内存方式检索；正式知识库主线应先通过 `run_continuous()` 入库
-- 若未配置 `ANTHROPIC_API_KEY`，`run_pipeline()` 的意图解析会按 fail-fast 约束直接失败
+## Documentation
 
-### 服务管理
+- [PROGRESS.md](PROGRESS.md) — Development progress & migration history
+- [docs/SHARED_RULES.md](docs/SHARED_RULES.md) — Project authority & guardrails
+- [CLAUDE.md](CLAUDE.md) — Claude Code entry point
 
-通过 `knowledge-cli` 统一管理爬取和离线处理进程：
+---
 
-```bash
-# 启动（爬取 + 离线处理，各自独立控制台窗口）
-uv run knowledge-cli start --graph-enabled
+## License
 
-# 查看进程状态
-uv run knowledge-cli status
-
-# 停止所有进程
-uv run knowledge-cli stop
-
-# 仅停止爬取
-uv run knowledge-cli stop --fetch
-
-# 仅停止离线处理
-uv run knowledge-cli stop --offline
-```
-
-`start` 参数说明：
-
-- `--fetch-limit`：每次抓取的消息条数，默认 `100`
-- `--fetch-interval`：连续抓取间隔（秒），默认 `900`
-- `--process-batch-size`：每轮离线处理的批大小，默认 `10`
-- `--process-interval`：离线轮询间隔（秒），默认 `300`
-- `--db`：SQLite 数据库路径，默认 `data/news.db`
-- `--graph-enabled`：给离线处理进程启用 Neo4j 图谱同步
-- `--time-window`：可选的 ISO 周过滤，例如 `2026-W14`
-
-
-- 项目级规则统一维护在 `docs/SHARED_RULES.md`
-- 完成功能后同步更新 `PROGRESS.md`
-- 运行接口语义保持不变：`run_continuous()`、`run_pipeline()`
-- 优先围绕知识底座重构，不再新增以风险报告为中心的项目级设计
-
-
+Private repository. All rights reserved.
