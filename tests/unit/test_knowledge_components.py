@@ -811,7 +811,9 @@ def test_knowledge_graph_retriever_fails_open_without_breaking_result_shape(tmp_
     )
 
     assert result.used is False
-    assert result.errors == ["neo4j unavailable"]
+    assert len(result.errors) == 1
+    assert "图谱服务不可用" in result.errors[0]
+    assert "RuntimeError" in result.errors[0]
     assert result.nodes == []
     assert result.edges == []
     assert result.paths == []

@@ -98,6 +98,7 @@ class KnowledgeGraphSync:
                             c.event_time_variants_json = $event_time_variants_json,
                             c.conflict_reasons = $conflict_reasons,
                             c.conflict_status = $conflict_status,
+                            c.primary_entity_id = $primary_entity_id,
                             c.updated_at = $updated_at
                         """,
                         id=cluster.cluster_id,
@@ -120,6 +121,7 @@ class KnowledgeGraphSync:
                         ),
                         conflict_reasons=cluster.conflict_reasons,
                         conflict_status=cluster.conflict_status,
+                        primary_entity_id=cluster.primary_entity_id,
                         updated_at=cluster.updated_at.isoformat(),
                     )
                     clusters_created += 1

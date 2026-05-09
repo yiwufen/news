@@ -19,7 +19,7 @@
 | **Scenario** | S001 |
 | **Severity** | MEDIUM |
 | **Category** | retrieval-accuracy |
-| **Status** | OPEN |
+| **Status** | FIXED |
 | **Related Defect** | #10 |
 
 ### Summary
@@ -84,7 +84,7 @@ entities 列表中包含：
 | **Scenario** | S001 |
 | **Severity** | MEDIUM |
 | **Category** | error-handling |
-| **Status** | OPEN |
+| **Status** | FIXED |
 | **Related Defect** | - |
 
 ### Summary
@@ -186,7 +186,7 @@ uv run knowledge-cli search --entities "小米集团" --intent ENTITY_TIMELINE -
 | **Scenario** | S003 |
 | **Severity** | CRITICAL |
 | **Category** | retrieval-accuracy |
-| **Status** | OPEN |
+| **Status** | FIXED |
 | **Related Defect** | #12 |
 
 ### Summary
@@ -226,7 +226,7 @@ CRITICAL。分析师发起关系查询时期望得到结构化的关系数据。
 | **Scenario** | S005 |
 | **Severity** | HIGH |
 | **Category** | retrieval-accuracy |
-| **Status** | OPEN |
+| **Status** | FIXED |
 | **Related Defect** | #2 |
 
 ### Summary
@@ -305,7 +305,7 @@ HIGH。数据覆盖不足直接影响分析师对重大风险事件的追踪能�
 | **Scenario** | S005 |
 | **Severity** | MEDIUM |
 | **Category** | output-quality |
-| **Status** | OPEN |
+| **Status** | FIXED |
 | **Related Defect** | - |
 
 ### Summary

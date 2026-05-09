@@ -12,6 +12,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import logging
 import sys
@@ -70,12 +71,27 @@ def cmd_search(args: argparse.Namespace) -> None:
         target_entity=args.target_entity,
     )
 
-    result: PipelineResult = run_pipeline(
-        structured_query=structured_query,
-        graph_enabled=args.graph_enabled,
-        top_k=args.top_k,
-        hops=args.hops,
-    )
+    # Capture stdout during pipeline execution to isolate Neo4j driver warnings
+    # that would otherwise pollute the JSON output.
+    captured = io.StringIO()
+    real_stdout = sys.stdout
+    sys.stdout = captured
+    try:
+        result: PipelineResult = run_pipeline(
+            structured_query=structured_query,
+            graph_enabled=args.graph_enabled,
+            top_k=args.top_k,
+            hops=args.hops,
+        )
+    finally:
+        sys.stdout = real_stdout
+
+    # Forward any non-JSON warnings to stderr for diagnostics.
+    captured_text = captured.getvalue()
+    if captured_text.strip():
+        for line in captured_text.splitlines():
+            if line.strip():
+                print(line, file=sys.stderr)
 
     json.dump(result.to_dict(), sys.stdout, ensure_ascii=False, indent=2)
     sys.stdout.write("\n")

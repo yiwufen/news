@@ -87,6 +87,10 @@ class KnowledgeSearcher:
 
         time_range = self._serialize_time_range(query)
         event_types = query.filters.event_types or None
+        if event_types:
+            from src.retrieval.event_type_mapping import expand_event_types
+
+            event_types = expand_event_types(event_types)
         candidate_limit = max(request.top_k * 3, request.top_k)
 
         bm25_hits = self.units.search_bm25(
@@ -199,8 +203,11 @@ class KnowledgeSearcher:
         }
 
         selected_entities = self.entities.get_by_ids(selected_entity_ids)
+        # Only use query-matched entities for cluster lookup to avoid
+        # over-expansion from tangential entities in top KUs.
+        cluster_lookup_ids = matched_entity_ids if matched_entity_ids else selected_entity_ids
         related_clusters = self.clusters.find_related(
-            primary_entity_ids=selected_entity_ids,
+            primary_entity_ids=cluster_lookup_ids,
             cluster_types=request.structured_query.filters.event_types,
             time_range=self._serialize_time_range(request.structured_query),
         )

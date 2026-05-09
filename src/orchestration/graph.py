@@ -182,6 +182,16 @@ def run_pipeline(
     if source == "direct_articles" and effective_query.intent == IntentType.RELATIONSHIP_QUERY:
         errors.append("关系查询当前仅支持 knowledge_base 检索源，不支持 direct articles 输入")
 
+    # Detect graph-dependent intents that degraded silently.
+    if (
+        graph_enhancement is not None
+        and graph_enhancement.graph_result.used is False
+        and effective_query.intent == IntentType.RELATIONSHIP_QUERY
+    ):
+        errors.append(
+            "关系查询需要图谱服务，当前不可用，返回的结果为降级的文本搜索而非关系路径"
+        )
+
     return PipelineResult(
         request_id=str(uuid4())[:8],
         query=effective_query,

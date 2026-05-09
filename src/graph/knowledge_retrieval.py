@@ -177,7 +177,7 @@ class KnowledgeGraphRetriever:
         except Exception as exc:
             return GraphRetrievalResult(
                 used=False,
-                errors=[str(exc)],
+                errors=[f"图谱服务不可用（{type(exc).__name__}），已降级为纯文本检索"],
                 summary=_build_summary(start_entities, [], [], expanded=False),
             )
 
@@ -487,7 +487,7 @@ class KnowledgeGraphRetriever:
         except Exception as exc:
             return GraphRetrievalResult(
                 used=False,
-                errors=[str(exc)],
+                errors=[f"图谱服务不可用（{type(exc).__name__}），关系路径查询需要图谱服务"],
                 summary=_build_path_summary(entity_a, entity_b),
             )
 
