@@ -1,0 +1,62 @@
+{
+  "request_id": "93760d20",
+  "query": {
+    "intent": "ENTITY_OVERVIEW",
+    "entities": [
+      "完全不存在的公司名称XYZ"
+    ],
+    "time_range": null,
+    "filters": {
+      "event_types": null,
+      "risk_levels": null,
+      "sources": null,
+      "min_credibility": 0.5,
+      "categories": null
+    },
+    "original_query": "完全不存在的公司名称XYZ",
+    "confidence": 1.0,
+    "hops": 1,
+    "target_entity": null
+  },
+  "source": "knowledge_base",
+  "knowledge_units": [],
+  "entities": [],
+  "event_clusters": [],
+  "total_count": 0,
+  "retrieval": {
+    "retrieval_mode": "bm25",
+    "bm25_count": 0,
+    "applied_filters": {
+      "entities": [
+        "完全不存在的公司名称XYZ"
+      ],
+      "matched_entity_ids": [],
+      "time_range": null,
+      "event_types": []
+    },
+    "hit_scores": {}
+  },
+  "graph": {
+    "graph_enabled": true,
+    "graph_used": false,
+    "candidate_count": 0,
+    "expanded_cluster_count": 0,
+    "expanded_entity_count": 0,
+    "hit_reasons": {},
+    "hops": 1
+  },
+  "graph_data": {
+    "enabled": true,
+    "used": false,
+    "nodes": [],
+    "edges": [],
+    "paths": [],
+    "summary": {
+      "start_entities": [],
+      "event_cluster_count": 0,
+      "expanded_entity_count": 0,
+      "expanded": false
+    }
+  },
+  "errors": []
+}

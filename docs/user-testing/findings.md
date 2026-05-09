@@ -119,7 +119,7 @@ uv run knowledge-cli search --entities "小米集团"
 | **Scenario** | S002 |
 | **Severity** | HIGH |
 | **Category** | retrieval-accuracy |
-| **Status** | OPEN |
+| **Status** | IMPROVED |
 | **Related Defect** | #3, #1 |
 
 ### Summary
@@ -341,7 +341,7 @@ MEDIUM。任何将 knowledge-cli 集成到程序化系统中的开发者都会�
 | **Scenario** | ad-hoc (新能源探索) |
 | **Severity** | CRITICAL |
 | **Category** | retrieval-accuracy |
-| **Status** | OPEN |
+| **Status** | FIXED |
 | **Related Defect** | #15 |
 
 ### Summary
@@ -457,3 +457,451 @@ cluster 补全应限制在与查询实体直接相关的范围内。96 个 clust
 
 ### Impact
 LOW。cluster 过度扩展问题在上一轮已记录（F20260509-001），此处确认宁德时代也存在同样问题，且比例更高（96 clusters / 20 KUs vs 小米的 141/12）。
+
+---
+
+## F20260509-014
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-09 |
+| **Session** | ut-analyst-20260509-170000 |
+| **Persona** | analyst |
+| **Scenario** | S004 |
+| **Severity** | MEDIUM |
+| **Category** | ux |
+| **Status** | FIXED |
+| **Related Defect** | #1, #16 |
+
+### Summary
+搜索不存在的实体时返回空结果且 errors 为空，AI 应用无法区分"实体未找到"和"系统错误"。
+
+### Reproduction
+```
+PYTHONIOENCODING=utf-8 uv run knowledge-cli search --entities "完全不存在的公司名称XYZ" 2>/dev/null
+```
+返回结果：
+- total_count: 0
+- knowledge_units: []
+- errors: []
+- matched_entity_ids: []
+- bm25_count: 0
+
+### Expected Behavior
+errors 字段应包含提示性信息，如 `{"code": "ENTITY_NOT_FOUND", "message": "未找到实体'完全不存在的公司名称XYZ'"}`。对于 AI 应用集成，需要结构化的错误码以便下游 LLM 生成用户友好的回复。
+
+### Impact
+MEDIUM。AI 应用集成时，下游 LLM 收到空结果和空 errors，无法判断是数据缺失还是系统故障。应提供至少一个 warning 级别的提示。
+
+---
+
+## F20260509-015
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-09 |
+| **Session** | ut-analyst-20260509-170000 |
+| **Persona** | analyst |
+| **Scenario** | S006 |
+| **Severity** | HIGH |
+| **Category** | retrieval-accuracy |
+| **Status** | FIXED |
+| **Related Defect** | #1, #16 |
+
+### Summary
+英文实体别名 "BYD" 搜索返回 0 结果，而中文 "比亚迪" 返回 16 条。中文简称（小米、腾讯）可以正确解析，但跨语言别名完全失败。
+
+### Reproduction
+```
+# 中文全名 → 16 results
+PYTHONIOENCODING=utf-8 uv run knowledge-cli search --entities "比亚迪" --intent ENTITY_OVERVIEW
+# → total_count: 16, matched_entity_ids: ['ent_...']
+
+# 英文别名 → 0 results
+PYTHONIOENCODING=utf-8 uv run knowledge-cli search --entities "BYD" --intent ENTITY_OVERVIEW
+# → total_count: 0, matched_entity_ids: [], bm25_count: 0
+
+# 对比：中文简称正常工作
+# "小米" → total_count: 15 (与"小米集团"完全一致)
+# "腾讯" → total_count: 23 (与"腾讯控股"完全一致)
+```
+
+### Expected Behavior
+"BYD" 应解析到与 "比亚迪" 相同的实体。系统应有跨语言别名映射机制，或至少在实体硬门失败后降级为 BM25 文本搜索（summary/evidence 中可能包含 "BYD"）。
+
+### Impact
+HIGH。国际化的 AI 应用用户可能使用英文名称查询中国公司。当前行为（0 结果 + 无提示）比返回不精确的结果更差。确认了 Defect #1（实体硬门）和 Defect #16（无松弛级联）——实体未匹配时 BM25 完全不执行。
+
+---
+
+## F20260509-016
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-09 |
+| **Session** | ut-analyst-20260509-170000 |
+| **Persona** | analyst |
+| **Scenario** | S013 |
+| **Severity** | CRITICAL |
+| **Category** | retrieval-accuracy |
+| **Status** | PARTIAL |
+| **Related Defect** | #1, #3, #15 |
+
+### Summary
+话题搜索能否返回结果完全取决于该话题词是否在摄取时被提取为实体，用户和 AI 应用无法预知哪些话题能搜到。"半导体"(19条)、"AI芯片"(5条)、"大模型"(16条) 有结果，但 "量化交易" 和 "供应链金融" 返回 0 条。
+
+### Reproduction
+```
+# 话题存在于实体库 → 有结果
+PYTHONIOENCODING=utf-8 uv run knowledge-cli search --entities "半导体" --intent TOPIC_RESEARCH
+# → total_count: 19, matched_entity_ids: ['ent_f0506f42d994']
+
+PYTHONIOENCODING=utf-8 uv run knowledge-cli search --entities "大模型" --intent TOPIC_RESEARCH
+# → total_count: 16, matched_entity_ids: ['ent_c9e4494a03c1']
+
+# 话题不在实体库 → 0 结果
+PYTHONIOENCODING=utf-8 uv run knowledge-cli search --entities "量化交易" --intent TOPIC_RESEARCH
+# → total_count: 0, matched_entity_ids: [], bm25_count: 0
+
+PYTHONIOENCODING=utf-8 uv run knowledge-cli search --entities "供应链金融" --intent TOPIC_RESEARCH
+# → total_count: 0, matched_entity_ids: [], bm25_count: 0
+```
+
+### Expected Behavior
+对于话题研究类查询（TOPIC_RESEARCH），当实体解析失败时，应自动降级为 BM25 全文搜索。即使 FTS5 中文分词效果有限（Defect #3），也应该尝试在 entity_mentions 和 unit_type 字段中匹配。完全跳过 BM25 是不可接受的。
+
+### Impact
+CRITICAL。这是 AI 应用集成的核心障碍。AI 应用的用户会问各种话题（行业趋势、政策变化、技术方向），不可能每个话题都在实体库中有对应条目。当前系统只能搜索"已知的实体"，不能做真正的知识检索。这与 Defect #1（实体硬门）、Defect #3（FTS5 中文分词）和 Defect #15（无意图感知检索）三重叠加导致。
+
+---
+
+## F20260509-017
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-09 |
+| **Session** | ut-analyst-20260509-170000 |
+| **Persona** | analyst |
+| **Scenario** | S013 |
+| **Severity** | MEDIUM |
+| **Category** | output-quality |
+| **Status** | OPEN |
+| **Related Defect** | - |
+
+### Summary
+行业/话题词被错误分类为实体类型。半导体被标注为 "Person"，稀土和军工被标注为 "Product"，在手订单被标注为 "Person"。
+
+### Reproduction
+```
+PYTHONIOENCODING=utf-8 uv run knowledge-cli search --entities "半导体" --intent TOPIC_RESEARCH
+```
+返回的 KU 中实体类型：
+- `ent_f0506f42d994`: canonical_name="半导体", entity_type="Person"
+- `ent_a9ba1e0a9849`: canonical_name="稀土", entity_type="Product"
+- `ent_c1da74e5c73f`: canonical_name="军工", entity_type="Product"
+- `ent_b86e10e3c6ae`: canonical_name="在手订单", entity_type="Person"
+
+### Expected Behavior
+半导体应为 Industry/Sector/Concept，稀土应为 Commodity/Industry，军工应为 Industry，在手订单应为 Metric/Concept。这些错误分类会影响 AI 应用依赖 entity_type 做路由或过滤决策。
+
+### Impact
+MEDIUM。与 F20260509-002（"市场份额"标注为 Person）同根问题。实体类型分类由 LLM 在摄取时自由决定，缺乏受控词表约束。AI 应用如果依赖 entity_type 做逻辑分支，会产生错误行为。
+
+---
+
+## F20260509-018
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-09 |
+| **Session** | ut-analyst-20260509-170000 |
+| **Persona** | analyst |
+| **Scenario** | S013 |
+| **Severity** | LOW |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #11 |
+
+### Summary
+"大模型"话题搜索返回 16 条 KU，其中第 3 条和第 4 条是同一事件的近重复报道（高盛/摩根士丹利测试 Anthropic Mythos 大模型）。
+
+### Reproduction
+```
+PYTHONIOENCODING=utf-8 uv run knowledge-cli search --entities "大模型" --intent TOPIC_RESEARCH
+```
+KU 3: "高盛、摩根士丹利等银行正在测试Anthropic的Mythos大模型..."
+KU 4: "高盛、摩根士丹利等华尔街银行正在测试Anthropic的Mythos大模型..."
+
+### Expected Behavior
+同一事件的不同来源报道应被去重或合并，不应在 top-K 中占多个位置。理想情况下应保留信息量最大的版本。
+
+### Impact
+LOW。确认了 Defect #11（无去重）。对于 AI 应用，重复信息浪费 context window 但不致命。
+
+---
+
+## F20260509-019
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-09 |
+| **Session** | ut-analyst-20260509-170000 |
+| **Persona** | analyst |
+| **Scenario** | S014 |
+| **Severity** | MEDIUM |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #12 |
+
+### Summary
+EVENT_IMPACT_ANALYSIS 图谱增强只提供 Entity→INVOLVED_IN→EventCluster 单一关系类型，无法展示因果链或影响传导路径。边类型 100% 为 INVOLVED_IN，无投资/供应/竞争等直接实体关系。
+
+### Reproduction
+```
+PYTHONIOENCODING=utf-8 uv run knowledge-cli search --entities "小米集团" --intent EVENT_IMPACT_ANALYSIS
+```
+- graph_nodes: 37, graph_edges: 40
+- 所有 40 条边的 type 均为 "INVOLVED_IN"
+- 无 Entity→Entity 直接关系边
+- 无 EventCluster→EventCluster 因果/时序边
+
+恒大集团搜索也验证了同样问题：
+- graph_nodes: 9, graph_edges: 8
+- 100% INVOLVED_IN
+
+### Expected Behavior
+影响分析至少需要：
+1. Entity→Entity 关系边（持股、供应、合作、竞争）
+2. 时序排序（先发生的事件→后发生的事件）
+3. 影响强度标注
+
+### Impact
+MEDIUM。图谱增强能发现 BM25 漏掉的关联 cluster（如恒大开庭审理），但关系类型单一，无法支持真正的影响链分析。确认了 Defect #12（图谱 1-hop 限制）。
+
+---
+
+## F20260509-020
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-09 |
+| **Session** | ut-analyst-20260509-173000 |
+| **Persona** | analyst |
+| **Scenario** | ad-hoc (Iran exploration) |
+| **Severity** | CRITICAL |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #1 (FIXED), #3, #4 |
+
+### Summary
+Defect #1（实体硬门）已在代码层面修复——BM25 现在始终执行。但 COMPARATIVE_ANALYSIS 意图下多实体查询仍返回 0 结果：BM25 找到 20 个候选，但打分阈值将全部过滤掉。相同实体用 ENTITY_OVERVIEW 查询可返回 4 条高相关结果。
+
+### Reproduction
+```
+# COMPARATIVE_ANALYSIS → 0 results despite BM25 finding candidates
+PYTHONIOENCODING=utf-8 uv run knowledge-cli search --entities "伊朗" "以色列" --intent COMPARATIVE_ANALYSIS
+# → total_count: 0, bm25_count: 20, matched_entity_ids: []
+
+# ENTITY_OVERVIEW → 4 relevant results, same entities
+PYTHONIOENCODING=utf-8 uv run knowledge-cli search --entities "伊朗" "以色列" --intent ENTITY_OVERVIEW
+# → total_count: 4, bm25_count: 60, matched_entity_ids: []
+# KU 1: 内塔尼亚胡宣布以军加大对伊朗境内目标打击强度
+# KU 2: 内塔尼亚胡与特朗普通话，要求美方不要同意与伊朗停火
+# KU 3: 以色列国防军称美国与伊朗停火安排不包括黎巴嫩
+# KU 4: 以色列官员对美伊临时停火协议表示担忧
+```
+
+同时验证 Defect #1 修复：
+- "伊朗": matched_entity_ids=[], bm25_count=60, total_count=5 → BM25 正常执行
+- "霍尔木兹海峡": matched_entity_ids=[], bm25_count=60, total_count=4 → BM25 正常执行
+- "量化交易": matched_entity_ids=[], bm25_count=0, total_count=0 → BM25 执行但 FTS 无匹配（Defect #3）
+
+### Expected Behavior
+1. COMPARATIVE_ANALYSIS 不应比 ENTITY_OVERVIEW 返回更少的结果——至少应返回相同结果
+2. 当 BM25 找到候选但打分过滤后为空时，应降低阈值或返回 top BM25 结果而非 0
+3. 不同 intent 不应导致如此巨大的结果差异（0 vs 4）
+
+### Impact
+CRITICAL。COMPARATIVE_ANALYSIS 是 AI 应用的核心使用场景之一。当用户要求"比较伊朗和以色列"时返回 0 结果，而简单的实体概览反而返回 4 条高相关结果，这对 AI 应用的可信度是严重打击。与 Defect #4（打分校准）相关——无实体加分时，BM25 负分可能全部低于阈值。
+
+---
+
+## F20260509-021
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-09 |
+| **Session** | ut-analyst-20260509-173000 |
+| **Persona** | analyst |
+| **Scenario** | ad-hoc (Iran exploration) |
+| **Severity** | HIGH |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #15 |
+
+### Summary
+RISK_ASSESSMENT 意图对"伊朗"返回的结果与 ENTITY_OVERVIEW 完全一致（相同的 5 条 KU、相同排序），无任何风险相关的额外分析或过滤。不同意图类型走完全相同的检索路径。
+
+### Reproduction
+```
+# RISK_ASSESSMENT
+PYTHONIOENCODING=utf-8 uv run knowledge-cli search --entities "伊朗" --intent RISK_ASSESSMENT
+# → total_count: 5, 相同的 5 条军事 KU
+
+# ENTITY_OVERVIEW
+PYTHONIOENCODING=utf-8 uv run knowledge-cli search --entities "伊朗" --intent ENTITY_OVERVIEW
+# → total_count: 5, 完全相同的 5 条 KU
+```
+
+### Expected Behavior
+RISK_ASSESSMENT 应优先返回风险相关内容（制裁、违约、军事冲突升级等），而非与 ENTITY_OVERVIEW 完全相同的结果。至少应调整排序使风险相关内容排在前面。
+
+### Impact
+HIGH。确认了 Defect #15（无意图感知检索）。AI 应用如果依赖不同 intent 获取不同维度的信息，当前系统无法提供这种区分。所有 intent 产出的结果完全相同。
+
+---
+
+## F20260509-022
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-09 |
+| **Session** | ut-analyst-20260509-173000 |
+| **Persona** | analyst |
+| **Scenario** | ad-hoc (Iran exploration) |
+| **Severity** | MEDIUM |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #2 |
+
+### Summary
+事件类型过滤"军事部署"找到了 4 条 KU，但其中 2 条与伊朗完全无关（法国戴高乐航母部署、黎巴嫩军队部署），说明 event_type 过滤缺乏实体约束。
+
+### Reproduction
+```
+PYTHONIOENCODING=utf-8 uv run knowledge-cli search --entities "伊朗" --event-types "军事部署"
+# → total_count: 4, matched_entity_ids: []
+
+KU 1: 法国'戴高乐'号航母离开希腊苏达湾基地 ← 与伊朗无关
+KU 2: 黎巴嫩总理要求黎军队和安全部队加强在贝鲁特的部署 ← 与伊朗无关
+KU 3: 伊朗伊斯兰革命卫队航空航天部队部署导弹发射装置 ← 相关
+KU 4: 伊朗情报部门周密部署伏击行动 ← 相关
+```
+
+### Expected Behavior
+event_type 过滤应与实体约束联合生效。当用户搜索"伊朗+军事部署"时，结果应同时满足两个条件：提及伊朗 AND 类型为军事部署。当前行为是只按 event_type 过滤，忽略实体约束（因为 matched_entity_ids 为空）。
+
+### Impact
+MEDIUM。当实体未匹配到 entity_id 时，event_type 过滤独立于实体约束运行，返回不相关的结果。AI 应用会将这些不相关结果当作"伊朗军事部署"信息呈现给用户。
+
+---
+
+## F20260509-023
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-09 |
+| **Session** | ut-analyst-20260509-173000 |
+| **Persona** | analyst |
+| **Scenario** | ad-hoc (Iran exploration) |
+| **Severity** | HIGH |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #3 |
+
+### Summary
+伊朗相关话题覆盖极度不均衡。"中东战争"返回 11 条、"中东局势"返回 31 条，但"伊朗核协议"、"伊朗制裁"返回 0 条。伊朗自身的 5 条 KU 全部是军事片段，缺少石油、制裁、核协议、外交等关键维度。问题根因是 FTS5 中文分词（Defect #3）：复合词如"伊朗核协议"无法被 BM25 匹配。
+
+### Reproduction
+```
+# 有结果（作为实体存在于库中）
+"中东战争" → 11 KUs (entity: ent_b9fae84de941)
+"中东局势" → 31 KUs (entity: ent_1ba13fa117da)
+
+# 有结果（出现在 entity_mentions 中）
+"伊朗" → 5 KUs (BM25 匹配)
+"霍尔木兹海峡" → 4 KUs (BM25 匹配)
+"以色列" → 4 KUs (BM25 匹配)
+
+# 无结果（不在任何 FTS 索引字段中）
+"伊朗核协议" → 0 KUs (bm25_count: 0)
+"伊朗制裁" → 0 KUs (bm25_count: 0)
+"伊朗石油" → 0 KUs (bm25_count: 1, total: 0)
+```
+
+### Expected Behavior
+"伊朗核协议"和"伊朗制裁"是伊朗相关的核心话题，至少应返回与伊朗核问题或制裁相关的 KU。BM25 应能在 summary 或 evidence_text 中匹配到这些关键词。FTS5 中文分词缺失导致连续中文文本不可检索（Defect #3）。
+
+### Impact
+HIGH。对于地缘政治分析类 AI 应用，无法检索"伊朗核协议"或"伊朗制裁"是严重的功能缺失。知识库可能包含相关内容，但 FTS5 分词器无法从连续中文文本中提取匹配。
+
+---
+
+## F20260509-024
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-09 |
+| **Session** | ut-analyst-20260509-173000 |
+| **Persona** | analyst |
+| **Scenario** | ad-hoc (Iran exploration) |
+| **Severity** | LOW |
+| **Category** | data-quality |
+| **Status** | OPEN |
+| **Related Defect** | - |
+
+### Summary
+伊朗相关 5 条 KU 的 event_time 全部为 None（100% 缺失），内容全部是极简短的军事片段（每条 10-20 字），缺乏上下文和详细描述。
+
+### Reproduction
+```
+PYTHONIOENCODING=utf-8 uv run knowledge-cli search --entities "伊朗" --intent ENTITY_OVERVIEW
+```
+所有 5 条 KU：
+- KU 1: "伊朗情报部门周密部署伏击行动" (15字, event_time: None)
+- KU 2: "伊朗方面不急于求成" (9字, event_time: None)
+- KU 3: "伊朗军民协同作战执行伏击任务" (14字, event_time: None)
+- KU 4: "美国与伊朗同意停火两周" (12字, event_time: None)
+- KU 5: "伊朗武装力量保持高度戒备状态" (14字, event_time: None)
+
+### Expected Behavior
+KU 应包含足够的上下文信息（时间、地点、参与方、具体事件），而非极简短的片段。event_time 应从 published_at 回退填充。
+
+### Impact
+LOW。数据粒度问题——这些 KU 更像新闻标题而非知识单元。对于 AI 应用，缺乏上下文的片段很难被有效利用。
+
+---
+
+## F20260509-025
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-09 |
+| **Session** | ut-analyst-20260509-173000 |
+| **Persona** | analyst |
+| **Scenario** | ad-hoc (Iran exploration) |
+| **Severity** | LOW |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #10 |
+
+### Summary
+伊朗 EVENT_IMPACT_ANALYSIS 返回 51 个 event_clusters，但仅有 5 条 KU，cluster/KU 比例为 10.2:1，远超正常范围。
+
+### Reproduction
+```
+PYTHONIOENCODING=utf-8 uv run knowledge-cli search --entities "伊朗" --intent EVENT_IMPACT_ANALYSIS
+# → total_count: 5 KUs, 51 event_clusters
+# → cluster_count / ku_count = 10.2
+```
+
+对比其他实体：
+- 小米: 17 clusters / 15 KUs = 1.1
+- 恒大: 2 clusters / 1 KU = 2.0
+- 伊朗: 51 clusters / 5 KUs = 10.2
+
+### Expected Behavior
+Cluster 补全应与查询实体直接相关。51 个 cluster 中大量来自 KU 提及的次要实体（如"情报部门"、"军民"），通过 Defect #10（过度扩展）拉取。
+
+### Impact
+LOW。确认了 Defect #10。大量无关 cluster 会干扰 AI 应用对事件的全局理解。
