@@ -825,3 +825,40 @@ Separated LLM intent parsing from the retrieval service and created `knowledge-c
 
 - `uv run pytest` -> 100 passed
 - `uv run pyright .` -> 0 errors
+
+---
+
+## 2026-05-09 COMPARATIVE_ANALYSIS 多实体 0 结果修复（F020）
+
+### Problem
+
+COMPARATIVE_ANALYSIS 意图下多实体查询返回 0 结果（F020 CRITICAL）：当查询 `--entities "伊朗" "以色列" --intent COMPARATIVE_ANALYSIS` 时返回 0 条结果，而完全相同的实体输入用 `--intent ENTITY_OVERVIEW` 返回 4 条高相关结果。
+
+### Root Cause
+
+1. **co_occurrence 集合求交集后为空**：KU 是 statement-level，单条陈述很少同时提到两国，交集为空
+2. **每实体 fallback FTS query 过窄**：`_build_fts_query_for_terms` 对单个中文词只产 OR 拼接的 token 集合
+3. **打分阶段进一步衰减**：bm25_score 用占位 `-1.0`，entity_bonus=0，最终分 ≈ -1.0 + tiny_recency
+
+### Solution
+
+**核心思路**：把策略从"先求交集，再轮转补齐"改为"先做并集召回，再用共现 bonus 重排"。
+
+- **召回阶段**：保持 per-entity 召回，但记录每个 ku_id 命中了哪几个实体（用 `dict[str, set[int]]`）
+- **解析失败时改用更广的 BM25**：`_build_fts_query_for_terms([entity_name, query.original_query])`，保留 raw bm25_score
+- **合并候选池为 union**：所有 per-entity 命中合并去重
+- **重排打分加共现 bonus**：coverage_bonus = 3.0 * (匹配实体数 - 1)
+- **保底**：如果没有候选，回退到 `_search_with_relaxation`（与 ENTITY_OVERVIEW 同等召回）
+
+### Changes
+
+- **修改** `src/retrieval/knowledge_search.py:208-271` — `_search_comparative` 主体
+- **新增** `src/retrieval/knowledge_search.py:503-580` — `_build_ranked_result_comparative` 辅助方法
+- **修改** `src/retrieval/knowledge_search.py:686-694` — `_build_fts_query_for_terms` 移除中文短语引号
+- **新增** `tests/unit/test_knowledge_components.py` — 2 个新测试用例
+
+### Regression Checks
+
+- `uv run pytest tests/unit/test_knowledge_components.py` -> 32 passed
+- `uv run pyright src/retrieval/knowledge_search.py tests/unit/test_knowledge_components.py` -> 0 errors
+- 检索评估管线：Recall@5=29.4%、Recall@20=39.3%、MRR=0.188、NDCG@10=0.564（与基线持平，无退化）

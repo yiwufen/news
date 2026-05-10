@@ -217,19 +217,25 @@ def build_knowledge_unit_search_sections(
     unit: KnowledgeUnit,
     entity_names: Sequence[str] | None = None,
 ) -> dict[str, str]:
-    """Build canonical search/index text sections for one knowledge unit."""
+    """Build canonical search/index text sections for one knowledge unit.
+
+    Chinese text is segmented with jieba so that FTS5 can match individual
+    words rather than whole character runs.
+    """
+    from src.chinese_text import segment_chinese
+
     mentions = _dedupe_strings([entity.mention for entity in unit.entities])
     names = _dedupe_strings(list(entity_names or mentions))
     evidence = _dedupe_strings([span.text for span in unit.evidence])
     tags = _dedupe_strings(unit.tags)
     return {
-        "summary": unit.summary,
-        "unit_type": unit.unit_type,
+        "summary": segment_chinese(unit.summary),
+        "unit_type": segment_chinese(unit.unit_type),
         "source_name": unit.source.source_name,
-        "evidence_text": " ".join(evidence),
-        "entity_mentions": " ".join(mentions),
-        "entity_names": " ".join(names),
-        "tags": " ".join(tags),
+        "evidence_text": segment_chinese(" ".join(evidence)),
+        "entity_mentions": segment_chinese(" ".join(mentions)),
+        "entity_names": segment_chinese(" ".join(names)),
+        "tags": segment_chinese(" ".join(tags)),
     }
 
 

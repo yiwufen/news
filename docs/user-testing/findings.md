@@ -690,11 +690,11 @@ MEDIUM。图谱增强能发现 BM25 漏掉的关联 cluster（如恒大开庭审
 | **Scenario** | ad-hoc (Iran exploration) |
 | **Severity** | CRITICAL |
 | **Category** | retrieval-accuracy |
-| **Status** | OPEN |
+| **Status** | FIXED |
 | **Related Defect** | #1 (FIXED), #3, #4 |
 
 ### Summary
-Defect #1（实体硬门）已在代码层面修复——BM25 现在始终执行。但 COMPARATIVE_ANALYSIS 意图下多实体查询仍返回 0 结果：BM25 找到 20 个候选，但打分阈值将全部过滤掉。相同实体用 ENTITY_OVERVIEW 查询可返回 4 条高相关结果。
+Defect #1（实体硬门）已在代码层面修复——BM25 现在始终执行。但 COMPARATIVE_ANALYSIS 意图下多实体查询仍返回 0 结果：BM25 找到 20 个候选，但打分阈值将全部过滤掉。相同实体用 ENTITY_OVERVIEW 查询可返回 4 条高相关结果。已修复：改为 union+coverage_bonus 策略，不再依赖交集。
 
 ### Reproduction
 ```
@@ -905,3 +905,263 @@ Cluster 补全应与查询实体直接相关。51 个 cluster 中大量来自 KU
 
 ### Impact
 LOW。确认了 Defect #10。大量无关 cluster 会干扰 AI 应用对事件的全局理解。
+
+---
+
+## F20260510-001
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-10 |
+| **Session** | ut-casual-20260510-002317 |
+| **Persona** | casual |
+| **Scenario** | ad-hoc (芯片行业探索) |
+| **Severity** | CRITICAL |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #3 |
+
+### Summary
+搜索"海思"（华为芯片子公司 HiSilicon）返回 20 条 KU，其中 0 条与华为海思相关。全部为 BM25 短词碰撞导致的噪声结果：海思科（药企）、蓝思科技、海信家电、海昌智能等。
+
+### Reproduction
+```
+PYTHONIOENCODING=utf-8 uv run knowledge-cli search --entities "海思" --intent ENTITY_OVERVIEW
+```
+- total_count: 54, ku_count: 20, clusters: 222 (cluster/KU=11.1:1)
+- 华为海思相关 KU: 0/20
+- 海思科(药企) KU: 1/20
+- 完全无关 KU: 19/20
+- Top 3: "蓝思科技H股跌超19%", "海思科创新药HSK47388片", "广州慧仑智行科技"
+
+### Expected Behavior
+"海思"应解析到华为海思半导体，至少返回与华为芯片相关的 KU。当前 BM25 将"海"和"思"两个字符作为独立 token 匹配到海思科、蓝思科技、海信等完全不相关的公司。
+
+### Impact
+CRITICAL。作为芯片行业核心搜索词，"海思"完全无法检索到正确结果。名称碰撞问题对所有 2-3 字短实体名均构成风险。与 Defect #3（FTS5 中文分词）直接相关——短中文字符串被 token 化后匹配范围过宽。
+
+---
+
+## F20260510-002
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-10 |
+| **Session** | ut-casual-20260510-002317 |
+| **Persona** | casual |
+| **Scenario** | S007 |
+| **Severity** | CRITICAL |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #5 |
+
+### Summary
+时间范围过滤完全未生效。4 组不同时间范围（窄/宽/零长度/反向）对"英伟达"搜索返回几乎完全相同的结果（total 52-64, ku 20）。time_range 在 query 和 applied_filters 中正确记录，但实际检索完全忽略。
+
+### Reproduction
+```
+# 窄范围
+uv run knowledge-cli search --entities "英伟达" --time-range "2026-01-01:2026-01-31"
+# → total=52, ku=20, dates in result: 2026-04-15~2026-05-09
+
+# 宽范围
+uv run knowledge-cli search --entities "英伟达" --time-range "2025-01-01:2026-04-13"
+# → total=64, ku=20, dates in result: 2026-04-15~2026-05-09
+
+# 零长度
+uv run knowledge-cli search --entities "英伟达" --time-range "2026-01-01:2026-01-01"
+# → total=52, ku=20, 无崩溃
+
+# 反向范围
+uv run knowledge-cli search --entities "英伟达" --time-range "2026-04-13:2025-01-01"
+# → total=52, ku=20, 无错误
+```
+
+所有查询的 applied_filters 均正确包含 time_range，但结果完全一致。
+
+### Expected Behavior
+1. 窄范围(2026-01)结果应是宽范围(2025-01~2026-04)的子集
+2. 零长度范围应返回 0 结果或仅该日期的结果
+3. 反向范围应报错或返回空
+4. 所有结果日期应在请求的时间范围内
+
+### Impact
+CRITICAL。时间范围是分析师和商务用户的核心过滤需求。用户指定"2026年1月"搜索英伟达，实际返回 4-5 月的结果——完全违背用户意图。时间范围参数是"纸面功能"，解析但不执行。与 Defect #5（时间解析回退）相关——时间解析可能成功但过滤逻辑未实现。
+
+---
+
+## F20260510-003
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-10 |
+| **Session** | ut-casual-20260510-002317 |
+| **Persona** | casual |
+| **Scenario** | ad-hoc (芯片行业探索) |
+| **Severity** | HIGH |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #3 |
+
+### Summary
+搜索"辉达"（NVIDIA 台湾名称）返回 20 条 KU，前 2 条为完全不相关的噪声（"民士达"、"信达生物"）。与"海思"搜索问题同根——BM25 短 token 匹配导致名称碰撞。
+
+### Reproduction
+```
+PYTHONIOENCODING=utf-8 uv run knowledge-cli search --entities "辉达" --intent ENTITY_OVERVIEW
+# → total=48, ku=20, bm25=60
+# KU1: "民士达一季度实现归母净利润3057.98万元" ← 无关
+# KU2: "信达生物涨超4%" ← 无关（"达"字匹配）
+# KU3: "英伟达与康宁达成投资协议，承诺投资32亿美元" ← 相关（含"辉达"别名或"英伟达"）
+```
+
+### Expected Behavior
+"辉达"应解析到英伟达/NVIDIA 实体（辉达是 NVIDIA 的台湾/繁体中文注册名）。当前无法正确解析跨地区别名。
+
+### Impact
+HIGH。使用 NVIDIA 台湾名搜索的用户会看到大量噪声。确认了 BM25 短 token 碰撞问题不仅限于"海思"，对所有 2 字短实体名均有影响。
+
+---
+
+## F20260510-004
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-10 |
+| **Session** | ut-casual-20260510-002317 |
+| **Persona** | casual |
+| **Scenario** | ad-hoc (芯片行业探索) |
+| **Severity** | HIGH |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #15 |
+
+### Summary
+华为+中芯国际 COMPARATIVE_ANALYSIS 返回 20 条 KU，其中华为 17 条、中芯国际仅 1 条，严重偏向高数据量实体。0 条 KU 同时提及两个实体。
+
+### Reproduction
+```
+PYTHONIOENCODING=utf-8 uv run knowledge-cli search --entities "华为" "中芯国际" --intent COMPARATIVE_ANALYSIS
+# → total=64, ku=20
+# 华为 coverage: 17/20 (85%)
+# 中芯国际 coverage: 1/20 (5%)
+# Both entities in same KU: 0/20 (0%)
+# Top 3: "问界M6发布", "华为Pura X Max 11999元", "华为Pura X Max 10999元"
+```
+
+### Expected Behavior
+COMPARATIVE_ANALYSIS 应确保两个实体均衡覆盖（至少各占 30%+），优先返回同时提及两个实体的 KU。当前华为总数据量(84)远超中芯国际(60)，BM25 分数碾压导致中芯国际几乎不可见。
+
+### Impact
+HIGH。芯片行业对比分析是核心场景——"华为 vs 中芯国际"代表国内芯片两大力量。17:1 的偏差使对比分析失去意义。虽然英伟达 vs 台积电已改善(12:8)，但数据量差距大的实体对仍严重失衡。
+
+---
+
+## F20260510-005
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-10 |
+| **Session** | ut-casual-20260510-002317 |
+| **Persona** | casual |
+| **Scenario** | ad-hoc (芯片行业探索) |
+| **Severity** | MEDIUM |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #3 |
+
+### Summary
+芯片行业核心话题词"芯片制裁"、"光刻"、"芯片国产替代"全部返回 0 结果。而单字/短词"芯片"(49条)、"AI芯片"(5条)、"GPU"(7条)可正常返回。
+
+### Reproduction
+```
+# 有结果
+"芯片" → total=49 (entity in KB)
+"AI芯片" → total=5 (entity in KB)
+"GPU" → total=7 (entity in KB)
+"半导体设备" → total=4 (entity in KB)
+
+# 无结果（bm25_count=0，BM25 也无法匹配）
+"芯片制裁" → total=0
+"光刻" → total=0
+"芯片国产替代" → total=0
+```
+
+### Expected Behavior
+"芯片制裁"和"光刻"是芯片行业核心话题，即使不作为实体存在，BM25 也应在 summary/evidence 中匹配到相关文本。当前 bm25_count=0 说明 FTS5 索引中完全无法匹配这些复合中文短语。
+
+### Impact
+MEDIUM。再次验证 Defect #3（FTS5 中文分词）。芯片行业用户搜索"芯片制裁"或"芯片国产替代"是高频需求，0 结果严重影响使用体验。单字/短词作为实体入库后可检索，但组合短语完全不可检索。
+
+---
+
+## F20260510-006
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-10 |
+| **Session** | ut-casual-20260510-002317 |
+| **Persona** | casual |
+| **Scenario** | ad-hoc (芯片行业探索) |
+| **Severity** | MEDIUM |
+| **Category** | output-quality |
+| **Status** | OPEN |
+| **Related Defect** | - |
+
+### Summary
+芯片行业搜索中实体类型分类错误持续出现且模式扩大："台南"=Person、"一季度"=Person、"销售额"=Person、"数据中心"=Person、"生态"=Product、"协议"=Person、"投资"=Person。
+
+### Reproduction
+```
+# 台积电搜索中：
+"台南" → Person (应为 Location/Geography)
+"一季度" → Person (应为 TimePeriod/Concept)
+"销售额" → Person (应为 Metric/FinancialConcept)
+"高性能计算" → Person (应为 Technology/Concept)
+
+# 英伟达搜索中：
+"生态" → Product (应为 Concept)
+"协议" → Person (应为 Document/Concept)
+"投资" → Person (应为 Activity/Concept)
+"股权" → Person (应为 FinancialConcept)
+
+# ASML搜索中：
+"数据中心" → Person (应为 Facility/Concept)
+```
+
+### Expected Behavior
+LLM 实体提取阶段应有受控词表约束 entity_type 分类。非人名实体不应标注为 Person。
+
+### Impact
+MEDIUM。与 F20260509-002 和 F20260509-017 同根问题。在芯片行业搜索中问题更加突出——"台南"、"一季度"、"销售额"被标注为 Person 严重影响实体类型可信度。如果 AI 应用依赖 entity_type 过滤人物相关 KU，会产生大量误匹配。
+
+---
+
+## F20260510-007
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-10 |
+| **Session** | ut-casual-20260510-002317 |
+| **Persona** | casual |
+| **Scenario** | ad-hoc (芯片行业探索) |
+| **Severity** | LOW |
+| **Category** | output-quality |
+| **Status** | OPEN |
+| **Related Defect** | #11 |
+
+### Summary
+英伟达搜索中 KU1"英伟达投资覆盖上市公司和私营企业"和 KU2"英伟达2026年股权投资已突破400亿美元"来自同一新闻源（东方财富快讯 em_202605093732273897），描述同一事件的不同角度。
+
+### Reproduction
+```
+KU1: ku_701566ece5b9d452, summary="英伟达投资覆盖上市公司和私营企业", cluster=clu_674010be0eae
+KU2: ku_11b91d463e3d8f5d, summary="英伟达2026年股权投资已突破400亿美元", cluster=clu_77b4c64b0bfd
+```
+两个 KU 来自同一 doc_id，同一 evidence text："数据显示，今年英伟达股权投资已突破400亿美元，覆盖上市公司和私营企业"。但被分配到不同的 cluster。
+
+### Expected Behavior
+同一 evidence text 的不同角度 KU 应至少被归入同一 EventCluster，或在 top-K 中只保留信息最丰富的一条。
+
+### Impact
+LOW。确认了 Defect #11（无去重）。来自同一新闻源的 2 条 KU 占据 top-2 位置，降低信息多样性。

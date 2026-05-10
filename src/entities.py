@@ -278,11 +278,26 @@ class Entity(BaseModel):
 
 
 def _infer_entity_type(name: str) -> EntityKind:
-    # Person: 2-4字纯汉字（常见中文姓名长度）或带称谓后缀
+    # Non-entity patterns that should NOT default to Person
+    _NON_PERSON_PATTERNS = re.compile(
+        r"^(市场份额|股价|销售额|一季度|二季度|三季度|四季度|数据中心"
+        r"|半导体|稀土|军工|生态|协议|投资|股权|在手订单|高性能计算"
+        r"|台南|年度|季度|市场|行业|板块|概念|指数|基金|期货"
+        r"|原油|黄金|白银|铜价|铁矿|煤炭|粮食|大豆|汇率|利率|通胀"
+        r"|GDP|CPI|PMI|PPI|M2|FDI|出口|进口|贸易|顺差|逆差"
+        r"|增长|下降|上升|下跌|上涨|波动|调整|变化|趋势|预期|目标"
+        r"|价格|成本|收入|支出|利润|亏损|负债|资产|净值|估值"
+        r"|融资|并购|重组|上市|退市|分红|回购|增发|配股|解禁)$"
+    )
+    if _NON_PERSON_PATTERNS.fullmatch(name):
+        return "Company"
+    # Person: title suffix
     if re.search(r"(先生|女士|总裁|董事长|CEO|创始人)$", name, re.IGNORECASE):
         return "Person"
-    if re.fullmatch(r"[\u4e00-\u9fff]{2,4}", name):
+    # Person: 2-3 char Chinese names (4-char names are rare)
+    if re.fullmatch(r"[一-鿿]{2,3}", name):
         return "Person"
+    # Person: Western name pattern
     if re.search(r"^[A-Z][a-z]+\s+[A-Z]", name):
         return "Person"
     if re.search(r"(产品|计划|基金|债券)$", name, re.IGNORECASE):

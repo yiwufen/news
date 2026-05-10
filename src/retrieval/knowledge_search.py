@@ -3,12 +3,13 @@ Knowledge-centric multi-path retrieval over KnowledgeUnit, Entity, and EventClus
 
 Retrieval paths:
   Path A: Entity-ID Lookup — direct query by entity_ids JSON column (primary for entity queries)
-  Path B: (reserved for dense retrieval in Phase 2)
+  Path B: Dense Retrieval — embedding-based semantic search (primary for Chinese/topic queries)
   Path C: BM25/FTS5 fallback — text search when entity resolution fails
 """
 
 from __future__ import annotations
 
+import logging
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -30,6 +31,10 @@ from src.knowledge_base import (
     build_knowledge_unit_search_text,
 )
 from src.knowledge_extractor import KnowledgeExtractor
+from src.retrieval.scoring import INTENT_PROFILES, ScoringProfile
+from src.retrieval.vector_index import VectorIndex
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -84,6 +89,23 @@ class KnowledgeSearcher:
             self.clusters,
             knowledge_units=self.units,
         )
+        # Dense retrieval (optional — graceful degradation)
+        self._vector_index: VectorIndex | None = None
+        try:
+            from src.retrieval.embedding import OpenAICompatEmbedding
+            from src.retrieval.vector_index import VectorIndex as _VI
+
+            provider = OpenAICompatEmbedding()
+            idx = _VI(db_path, provider)
+            if idx.is_available():
+                self._vector_index = idx
+                logger.info("Dense retrieval enabled (%d vectors)", idx.indexed_count())
+            else:
+                logger.info(
+                    "Vector index empty — run 'knowledge-cli index-vectors' to build"
+                )
+        except Exception:
+            logger.info("Dense retrieval unavailable (no embedding config or empty index)")
 
     # ------------------------------------------------------------------
     # Main entry point: intent-dispatched search
@@ -107,16 +129,113 @@ class KnowledgeSearcher:
     def _search_with_relaxation(
         self, request: KnowledgeSearchRequest
     ) -> KnowledgeSearchResult:
-        """Search with relaxation: entity-id lookup → BM25 fallback."""
+        """Search with relaxation: entity-id → dense → BM25, merged and re-ranked."""
         query = request.structured_query
+        profile = INTENT_PROFILES.get(query.intent)
         matched_entities = self.entities.find_by_names(query.entities)
         entity_ids = [e.entity_id for e in matched_entities]
+        time_range = self._serialize_time_range(query)
+        event_types = self._expand_event_types(query)
+        candidate_limit = max(request.top_k * 5, request.top_k)
 
+        # Path A: Entity-ID lookup
+        bm25_hits: list[tuple[str, float]] = []
         if entity_ids:
-            return self._search_by_entity_ids(request, matched_entities, entity_ids)
+            ku_ids = self.units.find_by_entity_ids(
+                entity_ids,
+                time_range=time_range,
+                event_types=event_types,
+                limit=candidate_limit,
+            )
+            bm25_hits = [(kid, -1.0) for kid in ku_ids]
 
-        # No entity match — fall through to BM25 text search (no hard gate)
-        return self._search_bm25_fallback(request, matched_entities)
+        # Path C: BM25 fallback (if entity-id found nothing or no entity match)
+        if not bm25_hits:
+            bm25_hits = self._bm25_search(query, matched_entities)
+
+        # Path B: Dense retrieval (always attempt when available)
+        dense_scores: dict[str, float] = self._dense_search(query)
+
+        # Merge: add dense-only candidates to the pool
+        existing_ids = {kid for kid, _ in bm25_hits}
+        for kid in dense_scores:
+            if kid not in existing_ids:
+                bm25_hits.append((kid, 0.0))
+
+        if not bm25_hits:
+            result = self._empty_result(request, matched_entities)
+            result.retrieval_path = "bm25_fallback"
+            return result
+
+        result = self._build_ranked_result(
+            request=request,
+            bm25_hits=bm25_hits,
+            matched_entities=matched_entities,
+            dense_scores=dense_scores,
+            profile=profile,
+        )
+
+        # Label retrieval path
+        if entity_ids and dense_scores:
+            result.retrieval_path = "entity_id+dense"
+        elif entity_ids:
+            result.retrieval_path = "entity_id_lookup"
+        elif dense_scores:
+            result.retrieval_path = "dense"
+        else:
+            result.retrieval_path = "bm25_fallback"
+        return result
+
+    # ------------------------------------------------------------------
+    # Dense retrieval helper
+    # ------------------------------------------------------------------
+
+    def _dense_search(self, query: StructuredQuery) -> dict[str, float]:
+        """Run dense retrieval if available. Returns ku_id → cosine_similarity."""
+        if self._vector_index is None:
+            return {}
+        try:
+            query_text = query.original_query or " ".join(query.entities)
+            if not query_text.strip():
+                return {}
+            hits = self._vector_index.search(query_text, top_k=60)
+            return {kid: sim for kid, sim in hits}
+        except Exception:
+            logger.warning("Dense retrieval failed", exc_info=True)
+            return {}
+
+    def _bm25_search(
+        self,
+        query: StructuredQuery,
+        matched_entities: list[Entity],
+    ) -> list[tuple[str, float]]:
+        """BM25 text search with two-stage broadening."""
+        time_range = self._serialize_time_range(query)
+        event_types = self._expand_event_types(query)
+        candidate_limit = 60
+
+        entity_id_filter = [e.entity_id for e in matched_entities] or None
+        fts_query = self._build_fts_query(query, matched_entities)
+        if fts_query.strip():
+            hits = self.units.search_bm25(
+                fts_query,
+                top_k=candidate_limit,
+                time_range=time_range,
+                event_types=event_types,
+                entity_ids=entity_id_filter,
+            )
+            if hits:
+                return hits
+
+        broad_query = self._build_text_only_fts_query(query)
+        if broad_query.strip():
+            return self.units.search_bm25(
+                broad_query,
+                top_k=candidate_limit,
+                time_range=time_range,
+                event_types=event_types,
+            )
+        return []
 
     # ------------------------------------------------------------------
     # Path A: Entity-ID Lookup (primary for entity-centric queries)
@@ -129,6 +248,7 @@ class KnowledgeSearcher:
         entity_ids: list[str],
     ) -> KnowledgeSearchResult:
         query = request.structured_query
+        profile = INTENT_PROFILES.get(query.intent)
         time_range = self._serialize_time_range(query)
         event_types = self._expand_event_types(query)
         candidate_limit = max(request.top_k * 5, request.top_k)
@@ -149,6 +269,7 @@ class KnowledgeSearcher:
             request=request,
             bm25_hits=hits,
             matched_entities=matched_entities,
+            profile=profile,
         )
         result.retrieval_path = "entity_id_lookup"
         return result
@@ -164,6 +285,7 @@ class KnowledgeSearcher:
     ) -> KnowledgeSearchResult:
         """BM25 text search — used when entity resolution produces no matches."""
         query = request.structured_query
+        profile = INTENT_PROFILES.get(query.intent)
         time_range = self._serialize_time_range(query)
         event_types = self._expand_event_types(query)
         candidate_limit = max(request.top_k * 3, request.top_k)
@@ -197,6 +319,7 @@ class KnowledgeSearcher:
             request=request,
             bm25_hits=bm25_hits,
             matched_entities=matched_entities,
+            profile=profile,
         )
         result.retrieval_path = "bm25_fallback"
         return result
@@ -208,64 +331,63 @@ class KnowledgeSearcher:
     def _search_comparative(
         self, request: KnowledgeSearchRequest
     ) -> KnowledgeSearchResult:
-        """Balanced retrieval for A vs B comparison."""
+        """Balanced retrieval for A vs B comparison.
+
+        Strategy: per-entity recall → union of candidates → coverage-aware rerank.
+        KUs that mention multiple entities get a co-occurrence bonus.
+        """
         query = request.structured_query
         if len(query.entities) < 2:
             return self._search_with_relaxation(request)
 
+        profile = INTENT_PROFILES.get(query.intent)
         time_range = self._serialize_time_range(query)
         event_types = self._expand_event_types(query)
 
-        # Resolve each entity independently
+        # Per-entity recall — track which entities each KU mentions
+        coverage: dict[str, set[int]] = {}  # ku_id -> entity indices
+        bm25_scores: dict[str, float] = {}  # ku_id -> best (most-negative) bm25
         all_matched: list[Entity] = []
-        per_entity_ku_ids: list[list[str]] = []
-        for entity_name in query.entities:
+
+        for idx, entity_name in enumerate(query.entities):
             matched = self.entities.find_by_names([entity_name])
             all_matched.extend(matched)
             eids = [e.entity_id for e in matched]
             if eids:
+                # Entity resolved: use entity-id lookup (no bm25 score, use -1.0)
                 ku_ids = self.units.find_by_entity_ids(
                     eids,
                     time_range=time_range,
                     event_types=event_types,
-                    limit=request.top_k,
+                    limit=request.top_k * 3,
                 )
+                hits = [(kid, -1.0) for kid in ku_ids]
             else:
-                # Fallback: try BM25 for this entity
-                fts = self._build_fts_query_for_terms([entity_name])
-                ku_ids = [
-                    ku_id for ku_id, _ in self.units.search_bm25(
-                        fts, top_k=request.top_k, time_range=time_range,
-                    )
-                ] if fts.strip() else []
-            per_entity_ku_ids.append(ku_ids)
+                # Entity not resolved: BM25 fallback with broader query
+                fts = self._build_fts_query_for_terms([entity_name, query.original_query])
+                hits = self.units.search_bm25(
+                    fts, top_k=request.top_k * 3,
+                    time_range=time_range,
+                    event_types=event_types,
+                ) if fts.strip() else []
 
-        # Find co-occurrence KUs (present in multiple entity sets)
-        all_id_sets = [set(ids) for ids in per_entity_ku_ids]
-        co_occur: set[str] = all_id_sets[0]
-        for id_set in all_id_sets[1:]:
-            co_occur &= id_set
-        co_occur = co_occur if co_occur else set()
+            for kid, score in hits:
+                coverage.setdefault(kid, set()).add(idx)
+                # Keep most informative (lowest, most-negative) bm25 across entities
+                bm25_scores[kid] = min(bm25_scores.get(kid, 0.0), score)
 
-        # Merge: co-occurrence first, then alternate from each entity
-        merged_ids: list[str] = list(co_occur)
-        seen: set[str] = set(co_occur)
-        remaining_per_entity = [
-            [kid for kid in ids if kid not in seen] for ids in per_entity_ku_ids
-        ]
-        max_len = max((len(ids) for ids in remaining_per_entity), default=0)
-        for i in range(max_len):
-            for entity_ku_ids in remaining_per_entity:
-                if i < len(entity_ku_ids) and entity_ku_ids[i] not in seen:
-                    merged_ids.append(entity_ku_ids[i])
-                    seen.add(entity_ku_ids[i])
+        if not coverage:
+            # No candidates at all — fall back to standard path
+            return self._search_with_relaxation(request)
 
-        merged_ids = merged_ids[:request.top_k]
-        hits = [(ku_id, -1.0) for ku_id in merged_ids]
-        result = self._build_ranked_result(
+        # Build hits list with coverage-aware scoring
+        hits = [(kid, bm25_scores[kid]) for kid in coverage]
+        result = self._build_ranked_result_comparative(
             request=request,
             bm25_hits=hits,
+            coverage=coverage,
             matched_entities=all_matched,
+            profile=profile,
         )
         result.retrieval_path = "comparative"
         return result
@@ -290,6 +412,7 @@ class KnowledgeSearcher:
     ) -> KnowledgeSearchResult:
         """Timeline search — temporal bucketing for even coverage."""
         query = request.structured_query
+        profile = INTENT_PROFILES.get(query.intent)
         matched_entities = self.entities.find_by_names(query.entities)
         entity_ids = [e.entity_id for e in matched_entities]
         time_range = self._serialize_time_range(query)
@@ -333,7 +456,10 @@ class KnowledgeSearcher:
         hit_scores: dict[str, dict[str, object]] = {}
         for unit in selected_units:
             score, meta = self._score_final_hit(
-                unit, query, -1.0, matched_entity_ids=matched_entity_ids,
+                unit, query, -1.0,
+                matched_entity_ids=matched_entity_ids,
+                dense_score=0.0,
+                profile=profile,
             )
             hit_scores[unit.ku_id] = meta
 
@@ -419,6 +545,8 @@ class KnowledgeSearcher:
         request: KnowledgeSearchRequest,
         bm25_hits: list[tuple[str, float]],
         matched_entities: list[Entity],
+        dense_scores: dict[str, float] | None = None,
+        profile: ScoringProfile | None = None,
     ) -> KnowledgeSearchResult:
         candidate_ids = [ku_id for ku_id, _ in bm25_hits]
         if not candidate_ids:
@@ -431,6 +559,7 @@ class KnowledgeSearcher:
         bm25_lookup = dict(bm25_hits)
         ranked_hits: list[tuple[float, KnowledgeUnit, dict[str, object]]] = []
         matched_entity_ids = {entity.entity_id for entity in matched_entities}
+        dense = dense_scores or {}
 
         for ku_id in candidate_ids:
             unit = unit_map.get(ku_id)
@@ -441,6 +570,8 @@ class KnowledgeSearcher:
                 request.structured_query,
                 bm25_lookup.get(ku_id, 0.0),
                 matched_entity_ids=matched_entity_ids,
+                dense_score=dense.get(ku_id, 0.0),
+                profile=profile,
             )
             ranked_hits.append((final_score, unit, metadata))
 
@@ -468,6 +599,111 @@ class KnowledgeSearcher:
         selected_entities = self.entities.get_by_ids(selected_entity_ids)
         # Only use query-matched entities for cluster lookup to avoid
         # over-expansion from tangential entities in top KUs.
+        cluster_lookup_ids = matched_entity_ids if matched_entity_ids else selected_entity_ids
+        related_clusters = self.clusters.find_related(
+            primary_entity_ids=cluster_lookup_ids,
+            cluster_types=request.structured_query.filters.event_types,
+            time_range=self._serialize_time_range(request.structured_query),
+        )
+        related_cluster_ids = {cluster.cluster_id for cluster in related_clusters}
+        selected_clusters = self.clusters.get_by_ids(list(selected_cluster_ids | related_cluster_ids))
+
+        hit_scores = {
+            unit.ku_id: metadata
+            for _, unit, metadata in selected
+        }
+        return KnowledgeSearchResult(
+            knowledge_units=selected_units,
+            entities=selected_entities,
+            event_clusters=selected_clusters,
+            total_count=len(ranked_hits),
+            bm25_count=len(bm25_hits),
+            applied_filters=self._build_applied_filters(
+                request.structured_query,
+                matched_entities,
+            ),
+            hit_scores=hit_scores,
+        )
+
+    def _build_ranked_result_comparative(
+        self,
+        *,
+        request: KnowledgeSearchRequest,
+        bm25_hits: list[tuple[str, float]],
+        coverage: dict[str, set[int]],
+        matched_entities: list[Entity],
+        dense_scores: dict[str, float] | None = None,
+        profile: ScoringProfile | None = None,
+    ) -> KnowledgeSearchResult:
+        """Build ranked result for COMPARATIVE_ANALYSIS with coverage bonus.
+
+        KUs that mention multiple query entities get a co-occurrence bonus:
+        - 2 entities covered: +3.0
+        - 3 entities covered: +6.0
+        - etc.
+        """
+        candidate_ids = [ku_id for ku_id, _ in bm25_hits]
+        if not candidate_ids:
+            return self._empty_result(request, matched_entities)
+
+        unit_map = {
+            unit.ku_id: unit
+            for unit in self.units.get_by_ids(candidate_ids)
+        }
+        bm25_lookup = dict(bm25_hits)
+        ranked_hits: list[tuple[float, KnowledgeUnit, dict[str, object]]] = []
+        matched_entity_ids = {entity.entity_id for entity in matched_entities}
+
+        matched_entity_ids = {entity.entity_id for entity in matched_entities}
+        dense = dense_scores or {}
+
+        for ku_id in candidate_ids:
+            unit = unit_map.get(ku_id)
+            if unit is None:
+                continue
+            final_score, metadata = self._score_final_hit(
+                unit,
+                request.structured_query,
+                bm25_lookup.get(ku_id, 0.0),
+                matched_entity_ids=matched_entity_ids,
+                dense_score=dense.get(ku_id, 0.0),
+                profile=profile,
+            )
+
+            # Add coverage bonus for KUs mentioning multiple query entities
+            covered = len(coverage.get(ku_id, set()))
+            if covered > 1:
+                coverage_bonus = 3.0 * (covered - 1)
+                final_score += coverage_bonus
+                component_scores = metadata.get("component_scores", {})
+                if isinstance(component_scores, dict):
+                    component_scores["coverage_bonus"] = coverage_bonus  # type: ignore[index]
+                metadata["coverage"] = covered  # type: ignore[index]
+
+            ranked_hits.append((final_score, unit, metadata))
+
+        ranked_hits.sort(
+            key=lambda item: (
+                item[0],
+                self._unit_anchor(item[1]).timestamp(),
+                item[1].ku_id,
+            ),
+            reverse=True,
+        )
+        selected = ranked_hits[: request.top_k]
+        selected_units = [unit for _, unit, _ in selected]
+        selected_unit_ids = [unit.ku_id for unit in selected_units]
+        selected_entity_ids = {
+            entity.entity_id
+            for unit in selected_units
+            for entity in unit.entities
+            if entity.entity_id
+        } | matched_entity_ids
+        selected_cluster_ids = {
+            unit.cluster_id for unit in selected_units if unit.cluster_id
+        }
+
+        selected_entities = self.entities.get_by_ids(selected_entity_ids)
         cluster_lookup_ids = matched_entity_ids if matched_entity_ids else selected_entity_ids
         related_clusters = self.clusters.find_related(
             primary_entity_ids=cluster_lookup_ids,
@@ -594,8 +830,10 @@ class KnowledgeSearcher:
         """Build FTS query from raw term strings."""
         parts: list[str] = []
         for term in terms:
-            parts.extend(self._tokenize_query(term.lower()))
-            if term.strip():
+            tokens = self._tokenize_query(term.lower())
+            parts.extend(tokens)
+            # Only add phrase quotes for non-Chinese terms (FTS5 unicode61 doesn't handle CJK phrases well)
+            if term.strip() and not re.search(r"[一-鿿]", term.strip()):
                 parts.append(self._quote_fts_phrase(term.strip()))
         unique = list(dict.fromkeys(p for p in parts if p))
         return " OR ".join(unique)
@@ -614,26 +852,73 @@ class KnowledgeSearcher:
         bm25_score: float,
         *,
         matched_entity_ids: set[str],
+        dense_score: float = 0.0,
+        profile: ScoringProfile | None = None,
     ) -> tuple[float, dict[str, object]]:
-        # 分层权重：实体匹配(5x) > 类型匹配(2x) > 文本匹配(bm25) > 时效(tiny)
-        component_scores: dict[str, float] = {"bm25_score": bm25_score}
-        final_score = bm25_score
+        from src.retrieval.scoring import RISK_UNIT_TYPES
 
+        p = profile or ScoringProfile()
+        component_scores: dict[str, float] = {
+            "bm25_score": bm25_score,
+            "dense_score": dense_score,
+        }
+        final_score = 0.0
+
+        # Entity-ID match (highest priority)
         unit_entity_ids = {
             entity.entity_id for entity in unit.entities if entity.entity_id
         }
         if matched_entity_ids and unit_entity_ids & matched_entity_ids:
-            component_scores["entity_bonus"] = 5.0
-            final_score += 5.0
+            component_scores["entity_bonus"] = p.entity_bonus
+            final_score += p.entity_bonus
+
+        # Dense semantic score
+        if dense_score > 0:
+            weighted = dense_score * p.dense_weight
+            component_scores["dense_weighted"] = weighted
+            final_score += weighted
+
+        # Event type match
         if query.filters.event_types and unit.unit_type in query.filters.event_types:
-            component_scores["event_type_bonus"] = 2.0
-            final_score += 2.0
-        recency_bonus = self._unit_anchor(unit).timestamp() / 10_000_000_000_000
+            component_scores["event_type_bonus"] = p.event_type_bonus
+            final_score += p.event_type_bonus
+
+        # BM25 text score (normalize negative to positive)
+        if bm25_score < 0:
+            bm25_pos = min(-bm25_score * p.bm25_weight, p.bm25_cap)
+            component_scores["bm25_weighted"] = bm25_pos
+            final_score += bm25_pos
+
+        recency_bonus = (
+            self._unit_anchor(unit).timestamp() / 10_000_000_000_000
+        ) * p.recency_scale
         component_scores["recency_bonus"] = recency_bonus
         final_score += recency_bonus
+
+        # Risk-type boost (RISK_ASSESSMENT intent)
+        if p.risk_type_bonus > 0 and unit.unit_type in RISK_UNIT_TYPES:
+            component_scores["risk_type_bonus"] = p.risk_type_bonus
+            final_score += p.risk_type_bonus
+
+        # Causal-chain boost (EVENT_IMPACT_ANALYSIS intent)
+        if p.causal_chain_bonus > 0 and unit.relation_hints:
+            component_scores["causal_chain_bonus"] = p.causal_chain_bonus
+            final_score += p.causal_chain_bonus
+
+        # Recency boost for recent events
+        if p.recency_boost_days > 0:
+            from datetime import UTC, datetime
+
+            anchor = self._unit_anchor(unit)
+            days_ago = (datetime.now(UTC) - anchor).days
+            if 0 <= days_ago <= p.recency_boost_days:
+                boost = (p.recency_boost_days - days_ago) / p.recency_boost_days * 2.0
+                component_scores["recency_boost"] = boost
+                final_score += boost
+
         metadata = {
             "score": final_score,
-            "sources": ["bm25"],
+            "sources": ["dense" if dense_score > 0 else "bm25"],
             "component_scores": component_scores,
         }
         return final_score, metadata
@@ -738,8 +1023,9 @@ class KnowledgeSearcher:
         )
 
     def _tokenize_query(self, raw_query: str) -> list[str]:
-        tokens = re.findall(r"[A-Za-z0-9_.-]+|[\u4e00-\u9fff]{2,}", raw_query)
-        return [token for token in tokens if len(token) >= 2]
+        from src.chinese_text import segment_query
+
+        return segment_query(raw_query)
 
     def _quote_fts_phrase(self, value: str) -> str:
         return '"' + value.replace('"', '""') + '"'

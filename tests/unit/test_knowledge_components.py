@@ -1185,13 +1185,15 @@ def test_relaxation_cascade_returns_results_when_entity_not_found(tmp_path) -> N
 def test_comparative_analysis_balances_both_entities(tmp_path) -> None:
     """COMPARATIVE_ANALYSIS returns KUs for both entities, not just the popular one."""
     now = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
-    ku_specs: list[tuple[str, str, str | None, datetime | None]] = [
+    ku_specs_catl: list[tuple[str, str, str | None, datetime | None]] = [
         ("宁德时代", f"宁德时代事件{i}", "ent_catl", now + timedelta(days=i))
         for i in range(10)
-    ] + [
+    ]
+    ku_specs_byd: list[tuple[str, str, str | None, datetime | None]] = [
         ("比亚迪", f"比亚迪事件{i}", "ent_byd", now + timedelta(days=i))
         for i in range(3)
     ]
+    ku_specs = ku_specs_catl + ku_specs_byd
 
     searcher, _ = _setup_searcher_with_entities(
         tmp_path,
@@ -1223,6 +1225,89 @@ def test_comparative_analysis_balances_both_entities(tmp_path) -> None:
         if any(e.entity_id == "ent_byd" for e in u.entities)
     )
     assert byd_mentions > 0, "比亚迪 should have at least one KU in results"
+
+
+def test_comparative_analysis_unresolved_entities_falls_back_gracefully(tmp_path) -> None:
+    """COMPARATIVE_ANALYSIS with unresolved entities returns results via BM25 fallback."""
+    # Use distinct entity names that don't overlap in text
+    searcher, _ = _setup_searcher_with_entities(
+        tmp_path,
+        entity_specs=[],
+        ku_specs=[
+            ("Apple", "Apple announced new iPhone features", None, None),
+            ("Tesla", "Tesla reported strong quarterly deliveries", None, None),
+            ("Apple", "Apple stock hit new high", None, None),
+        ],
+    )
+
+    result = searcher.search(
+        KnowledgeSearchRequest(
+            structured_query=StructuredQuery(
+                intent=IntentType.COMPARATIVE_ANALYSIS,
+                entities=["Apple", "Tesla"],
+                time_range=None,
+                filters=QueryFilters(),
+                original_query="Apple Tesla",
+                confidence=1.0,
+            ),
+            top_k=20,
+        )
+    )
+
+    assert result.retrieval_path == "comparative"
+    assert result.total_count >= 2, f"Should return at least 2 KUs, got {result.total_count}"
+    # Check that we have both Apple and Tesla related KUs
+    ku_summaries = {u.summary for u in result.knowledge_units}
+    has_apple = any("Apple" in s for s in ku_summaries)
+    has_tesla = any("Tesla" in s for s in ku_summaries)
+    assert has_apple, "Apple KU should be in results"
+    assert has_tesla, "Tesla KU should be in results"
+
+
+def test_comparative_analysis_co_occurrence_ranks_higher(tmp_path) -> None:
+    """KUs mentioning multiple entities get coverage bonus in scoring."""
+    now = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
+    searcher, _ = _setup_searcher_with_entities(
+        tmp_path,
+        entity_specs=[],
+        ku_specs=[
+            ("Apple", "Single mention of Apple statement", None, now),
+            ("Tesla", "Single mention of Tesla statement", None, now),
+            ("Apple Tesla", "Statement mentioning both Apple and Tesla collaboration", None, now),
+        ],
+    )
+
+    result = searcher.search(
+        KnowledgeSearchRequest(
+            structured_query=StructuredQuery(
+                intent=IntentType.COMPARATIVE_ANALYSIS,
+                entities=["Apple", "Tesla"],
+                time_range=None,
+                filters=QueryFilters(),
+                original_query="Apple Tesla",
+                confidence=1.0,
+            ),
+            top_k=10,
+        )
+    )
+
+    assert result.total_count >= 3
+
+    # Find the co-occurrence KU
+    co_occurrence_ku = None
+    for ku in result.knowledge_units:
+        if "Apple" in ku.summary and "Tesla" in ku.summary:
+            co_occurrence_ku = ku
+            break
+
+    assert co_occurrence_ku is not None, "Co-occurrence KU should be in results"
+
+    # The co-occurrence KU should have coverage_bonus in its score components
+    score_info = result.hit_scores.get(co_occurrence_ku.ku_id, {})
+    component_scores = score_info.get("component_scores", {}) if isinstance(score_info, dict) else {}
+    assert isinstance(component_scores, dict), "component_scores should be a dict"
+    assert "coverage_bonus" in component_scores, "Co-occurrence KU should have coverage_bonus"
+    assert component_scores["coverage_bonus"] > 0, "coverage_bonus should be positive"
 
 
 def test_topic_research_fallback_to_text_search(tmp_path) -> None:

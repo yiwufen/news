@@ -25,6 +25,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 from src.orchestration.graph import run_pipeline
+from src.paths import DEFAULT_DB_PATH
 from src.orchestration.result import PipelineResult
 from src.pipeline.continuous import run_continuous
 from src.process_manager import (
@@ -37,6 +38,11 @@ from src.process_manager import (
     write_pid,
 )
 from src.schemas.query import IntentType, make_query
+
+
+# ---------------------------------------------------------------------------
+# search
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +88,7 @@ def cmd_search(args: argparse.Namespace) -> None:
             graph_enabled=args.graph_enabled,
             top_k=args.top_k,
             hops=args.hops,
+            db_path=args.db,
         )
     finally:
         sys.stdout = real_stdout
@@ -93,7 +100,7 @@ def cmd_search(args: argparse.Namespace) -> None:
             if line.strip():
                 print(line, file=sys.stderr)
 
-    json.dump(result.to_dict(), sys.stdout, ensure_ascii=False, indent=2)
+    json.dump(result.to_dict(), sys.stdout, ensure_ascii=True, indent=2)
     sys.stdout.write("\n")
 
 
@@ -108,6 +115,7 @@ def cmd_ingest(args: argparse.Namespace) -> None:
         graph_enabled=args.graph_enabled,
         incremental=args.incremental,
         dry_run=args.dry_run,
+        db_path=args.db,
     )
     json.dump(
         {
@@ -118,6 +126,42 @@ def cmd_ingest(args: argparse.Namespace) -> None:
             "nodes_created": result.nodes_created,
             "edges_created": result.edges_created,
             "errors": result.errors,
+        },
+        sys.stdout,
+        ensure_ascii=False,
+        indent=2,
+    )
+    sys.stdout.write("\n")
+
+
+# ---------------------------------------------------------------------------
+# index-vectors
+# ---------------------------------------------------------------------------
+
+def cmd_index_vectors(args: argparse.Namespace) -> None:
+    """Build or rebuild the vector index for dense retrieval."""
+    from src.retrieval.indexing import build_vector_index, rebuild_vector_index
+    from src.retrieval.vector_index import VectorIndex
+    from src.retrieval.embedding import OpenAICompatEmbedding
+
+    if args.rebuild:
+        count = rebuild_vector_index(db_path=args.db)
+        action = "Rebuilt"
+    else:
+        count = build_vector_index(db_path=args.db)
+        action = "Indexed"
+
+    # Report status
+    provider = OpenAICompatEmbedding()
+    idx = VectorIndex(args.db, provider)
+    total = idx.indexed_count()
+
+    json.dump(
+        {
+            "action": action.lower(),
+            "new_embeddings": count,
+            "total_vectors": total,
+            "model": provider.model_name,
         },
         sys.stdout,
         ensure_ascii=False,
@@ -236,12 +280,19 @@ def cmd_run_offline(args: argparse.Namespace) -> None:
     """Internal: continuous offline loop (launched as subprocess by ``start``)."""
     _setup_child_logging("data/logs/offline.log")
     from src.pipeline.continuous import ContinuousPipeline
+    from src.knowledge_base import KnowledgeUnitRepository
+    from src.retrieval.indexing import KnowledgeIndexBuilder, try_create_vector_index
+
+    ku_repo = KnowledgeUnitRepository(args.db)
+    vector_index = try_create_vector_index(args.db)
+    index_builder = KnowledgeIndexBuilder(ku_repo, vector_index=vector_index)
 
     pipeline = ContinuousPipeline(
         batch_size=args.batch_size,
         graph_enabled=args.graph_enabled,
         incremental=True,
         db_path=args.db,
+        index_builder=index_builder,
     )
 
     print("Starting offline processing loop ...", flush=True)
@@ -298,6 +349,9 @@ def main() -> None:
     search_parser.add_argument(
         "--no-graph", dest="graph_enabled", action="store_false"
     )
+    search_parser.add_argument(
+        "--db", type=str, default=DEFAULT_DB_PATH, help="SQLite database path"
+    )
     search_parser.set_defaults(func=cmd_search)
 
     # --- ingest ---
@@ -320,7 +374,24 @@ def main() -> None:
     ingest_parser.add_argument(
         "--dry-run", action="store_true", help="Preview without writing"
     )
+    ingest_parser.add_argument(
+        "--db", type=str, default=DEFAULT_DB_PATH, help="SQLite database path"
+    )
     ingest_parser.set_defaults(func=cmd_ingest)
+
+    # --- index-vectors ---
+    idx_vec_parser = subparsers.add_parser(
+        "index-vectors", help="Build vector index for dense retrieval"
+    )
+    idx_vec_parser.add_argument(
+        "--rebuild", action="store_true",
+        help="Full rebuild (clear existing and re-embed all)"
+    )
+    idx_vec_parser.add_argument(
+        "--db", type=str, default=DEFAULT_DB_PATH,
+        help="SQLite database path"
+    )
+    idx_vec_parser.set_defaults(func=cmd_index_vectors)
 
     # --- start ---
     start_parser = subparsers.add_parser("start", help="Start fetch + offline services")
@@ -332,7 +403,7 @@ def main() -> None:
                               help="Offline batch size (default: 10)")
     start_parser.add_argument("--process-interval", type=int, default=300,
                               help="Offline loop interval in seconds (default: 300)")
-    start_parser.add_argument("--db", type=str, default="data/news.db",
+    start_parser.add_argument("--db", type=str, default=DEFAULT_DB_PATH,
                               help="SQLite database path")
     start_parser.add_argument("--graph-enabled", action="store_true",
                               help="Enable knowledge graph sync for offline process")
@@ -358,14 +429,14 @@ def main() -> None:
     run_fetch_parser = subparsers.add_parser("_run_fetch")
     run_fetch_parser.add_argument("--limit", type=int, default=100)
     run_fetch_parser.add_argument("--interval", type=int, default=900)
-    run_fetch_parser.add_argument("--db", type=str, default="data/news.db")
+    run_fetch_parser.add_argument("--db", type=str, default=DEFAULT_DB_PATH)
     run_fetch_parser.set_defaults(func=cmd_run_fetch)
 
     # --- hidden: _run_offline ---
     run_offline_parser = subparsers.add_parser("_run_offline")
     run_offline_parser.add_argument("--batch-size", type=int, default=10)
     run_offline_parser.add_argument("--interval", type=int, default=300)
-    run_offline_parser.add_argument("--db", type=str, default="data/news.db")
+    run_offline_parser.add_argument("--db", type=str, default=DEFAULT_DB_PATH)
     run_offline_parser.add_argument("--time-window", type=str, default="")
     run_offline_parser.add_argument("--graph-enabled", dest="graph_enabled",
                                      action="store_true", default=False)

@@ -8,15 +8,15 @@
 
 | Metric | Value | Last Updated |
 |--------|-------|--------------|
-| Total Sessions | 4 | 2026-05-09 |
-| Total Scenarios Executed | 25 | 2026-05-09 |
-| Total Findings | 25 | 2026-05-09 |
-| CRITICAL Findings (OPEN) | 2 | 2026-05-09 |
+| Total Sessions | 5 | 2026-05-10 |
+| Total Scenarios Executed | 42 | 2026-05-10 |
+| Total Findings | 32 | 2026-05-10 |
+| CRITICAL Findings (OPEN) | 4 | 2026-05-10 |
 | CRITICAL Findings (PARTIAL) | 1 | 2026-05-09 |
-| HIGH Findings (OPEN) | 3 | 2026-05-09 |
+| HIGH Findings (OPEN) | 5 | 2026-05-10 |
 | HIGH Findings (IMPROVED) | 1 | 2026-05-09 |
-| MEDIUM Findings (OPEN) | 4 | 2026-05-09 |
-| LOW Findings (OPEN) | 5 | 2026-05-09 |
+| MEDIUM Findings (OPEN) | 6 | 2026-05-10 |
+| LOW Findings (OPEN) | 6 | 2026-05-10 |
 | CRITICAL Findings (FIXED) | 2 | 2026-05-09 |
 | HIGH Findings (FIXED) | 3 | 2026-05-09 |
 | MEDIUM Findings (FIXED) | 4 | 2026-05-09 |
@@ -27,7 +27,7 @@
 |---------|----------|---------------|----------|
 | analyst | 3 | 19 | 21 |
 | developer | 1 | 6 | 4 |
-| casual | 0 | 0 | 0 |
+| casual | 1 | 17 | 7 |
 
 ## Scenario Execution Heatmap
 
@@ -39,7 +39,7 @@
 | S004     | 2 | PASS (structured warning added) | 2026-05-09 |
 | S005     | 1 | FAIL (filter eliminates all) | 2026-05-09 |
 | S006     | 2 | FIXED (EN aliases now resolve, BYD→19 results) | 2026-05-09 |
-| S007     | 0 | - | - |
+| S007     | 1 | FAIL (time range filter completely non-functional) | 2026-05-10 |
 | S008     | 0 | - | - |
 | S009     | 2 | FIXED (both entities represented: 7+8) | 2026-05-09 |
 | S010     | 0 | - | - |
@@ -49,6 +49,7 @@
 | S014     | 1 | PARTIAL (graph adds value, limited edges) | 2026-05-09 |
 | S015     | 0 | - | - |
 | ad-hoc-iran | 1 | FAIL (COMPARATIVE_ANALYSIS 0 results, FTS5 limits) | 2026-05-09 |
+| ad-hoc-chip | 1 | FAIL (海思 0/20 命中, time_range 未生效) | 2026-05-10 |
 
 ## Known Defect Verification Status
 
@@ -58,7 +59,7 @@
 | #2     | Event type vocabulary | YES (F20260509-007, F20260509-011) | YES (F20260509-007) | 2026-05-09 |
 | #3     | FTS Chinese tokenization | YES (F20260509-016, F20260509-020, F20260509-023) | - | 2026-05-09 |
 | #4     | Scoring calibration | YES (F20260509-020) | - | 2026-05-09 |
-| #5     | Time parsing fallback | - | - | - |
+| #5     | Time parsing fallback | YES (F20260510-002) | - | time_range parsed but not applied in SQL | 2026-05-10 |
 | #6     | Cluster no direct search | - | - | - |
 | #7     | Two-path scoring inconsistency | - | - | - |
 | #8     | Graph add-only | - | - | - |
@@ -84,16 +85,17 @@
 | ut-developer-20260509-154500 | developer | 6 | 3 | 2 | 2 | 2 | 2.3 |
 | ut-analyst-20260509-170000 | analyst | 8 | 2.5 | 2 | 2.5 | 3 | 2.5 |
 | ut-analyst-20260509-173000 | analyst | 11 | 2 | 1.5 | 3 | 1 | 1.9 |
+| ut-casual-20260510-002317 | casual | 6 | 2.2 | 2.0 | 2.0 | 1.5 | 1.9 |
 
 ### Cumulative Averages
 
 | Dimension | Score | Trend | Sample Size |
 |-----------|-------|-------|-------------|
-| Relevance | 2.6 | ↓ | 29 |
-| Info Density | 1.9 | → | 29 |
-| Redundancy | 2.4 | ↑ | 29 |
-| Temporal | 1.8 | ↓ | 29 |
-| **Overall** | 2.2 | ↓ | 29 |
+| Relevance | 2.5 | ↓ | 35 |
+| Info Density | 1.9 | → | 35 |
+| Redundancy | 2.3 | → | 35 |
+| Temporal | 1.6 | ↓ | 35 |
+| **Overall** | 2.1 | ↓ | 35 |
 
 ### Dimension-Defect Correlation
 

@@ -52,6 +52,38 @@ entities 只能包含以下五类具名实体：
 - 如果提示中包含「已知实体参考」，请优先使用其中的标准名称作为 entities.mention
 - 只有在已知实体列表中没有匹配项时，才使用文档中的原始表述
 - 这有助于保持实体命名的一致性
+# unit_type 分类规范（严格）
+unit_type 只能是以下类型之一，不要使用其他值：
+- financial_performance: 财务业绩、财报、营收、利润
+- stock_price_change: 股价变动、涨跌
+- price_change: 商品/资产价格变动
+- market_analysis: 市场分析、行情、趋势
+- dividend: 分红、派息
+- ipo: IPO、上市
+- restructuring: 资产重组、并购
+- investment: 投资、融资
+- product_launch: 产品发布、研发
+- business_strategy: 企业战略、经营范围
+- company_establishment: 企业设立
+- executive_change: 高管变动、实控人变动
+- legal_proceeding: 诉讼、法律
+- regulatory_action: 监管处罚、行政
+- policy_announcement: 政策发布、变动
+- sanction: 制裁、禁运
+- debt_default: 债务违约
+- equity_pledge: 股权质押
+- risk_warning: 风险提示、警告
+- economic_data: 经济数据、指标
+- trade_data: 贸易数据
+- sector_performance: 板块、行业表现
+- diplomatic_event: 外交声明、访问
+- military_action: 军事行动
+- political_statement: 政治声明
+- announcement: 声明、公告
+- meeting: 会议
+- industry_analysis: 行业分析、趋势
+- other: 无法归入以上类别
+如果不确定，选择最接近的类别。
 # 输出要求
 - 只输出一个 JSON 对象，格式为 {"knowledge_units": [...]}
 - knowledge_units 可以为空列表

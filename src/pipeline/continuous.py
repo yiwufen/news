@@ -248,9 +248,14 @@ class ContinuousPipeline:
             result.failed_stage = "complete"
             return result
 
-        # Post-extraction: filter invalid entity mentions, redirect to tags
+        # Post-extraction: normalize unit_type, filter invalid entity mentions
+        from src.schemas.enums import normalize_unit_type
+
         valid_units: list[KnowledgeUnit] = []
         for unit in units:
+            # Normalize unit_type to canonical vocabulary
+            unit.unit_type = normalize_unit_type(unit.unit_type).value
+            # Filter invalid entity mentions, redirect to tags
             valid_entities = []
             for entity_ref in unit.entities:
                 if is_valid_entity_mention(entity_ref.mention):
@@ -351,11 +356,20 @@ def run_continuous(
     incremental: bool = True,
     time_window: str | None = None,
     dry_run: bool = False,
+    db_path: str = "data/news.db",
 ) -> ContinuousRunResult:
     """Convenience entrypoint for the continuous pipeline."""
+    from src.retrieval.indexing import KnowledgeIndexBuilder, try_create_vector_index
+
+    ku_repo = KnowledgeUnitRepository(db_path)
+    vector_index = try_create_vector_index(db_path)
+    index_builder = KnowledgeIndexBuilder(ku_repo, vector_index=vector_index)
+
     pipeline = ContinuousPipeline(
         batch_size=batch_size,
         graph_enabled=graph_enabled,
         incremental=incremental,
+        db_path=db_path,
+        index_builder=index_builder,
     )
     return pipeline.run(time_window=time_window, dry_run=dry_run)

@@ -11,6 +11,11 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "neo4j>=5.0.0",
     "python-dateutil>=2.9.0.post0",
+    "httpx>=0.28.0",
+    "numpy>=1.26.0",
+    "lancedb>=0.30.2",
+    "pyarrow>=24.0.0",
+    "jieba>=0.42.1",
 ]
 
 [project.scripts]

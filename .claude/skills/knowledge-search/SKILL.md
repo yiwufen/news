@@ -68,8 +68,8 @@ Returns JSON with:
 ## Instructions
 
 1. Parse the user's request to determine the appropriate `--intent`, `--entities`, and optional filters.
-2. Run the command using `knowledge-cli search ...`.
-3. The output is JSON printed to stdout. Parse it and present the key findings to the user.
+2. Run the command using `PYTHONIOENCODING=utf-8 knowledge-cli search ...` to ensure consistent encoding across systems.
+3. The output is JSON printed to stdout with all non-ASCII characters escaped (`\uXXXX`). Parse it and present the key findings to the user.
 4. If the user's query mentions two entities and their relationship, use `--intent RELATIONSHIP_QUERY --target-entity "B" --hops N`.
 5. If the user asks about time progression, use `--intent ENTITY_TIMELINE` with a `--time-range`.
 6. Entity names containing spaces do NOT need extra quoting beyond the surrounding quotes.

@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from src.entities import EntityRepository
 from src.graph import GraphRetrievalResult, KnowledgeGraphRetriever
+from src.paths import DEFAULT_DB_PATH
 from src.schemas.query import IntentType, StructuredQuery
 from src.orchestration.result import GraphMeta, PipelineResult, RetrievalMeta
 from src.retrieval.knowledge_search import KnowledgeSearchRequest, KnowledgeSearcher
@@ -29,7 +30,7 @@ def _enhance_with_graph(
     *,
     structured_query: StructuredQuery,
     source: str,
-    db_path: str = "data/news.db",
+    db_path: str = DEFAULT_DB_PATH,
 ) -> _GraphEnhancement:
     """Run graph expansion from query entities.
 
@@ -113,6 +114,7 @@ def run_pipeline(
     structured_query: StructuredQuery | None = None,
     top_k: int = 20,
     hops: int | None = None,
+    db_path: str = DEFAULT_DB_PATH,
 ) -> PipelineResult:
     """Run the knowledge retrieval pipeline over normalized evidence.
 
@@ -137,7 +139,7 @@ def run_pipeline(
     if hops is not None:
         effective_query = replace(structured_query, hops=hops)
 
-    searcher = KnowledgeSearcher()
+    searcher = KnowledgeSearcher(db_path)
 
     request = KnowledgeSearchRequest(
         structured_query=effective_query,
@@ -158,6 +160,7 @@ def run_pipeline(
         graph_enhancement = _enhance_with_graph(
             structured_query=effective_query,
             source=source,
+            db_path=db_path,
         )
 
     graph_ent = graph_enhancement.entities if graph_enhancement else []
@@ -195,7 +198,7 @@ def run_pipeline(
 
     # Structured warnings for empty results
     if search_result.total_count == 0 and effective_query.entities:
-        entity_repo = EntityRepository()
+        entity_repo = EntityRepository(db_path)
         matched = entity_repo.find_by_names(effective_query.entities)
         if not matched:
             entity_names = ", ".join(effective_query.entities)

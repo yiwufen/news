@@ -191,7 +191,7 @@ def test_run_pipeline_queries_new_knowledge_store(tmp_path, monkeypatch) -> None
     original_searcher_cls = graph_module.KnowledgeSearcher
 
     class FakeKnowledgeSearcher:
-        def __init__(self) -> None:
+        def __init__(self, *args: object, **kwargs: object) -> None:
             self._searcher = original_searcher_cls(
                 db_path=str(db_path),
             )
@@ -221,7 +221,7 @@ def test_run_pipeline_queries_new_knowledge_store(tmp_path, monkeypatch) -> None
     assert result.query.entities == ["Xiaomi Group"]
     assert len(result.knowledge_units) >= 1
     assert len(result.entities) >= 1
-    assert result.retrieval.retrieval_mode == "bm25"
+    assert result.retrieval.retrieval_mode == "timeline"
     assert result.retrieval.bm25_count >= 1
     assert result.graph.graph_used is False
     assert result.graph.candidate_count == 0
@@ -247,7 +247,7 @@ def test_run_pipeline_returns_transient_entities_for_direct_articles(monkeypatch
     original_searcher_cls = graph_module.KnowledgeSearcher
 
     class FakeKnowledgeSearcher:
-        def __init__(self) -> None:
+        def __init__(self, *args: object, **kwargs: object) -> None:
             self._searcher = original_searcher_cls(
                 extractor=StubExtractor(),
             )
@@ -293,7 +293,7 @@ def test_run_pipeline_omits_graph_edges_when_disabled(monkeypatch) -> None:
     original_searcher_cls = graph_module.KnowledgeSearcher
 
     class FakeKnowledgeSearcher:
-        def __init__(self) -> None:
+        def __init__(self, *args: object, **kwargs: object) -> None:
             self._searcher = original_searcher_cls(
                 extractor=StubExtractor(),
             )
@@ -537,7 +537,7 @@ def test_run_pipeline_repairs_legacy_event_cluster_payloads(tmp_path, monkeypatc
     original_searcher_cls = graph_module.KnowledgeSearcher
 
     class FakeKnowledgeSearcher:
-        def __init__(self) -> None:
+        def __init__(self, *args: object, **kwargs: object) -> None:
             self._searcher = original_searcher_cls(
                 db_path=str(db_path),
             )
@@ -589,7 +589,7 @@ def test_run_pipeline_relationship_query_returns_formal_graph_results(tmp_path, 
     original_searcher_cls = graph_module.KnowledgeSearcher
 
     class FakeKnowledgeSearcher:
-        def __init__(self) -> None:
+        def __init__(self, *args: object, **kwargs: object) -> None:
             self._searcher = original_searcher_cls(
                 db_path=str(db_path),
             )
@@ -636,15 +636,13 @@ def test_run_pipeline_relationship_query_returns_formal_graph_results(tmp_path, 
                 },
                 hit_reasons={"ent_partner": ["co_involved_via:clu_1"]},
                 candidate_count=1,
-                expanded_cluster_count=1,
-                expanded_entity_count=1,
             )
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(graph_module, "KnowledgeSearcher", FakeKnowledgeSearcher)
     monkeypatch.setattr(graph_module, "KnowledgeGraphRetriever", FakeKnowledgeGraphRetriever)
 
-    result = run_pipeline(structured_query=_xiaomi_relationship_query(), graph_enabled=True)
+    result = run_pipeline(structured_query=_xiaomi_relationship_query(), graph_enabled=True, db_path=str(db_path))
 
     assert result.graph.graph_enabled is True
     assert result.graph.graph_used is True
@@ -652,7 +650,6 @@ def test_run_pipeline_relationship_query_returns_formal_graph_results(tmp_path, 
     assert len(result.graph_result.nodes) == 3
     assert len(result.graph_result.edges) == 2
     assert result.graph_result.paths[0]["path_type"] == "Entity->EventCluster->Entity"
-    assert result.graph.graph_used is True
     assert result.graph.candidate_count == 1
     assert result.graph.hit_reasons == {"ent_partner": ["co_involved_via:clu_1"]}
 
@@ -663,7 +660,7 @@ def test_run_pipeline_rejects_relationship_query_for_direct_articles(monkeypatch
     original_searcher_cls = graph_module.KnowledgeSearcher
 
     class FakeKnowledgeSearcher:
-        def __init__(self) -> None:
+        def __init__(self, *args: object, **kwargs: object) -> None:
             self._searcher = original_searcher_cls(
                 extractor=StubExtractor(),
             )

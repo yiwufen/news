@@ -118,14 +118,11 @@ SYSTEM_PROMPT = """你是一名金融检索评估专家。你的任务是从给�
 # ── 分层采样 ──────────────────────────────────────────────
 
 def _type_family(unit_type: str) -> str:
-    """将 unit_type 映射到同义词族名，未匹配的归入 'other'。"""
-    from src.retrieval.event_type_mapping import _SYNONYM_GROUPS
-    low = unit_type.lower().strip()
-    for group in _SYNONYM_GROUPS:
-        for term in group:
-            if term.lower() == low:
-                return group[0]
-    return "other"
+    """Map unit_type to its canonical family name, or 'other'."""
+    from src.schemas.enums import UnitType, normalize_unit_type
+
+    canonical = normalize_unit_type(unit_type)
+    return canonical.value if canonical != UnitType.OTHER else "other"
 
 
 def stratified_sample_kus(

@@ -11,6 +11,7 @@ import pytest
 
 from src.cli import cmd_ingest, cmd_search, cmd_start, cmd_stop, cmd_status, main
 from src.orchestration.result import GraphMeta, PipelineResult, RetrievalMeta
+from src.paths import DEFAULT_DB_PATH
 from src.schemas.query import IntentType
 
 
@@ -54,6 +55,7 @@ class TestCmdSearch:
             target_entity=None,
             top_k=20,
             graph_enabled=True,
+            db=DEFAULT_DB_PATH,
         )
         cmd_search(args)
 
@@ -88,6 +90,7 @@ class TestCmdSearch:
             target_entity=None,
             top_k=20,
             graph_enabled=True,
+            db=DEFAULT_DB_PATH,
         )
         cmd_search(args)
 
@@ -121,6 +124,7 @@ class TestCmdSearch:
             target_entity=None,
             top_k=50,
             graph_enabled=False,
+            db=DEFAULT_DB_PATH,
         )
         cmd_search(args)
 
@@ -156,6 +160,7 @@ class TestCmdIngest:
             graph_enabled=True,
             incremental=True,
             dry_run=False,
+            db="data/news.db",
         )
         cmd_ingest(args)
 
