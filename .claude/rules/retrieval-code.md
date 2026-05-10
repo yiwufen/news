@@ -17,17 +17,20 @@
 修改上述文件后，**必须**运行检索评估报告，对比改动前后的指标变化：
 
 ```bash
-uv run python scripts/eval_report.py --input eval/golden_dataset_v1.json
+uv run python scripts/eval_report.py --input eval/golden_dataset_v2.json
 ```
 
-### 当前基线（2026-05-09，364 queries，规则预标注）
+### 当前基线（2026-05-10，358 queries，规则预标注，Phase 1/2/3 后）
 
 | 指标 | 基线值 |
 |------|--------|
-| Recall@5 | 29.4% |
-| Recall@20 | 39.3% |
-| MRR | 0.188 |
-| NDCG@10 | 0.564 |
+| Recall@5 | 12.8% |
+| Recall@20 | 17.3% |
+| MRR | 0.102 |
+| NDCG@10 | 0.668 |
+
+> 注：v1 基线（364 queries）Recall@5=29.4%, NDCG@10=0.564。v2 查询更多样、更难，
+> 且基于新检索系统生成，两者不宜直接比较绝对值。
 
 ### 要求
 

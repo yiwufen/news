@@ -22,7 +22,7 @@ LLM 意图解析已从项目中分离。调用方直接传入结构化查询参�
 | 1. 原始文档接入 | ✅ 已完成 | 100% | SQLite 文档存储、测试数据与增量读取已具备 |
 | 2. 文档知识化抽取 | ✅ 主线可用 | 85% | `run_continuous()` 已切到 `RawDocument -> KnowledgeUnit` 新主线，时间标准化、冲突检测已集成 |
 | 3. 实体与事件归一 | ✅ 主线可用 | 85% | 已新增 `Entity` / `EventCluster` 保守归一与归并，多类型冲突检测与聚合视图已落地 |
-| 4. 检索层 | ✅ 主线可用 | 90% | BM25 + 结构化过滤检索主线，分层打分（实体匹配 > 类型匹配 > 文本匹配 > 时效），移除了无实质贡献的向量检索层 |
+| 4. 检索层 | ✅ 主线可用 | 95% | 多路径检索(entity-id/dense/BM25) + 中文分词(jieba) + 受控词表(28类型) + Intent感知评分，NDCG@10=0.668 |
 | 5. 图谱层 | ✅ 主线可用 | 90% | 新离线路径已同步 `Entity + EventCluster + INVOLVED_IN`，`run_pipeline()` 已接入正式图谱增强检索、关系结果集与稳定输出契约 |
 | 6. CLI 工具 | ✅ 已完成 | 100% | `knowledge-cli search` / `knowledge-cli ingest`，结构化参数入 JSON 出，供 agent 调用 |
 
