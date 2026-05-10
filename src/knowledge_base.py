@@ -155,6 +155,8 @@ class KnowledgeUnit(BaseModel):
 
     @model_validator(mode="after")
     def assign_stable_ku_id(self) -> KnowledgeUnit:
+        if self.ku_id:
+            return self
         payload = {
             "doc_id": self.source.doc_id,
             "unit_kind": self.unit_kind,
