@@ -283,6 +283,26 @@ class ContinuousPipeline:
             result.units = resolved_units
             result.entities = resolved_entities
 
+            # Backfill relation_hints: map mention → entity_id
+            # This must run after entity resolution so entity_ids are populated
+            for unit in resolved_units:
+                entity_mention_map: dict[str, str] = {
+                    e.mention: e.entity_id
+                    for e in unit.entities
+                    if e.entity_id
+                }
+                for rh in unit.relation_hints:
+                    if rh.subject_mention:
+                        rh.subject_entity_id = entity_mention_map.get(rh.subject_mention)
+                    if rh.object_mention:
+                        rh.object_entity_id = entity_mention_map.get(rh.object_mention)
+            # Remove relation_hints with unresolvable mentions
+            for unit in resolved_units:
+                unit.relation_hints = [
+                    rh for rh in unit.relation_hints
+                    if rh.subject_entity_id or rh.object_entity_id
+                ]
+
             # 更新缓存，使后续文档可见新实体
             for entity in resolved_entities:
                 context.entities_cache[entity.entity_id] = entity

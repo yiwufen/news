@@ -1165,3 +1165,320 @@ KU2: ku_11b91d463e3d8f5d, summary="英伟达2026年股权投资已突破400亿�
 
 ### Impact
 LOW。确认了 Defect #11（无去重）。来自同一新闻源的 2 条 KU 占据 top-2 位置，降低信息多样性。
+
+---
+
+## F20260511-001
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-11 |
+| **Session** | ut-analyst-20260511-120618 |
+| **Persona** | analyst |
+| **Scenario** | S002 |
+| **Severity** | HIGH |
+| **Category** | output-quality |
+| **Status** | OPEN |
+| **Related Defect** | #5 |
+
+### Summary
+宁德时代搜索返回的 20 条 KU 中 event_time 100% 为 None (20/20)，时间线查询完全不可用。时间范围参数记录正确但无法过滤无时间 KU。
+
+### Reproduction
+```
+PYTHONIOENCODING=utf-8 uv run knowledge-cli search --entities "宁德时代" --intent ENTITY_OVERVIEW
+# → total_count: 158, ku: 20, event_time None: 20/20 (100%)
+
+PYTHONIOENCODING=utf-8 uv run knowledge-cli search --entities "宁德时代" --intent ENTITY_TIMELINE --time-range 2025-01-01:2026-05-11
+# → total_count: 100, ku: 12, event_time None: 12/12 (100%)
+# published_at present: 0/12
+```
+
+### Expected Behavior
+1. KU 应有 event_time，至少应从 published_at 回退
+2. 时间线查询不应返回所有 event_time 为 None 的结果
+3. 时间范围过滤应对有 event_time 的 KU 生效
+
+### Impact
+HIGH。作为分析师查询宁德时代事件时间线，所有 KU 缺少时间信息，无法构建时间线。比之前测试的 54% 缺失率更严重——宁德时代达到 100%。时间范围过滤因所有 event_time 为 None 而无法生效。
+
+---
+
+## F20260511-002
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-11 |
+| **Session** | ut-analyst-20260511-120618 |
+| **Persona** | analyst |
+| **Scenario** | S002 |
+| **Severity** | HIGH |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #11 |
+
+### Summary
+宁德时代搜索 Top 10 KU 中 8 条关于同一"超级科技日"事件，严重挤占信息多样性。不同来源对同一事件的报道被当作独立 KU 返回。
+
+### Reproduction
+```
+PYTHONIOENCODING=utf-8 uv run knowledge-cli search --entities "宁德时代" --intent ENTITY_OVERVIEW
+```
+Top 10 KU 中 8 条涉及"超级科技日"：
+- KU3: "宁德时代举办超级科技日活动" (type=other)
+- KU4: "宁德时代将于2026年4月21日举办主题为'极域之约'的超级科技日发布会" (type=other)
+- KU5: "宁德时代将在2026年'超级科技日'上带来全新的技术、产品和生态" (type=product_launch)
+- KU6: "此次超级科技日将是宁德时代成立以来技术密度最高的一场发布会" (type=other)
+- KU7: "宁德时代计划在2026年4月21日举办的'超级科技日'发布会上发布钠电、凝聚态、快充等相关技术产品" (type=product_launch)
+- KU8: "宁德时代表示，2026年'超级科技日'是其成立以来技术密度最高的一场发布会" (type=other)
+- KU9: "宁德时代将在超级科技日推出全新的技术、产品和生态" (type=product_launch)
+- KU10: "宁德时代将于4月21日举办2026年'超级科技日'，主题为'极域之约'" (type=product_launch)
+
+### Expected Behavior
+同一事件的多个来源报道应在 top-K 中去重或合并。理想情况下，"超级科技日"事件在 top 10 中最多出现 2-3 条（不同角度），其余位置留给其他事件。
+
+### Impact
+HIGH。80% 的 top-K 位置被单一事件占满，分析师只能看到一个事件的重复信息。宁德时代有 158 条 KU，涵盖公司成立、股价变动、财务业绩、产能扩张等多个维度，但全部被"超级科技日"淹没。与 Defect #11（无去重）直接相关。
+
+---
+
+## F20260511-003
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-11 |
+| **Session** | ut-analyst-20260511-120618 |
+| **Persona** | analyst |
+| **Scenario** | S002, S010, ad-hoc |
+| **Severity** | HIGH |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #15 |
+
+### Summary
+对宁德时代执行 5 种不同 intent 查询（ENTITY_OVERVIEW、ENTITY_TIMELINE、RISK_ASSESSMENT、GUARANTEE_ANALYSIS、TOPIC_RESEARCH），结果完全一致（相同的 total_count=158、相同的 top KU 排序）。不同 intent 走完全相同的检索路径。
+
+### Reproduction
+```
+# 以下 5 个查询返回完全相同的结果：
+knowledge-cli search --entities "宁德时代" --intent ENTITY_OVERVIEW         # total=158
+knowledge-cli search --entities "宁德时代" --intent RISK_ASSESSMENT          # total=158
+knowledge-cli search --entities "宁德时代" --intent GUARANTEE_ANALYSIS       # total=158
+knowledge-cli search --entities "宁德时代" --intent TOPIC_RESEARCH           # total=100 (仅 time_range 不同)
+knowledge-cli search --entities "宁德时代" --intent ENTITY_TIMELINE --time-range 2025-01-01:2026-05-11  # total=100
+```
+ENTITY_OVERVIEW 和 RISK_ASSESSMENT 的前 5 条 KU 完全一致：
+1. 宁德时代成立银川时代电服科技有限公司和兰州时代电服科技有限公司
+2. 中际旭创取代宁德时代成为主动权益基金第一大重仓股
+3. 宁德时代举办超级科技日活动
+4. 宁德时代将于2026年4月21日举办主题为'极域之约'的超级科技日发布会
+5. 宁德时代将在2026年'超级科技日'上带来全新的技术、产品和生态
+
+### Expected Behavior
+RISK_ASSESSMENT 应优先返回风险相关内容（股价下跌、监管风险、供应链风险等）；GUARANTEE_ANALYSIS 应聚焦担保相关内容；TOPIC_RESEARCH 应返回行业级分析。不同 intent 应产出不同的排序或过滤策略。
+
+### Impact
+HIGH。确认 F20260509-021 在宁德时代依然存在。所有 intent 产出的结果完全相同，AI 应用依赖不同 intent 获取不同维度信息的期望完全落空。
+
+---
+
+## F20260511-004
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-11 |
+| **Session** | ut-analyst-20260511-120618 |
+| **Persona** | analyst |
+| **Scenario** | S007 |
+| **Severity** | HIGH |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #5 |
+
+### Summary
+时间范围过滤在宁德时代上部分生效——total_count 随范围变化（无范围=158, 2026-01月=61, 宽范围=158），但返回的 top-20 KU 因全部 event_time=None 而完全不受过滤影响。反向范围正确返回 0 结果。
+
+### Reproduction
+```
+# 无范围
+total=158, ku=20
+
+# 窄范围 (2026-01-01:2026-01-31)
+total=61, ku=20  # total 减少 61%，但返回的 KU 与无范围相同
+
+# 宽范围 (2025-01-01:2026-05-11)
+total=158, ku=20  # 与无范围完全一致
+
+# 零长度 (2026-01-01:2026-01-01)
+total=61, ku=20   # 无崩溃，无错误提示
+
+# 反向范围 (2026-05-11:2025-01-01)
+total=0, ku=0     # 正确返回空，但无错误提示
+```
+
+对比之前 F20260510-002（英伟达）：英伟达测试中 total 几乎不变（52-64），而宁德时代 total 从 158→61。说明时间范围过滤对 total_count（BM25 候选集）有部分效果，但因返回的 KU 全部 event_time=None，过滤无法作用于它们。
+
+### Expected Behavior
+1. 有 event_time 的 KU 应被正确过滤
+2. event_time=None 的 KU 应使用 published_at 作为回退，或被排除在时间范围查询之外
+3. 零长度范围应返回 0 结果或明确提示
+4. 反向范围应有错误提示
+
+### Impact
+HIGH。分析师搜索"宁德时代 2026 年 1 月事件"获得与全量搜索完全相同的结果，时间维度完全失效。部分改善（total_count 变化）说明底层过滤逻辑存在，但因 event_time 缺失率 100% 导致无法作用于宁德时代。
+
+---
+
+## F20260511-005
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-11 |
+| **Session** | ut-analyst-20260511-120618 |
+| **Persona** | analyst |
+| **Scenario** | ad-hoc (CATL alias) |
+| **Severity** | HIGH |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #1 (partial) |
+
+### Summary
+"宁德"简称解析到独立实体"宁德"(Company, ent_8cbb8b13b38c)，而非宁德时代(ent_85272d28e621)。搜索返回的 20 条 KU 中仅 2 条提及宁德时代，用户体验严重降级。对比"CALI"英文别名正确解析到宁德时代。
+
+### Reproduction
+```
+# "宁德时代" → matched_entity_ids: ['ent_85272d28e621'], total=158
+# "CATL" → matched_entity_ids: ['ent_85272d28e621'], total=160  ✅ 英文别名正确
+
+# "宁德" → matched_entity_ids: ['ent_8cbb8b13b38c'], total=61  ❌ 解析到不同实体
+# Entity detail: canonical_name="宁德", entity_type="Company"
+# KUs with 宁德时代: 2/20
+# KUs with only 宁德: 1/20
+# Top KU: "宁德创历史新高" (可能是宁德时代股票的简称)
+```
+
+### Expected Behavior
+"宁德"应通过实体解析别名机制关联到"宁德时代"（宁德时代的常见简称之一）。或者至少应有松弛策略——当精确匹配到实体"宁德"但结果较少时，尝试扩展到包含"宁德"的实体（如"宁德时代"）。
+
+### Impact
+HIGH。中文简称在小米（"小米"→小米集团 ✅）、腾讯（"腾讯"→腾讯控股 ✅）上工作正常，但在宁德时代上失败。实体别名覆盖不完整，分析师使用常见简称时会得到错误的结果集。
+
+---
+
+## F20260511-006
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-11 |
+| **Session** | ut-analyst-20260511-120618 |
+| **Persona** | analyst |
+| **Scenario** | ad-hoc (relationship query) |
+| **Severity** | HIGH |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #12 |
+
+### Summary
+RELATIONSHIP_QUERY 查询宁德时代→比亚迪返回 graph_nodes=0, graph_edges=0，尽管 graph_used=True、Neo4j 正在运行。candidate_count=0 说明图谱遍历完全找不到两个实体之间的路径。
+
+### Reproduction
+```
+PYTHONIOENCODING=utf-8 uv run knowledge-cli search --entities "宁德时代" --intent RELATIONSHIP_QUERY --target-entity "比亚迪" --hops 2
+```
+- graph_enabled: True
+- graph_used: True
+- candidate_count: 0
+- expanded_cluster_count: 0
+- expanded_entity_count: 0
+- graph_data nodes: 0
+- graph_data edges: 0
+- errors: []
+- target_entity in query: "比亚迪"
+
+对比 ENTITY_OVERVIEW 的图增强：
+- candidate_count: 91
+- expanded_cluster_count: 91
+- expanded_entity_count: 100
+- graph_data nodes: 192
+- graph_data edges: 246
+
+### Expected Behavior
+宁德时代和比亚迪作为动力电池行业最重要的两家企业，应有图谱路径（供应链关系、竞争关系、合作历史等）。即使 2-hop 无法直接连接，至少 1-hop 的邻居应有交集。
+
+### Impact
+HIGH。关系查询是分析师核心需求之一。Neo4j 正在运行且单实体图增强工作正常（192 nodes），但两个实体之间的关系查询返回完全空的图。图谱中的关系边类型只有 INVOLVED_IN（Entity→EventCluster），缺少 Entity→Entity 直接关系，导致多跳遍历无法跨越。
+
+---
+
+## F20260511-007
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-11 |
+| **Session** | ut-analyst-20260511-120618 |
+| **Persona** | analyst |
+| **Scenario** | ad-hoc (event type filter) |
+| **Severity** | MEDIUM |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #2 |
+
+### Summary
+event_type 过滤 "product_launch" 将 total_count 从 158 减少到 65，但返回的 KU 中仍包含 company_establishment、market_analysis、business_strategy 等非匹配类型。过滤不严格，混入其他类型。
+
+### Reproduction
+```
+PYTHONIOENCODING=utf-8 uv run knowledge-cli search --entities "宁德时代" --event-types "product_launch"
+# → total: 65, ku: 20
+# unit_types in results: {industry_analysis, product_launch, business_strategy, company_establishment, market_analysis}
+# All match product_launch: False
+# KU1 type=company_establishment (不匹配)
+
+# 中文 "产品发布"
+PYTHONIOENCODING=utf-8 uv run knowledge-cli search --entities "宁德时代" --event-types "产品发布"
+# → total: 65 (与英文相同)
+# unit_types: {stock_price_change, sector_performance, financial_performance, ...}
+```
+
+### Expected Behavior
+指定 event_type 过滤后，返回的 KU 应只包含匹配的 unit_type。当前 total_count 变化说明过滤在 BM25 层面生效，但后续排序或截断阶段混入了不匹配的 KU。
+
+### Impact
+MEDIUM。分析师按事件类型过滤时，得到的结果包含不相关类型，降低过滤的可信度。中文"产品发布"返回与英文"product_launch"相同的 total_count (65) 是一个积极信号，说明中英文映射部分生效。
+
+---
+
+## F20260511-008
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-11 |
+| **Session** | ut-analyst-20260511-120618 |
+| **Persona** | analyst |
+| **Scenario** | ad-hoc (CATL vs BYD) |
+| **Severity** | MEDIUM |
+| **Category** | retrieval-accuracy |
+| **Status** | IMPROVED |
+| **Related Defect** | #15 |
+
+### Summary
+COMPARATIVE_ANALYSIS 宁德时代 vs 比亚迪对比之前有显著改善：宁德时代 15 条、比亚迪 5 条（之前 20:0）。但仍无 KU 同时提及两个实体，排序前 6 条中 4 条为比亚迪（被推到前面），后面全是宁德时代。
+
+### Reproduction
+```
+PYTHONIOENCODING=utf-8 uv run knowledge-cli search --entities "宁德时代" "比亚迪" --intent COMPARATIVE_ANALYSIS
+# → total: 83, ku: 20
+# 宁德时代 in KU: 15/20 (75%)
+# 比亚迪 in KU: 5/20 (25%)
+# Both in same KU: 0/20 (0%)
+# KU3-KU6 全部是比亚迪（辟谣/否认传言/神州租车合作）
+# KU7-KU20 全部是宁德时代（超级科技日）
+```
+
+### Expected Behavior
+1. 两个实体应均衡覆盖（至少各占 30%+）
+2. 应优先返回同时提及两个实体的 KU（如比亚迪使用宁德时代电池的合作报道）
+3. 排序应交替穿插两个实体的信息，而非按实体分块
+
+### Impact
+MEDIUM。对比 F20260509-010（宁德时代:比亚迪 = 20:0），当前 15:5 是显著改善。coverage_bonus 策略生效。但 0 条 KU 同时提及两个实体意味着系统无法找到两者的直接关联信息，对比分析仍然只是"并列展示"而非"对比分析"。

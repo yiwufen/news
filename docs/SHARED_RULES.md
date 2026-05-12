@@ -137,7 +137,7 @@
 - `SourceRef` 至少包含：`doc_id`、`source_name`、`url | None`
 - `EvidenceSpan` 至少包含：`text`、`start_offset | None`、`end_offset | None`
 - `TimeRef` 至少包含：`event_time | None`、`published_at`、`extracted_at`
-- `RelationHint` 至少包含：`relation_type`、`subject_entity_id | None`、`object_entity_id | None`、`confidence`
+- `RelationHint` 至少包含：`relation_type`、`subject_mention | None`、`object_mention | None`、`subject_entity_id | None`、`object_entity_id | None`、`confidence`
 
 约束：
 

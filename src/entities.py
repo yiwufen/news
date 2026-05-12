@@ -53,6 +53,15 @@ _ENTITY_SUFFIXES = (
     "corp",
 )
 
+# Precompiled single-pass suffix pattern (longest match first)
+_SUFFIX_PATTERN = re.compile(
+    "("
+    + "|".join(re.escape(s) for s in sorted(_ENTITY_SUFFIXES, key=len, reverse=True))
+    + r")$"
+)
+
+_MAX_ALIASES = 10
+
 # 应作为标签而非实体的国家/地区/货币/抽象概念
 _COUNTRY_REGION_CURRENCY: frozenset[str] = frozenset({
     # 主要国家
@@ -76,7 +85,7 @@ _COUNTRY_REGION_CURRENCY: frozenset[str] = frozenset({
     "台湾", "香港", "澳门", "中东", "欧洲", "亚洲", "非洲", "拉美",
     "东南亚", "南亚", "东亚", "中亚", "西亚", "北非", "东欧", "西欧",
     "霍尔木兹海峡", "马六甲海峡", "苏伊士运河", "巴拿马运河",
-    "加沙", "加沙地带", "约旦河西岸", "红海",
+    "加沙", "加沙地带", "约旦河西岸", "红海", "红海航线",
     # 省/市/区
     "山东", "广东", "江苏", "浙江", "河南", "四川", "湖北", "湖南",
     "河北", "福建", "安徽", "辽宁", "陕西", "江西", "山西", "广西",
@@ -107,7 +116,7 @@ _GENERIC_ROLE_WORDS: frozenset[str] = frozenset({
     "申请人", "被告", "原告", "嫌疑人", "受害人",
     "股东", "男性", "女性", "入围城市", "中国学者", "十大机构",
     "供应商", "合作方", "竞争者", "对手", "同行", "董事会",
-    "土耳其籍船长",
+    "土耳其籍船长", "日本民众", "韩国民众",
 })
 
 # 纯数字/金额/百分比/价格/股票代码/时间/季度/指数 的正则
@@ -143,6 +152,10 @@ _NON_ENTITY_GENERIC_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"^(采访|谈判|对话|协商|会谈|会议|交流)$"),
     re.compile(r"^(经验|能力|技术|策略|政策|措施|方案|计划|改革)$"),
     re.compile(r"^(经济|金融|科技|教育|医疗|军事|政治|文化|社会|体育)$"),
+    # Compound abstract patterns: generic suffixes indicating non-entities
+    re.compile(r".+(经济|市场|行业|政策|产业|领域|板块|概念)$"),
+    re.compile(r".+(销售|生产|制造|租赁|服务|运营|管理|研发)$"),
+    re.compile(r".+(行为|违规|违法|犯罪|欺诈|串标)$"),
 ]
 
 # 应排除的抽象概念/通用名词/财务指标
@@ -163,10 +176,18 @@ _ABSTRACT_CONCEPTS: frozenset[str] = frozenset({
     "人工智能", "新能源", "沥青", "玉米", "主力合约", "新房",
     "经济增长", "重点企业",
     "A股", "深成指", "现货白银", "现货黄金", "现货",
+    # 原油/能源大类
+    "WTI原油", "布伦特原油", "油价",
+    # 技术组件/材料大类
+    "磷酸铁锂电池", "麒麟电池",
+    # 基础设施泛指
+    "算力基础设施", "数据中心",
     # 军事泛指
     "伊朗军队", "伊朗武装部队", "美军", "美方军事力量", "持久战",
     # 业务类型/泛指
-    "算力租赁", "船只",
+    "算力租赁", "船只", "医疗器械",
+    # 违规行为/动词短语
+    "围标串标", "违法违规行为", "内幕交易", "操纵市场",
     # 政策/计划泛指
     "强基计划",
 })
@@ -205,19 +226,17 @@ def _strip_separators(value: str) -> str:
 
 
 def normalize_entity_name(name: str) -> str:
-    """Normalize an entity name for conservative matching."""
+    """Normalize an entity name for conservative matching.
+
+    Single-pass suffix stripping: removes the longest matching corporate suffix
+    exactly once. Prevents over-stripping (e.g. '控股有限公司' → '' ).
+    """
     normalized = _strip_separators(name)
     if not normalized:
         return ""
-
-    changed = True
-    while changed and normalized:
-        changed = False
-        for suffix in _ENTITY_SUFFIXES:
-            if normalized.endswith(suffix) and len(normalized) > len(suffix):
-                normalized = normalized[: -len(suffix)]
-                changed = True
-                break
+    match = _SUFFIX_PATTERN.search(normalized)
+    if match and match.start() > 0:
+        return normalized[: match.start()]
     return normalized
 
 
@@ -522,6 +541,18 @@ class EntityResolver:
             for eid, e in entities_cache.items()
         }
 
+        # Build inverted indexes for O(1) exact-match lookups
+        name_index: dict[str, list[str]] = {}   # normalized_canonical → [entity_id, ...]
+        alias_index: dict[str, list[str]] = {}   # normalized_alias → [entity_id, ...]
+        for eid, e in entities_cache.items():
+            nk = norm_cache[eid]
+            if nk:
+                name_index.setdefault(nk, []).append(eid)
+            for alias in e.aliases:
+                ak = normalize_entity_name(alias)
+                if ak:
+                    alias_index.setdefault(ak, []).append(eid)
+
         for unit in units:
             for entity_ref in unit.entities:
                 matched = self._find_match(
@@ -529,6 +560,8 @@ class EntityResolver:
                     entity_ref.identifiers,
                     entities_cache,
                     norm_cache,
+                    name_index,
+                    alias_index,
                 )
                 if matched is None:
                     matched = Entity(
@@ -543,10 +576,24 @@ class EntityResolver:
                         updated_at=now,
                     )
                     entities_cache[matched.entity_id] = matched
-                    norm_cache[matched.entity_id] = normalize_entity_name(matched.canonical_name)
+                    nk = normalize_entity_name(matched.canonical_name)
+                    norm_cache[matched.entity_id] = nk
+                    if nk:
+                        name_index.setdefault(nk, []).append(matched.entity_id)
                 else:
-                    if entity_ref.mention not in matched.aliases:
+                    # Alias dedup: skip if normalized form already present
+                    mention_norm = normalize_entity_name(entity_ref.mention)
+                    existing_norms = {normalize_entity_name(a) for a in matched.aliases}
+                    if (
+                        entity_ref.mention not in matched.aliases
+                        and mention_norm not in existing_norms
+                        and len(matched.aliases) < _MAX_ALIASES
+                    ):
                         matched.aliases.append(entity_ref.mention)
+                        if mention_norm:
+                            alias_index.setdefault(mention_norm, []).append(
+                                matched.entity_id
+                            )
                     if unit.ku_id not in matched.source_ku_ids:
                         matched.source_ku_ids.append(unit.ku_id)
                     matched.identifiers.update(entity_ref.identifiers)
@@ -566,35 +613,44 @@ class EntityResolver:
         identifiers: dict[str, str],
         entities_cache: dict[str, Entity],
         norm_cache: dict[str, str],
+        name_index: dict[str, list[str]],
+        alias_index: dict[str, list[str]],
     ) -> Entity | None:
         normalized = normalize_entity_name(mention)
+
+        # Layer 1: identifier exact match (high confidence, no type check)
+        if identifiers:
+            for entity in entities_cache.values():
+                if entity.identifiers:
+                    for key, value in identifiers.items():
+                        if entity.identifiers.get(key) == value:
+                            return entity
+
+        # Layer 1.5: cross-lingual alias → resolve to Chinese name → match
+        cross_lingual = EntityRepository._CROSS_LINGUAL_ALIASES.get(
+            mention.strip().lower()
+        )
+        if cross_lingual:
+            cross_norm = normalize_entity_name(cross_lingual)
+            for eid in name_index.get(cross_norm, []):
+                return entities_cache[eid]
+            for eid in alias_index.get(cross_norm, []):
+                return entities_cache[eid]
+
+        # Layer 2: normalized canonical name exact match via index (O(1), no type check)
+        for eid in name_index.get(normalized, []):
+            return entities_cache[eid]
+
+        # Layer 3: normalized alias exact match via index (O(1), no type check)
+        for eid in alias_index.get(normalized, []):
+            return entities_cache[eid]
+
+        # Layer 4: SequenceMatcher fuzzy match (type constraint preserved)
         inferred_type = _infer_entity_type(mention)
         for entity in entities_cache.values():
-            if identifiers and entity.identifiers:
-                for key, value in identifiers.items():
-                    if entity.identifiers.get(key) == value:
-                        return entity
-
             norm_name = norm_cache[entity.entity_id]
-            if normalized == norm_name:
-                return entity
-
-            alias_match = next(
-                (
-                    alias
-                    for alias in entity.aliases
-                    if normalize_entity_name(alias) == normalized
-                ),
-                None,
-            )
-            if alias_match:
-                return entity
-
-            similarity = SequenceMatcher(
-                None,
-                normalized,
-                norm_name,
-            ).ratio()
+            similarity = SequenceMatcher(None, normalized, norm_name).ratio()
             if similarity >= 0.95 and entity.entity_type == inferred_type:
                 return entity
+
         return None

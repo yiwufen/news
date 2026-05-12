@@ -80,3 +80,18 @@
 
 ### Summary
 以 casual 商务读者（P3）视角执行芯片行业全面测试，共 17 组搜索。核心发现：(1) **"海思"搜索 0/20 命中**——BM25 短词碰撞将"海思"匹配到海思科（药企）、蓝思科技、海信等，全部 20 条结果与华为海思无关（CRITICAL）；(2) **时间范围过滤完全未生效**——4 组不同范围（窄/宽/零长度/反向）对英伟达搜索返回相同结果，time_range 在 query 和 applied_filters 中正确记录但检索完全忽略（CRITICAL）；(3) **"辉达"（NVIDIA台湾名）前2条为噪声**——同根 BM25 短 token 碰撞问题；(4) **华为+中芯国际对比分析 17:1 失衡**——数据量大的实体碾压小实体；(5) **"芯片制裁"/"光刻"/"芯片国产替代"全部 0 结果**——再次验证 Defect #3 FTS5 中文分词；(6) 实体类型分类错误在芯片行业更加突出（"台南"=Person, "一季度"=Person）。积极发现：NVIDIA 英文名有效（58条 vs 中文77条）、"中芯"简称正确解析（50条）、英伟达+台积电对比分析已改善（12:8 覆盖）。
+
+## Session: ut-analyst-20260511-120618
+
+| Field | Value |
+|-------|-------|
+| **Started** | 2026-05-11 12:06:18 |
+| **Ended** | 2026-05-11 12:45:00 |
+| **Persona** | analyst |
+| **Scenarios Claimed** | S002, S007, S008, S010 |
+| **Scenarios Completed** | S002, S007, S008, S010, ad-hoc (CATL别名/对比/关系/事件类型) |
+| **Findings Filed** | F20260511-001 ~ F20260511-008 (8 findings) |
+| **Status** | COMPLETED |
+
+### Summary
+以金融分析师视角执行宁德时代（CATL）专项测试，共 12 组搜索。核心发现：(1) **100% event_time 为 None**——宁德时代所有 KU 缺少时间信息，比之前测试的 54% 缺失率更严重，时间线查询完全不可用；(2) **"超级科技日"占 Top 10 的 80%**——单一事件严重挤占信息多样性，确认 Defect #11（无去重）；(3) **所有 intent 产出完全相同的结果**——OVERVIEW=RISK=GUARANTEE=TOPIC 完全一致，确认 Defect #15；(4) **RELATIONSHIP_QUERY 图谱为空**——graph_used=True 但 0 nodes/edges，图谱缺少 Entity→Entity 关系边导致多跳遍历失败；(5) **"宁德"简称解析到错误实体**——解析为"宁德"(Company)而非宁德时代。积极发现：CATL 英文别名正确解析；COMPARATIVE_ANALYSIS 改善（15:5 vs 之前 20:0）；Neo4j 运行正常（192 nodes for ENTITY_OVERVIEW）；S010 schema 验证全部通过。

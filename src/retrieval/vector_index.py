@@ -72,8 +72,9 @@ class VectorIndex:
         existing_ids: set[str] = set()
         if _TABLE_NAME in self._table_names():
             table = self._db.open_table(_TABLE_NAME)
-            for row in table.to_pandas()[["ku_id"]].to_dict("records"):
-                existing_ids.add(row["ku_id"])
+            arrow_table = table.to_arrow()
+            for ku_id in arrow_table.column("ku_id").to_pylist():
+                existing_ids.add(ku_id)
 
         new_units = [u for u in units if u.ku_id not in existing_ids]
         if not new_units:

@@ -1,0 +1,644 @@
+{
+  "version": "1.0",
+  "created_at": "2026-05-10",
+  "description": "实体抽取质量评估集：覆盖具名实体识别、抽象概念过滤、金融数据过滤、关系抽取等维度",
+  "test_cases": [
+    {
+      "test_id": "eval_ent_001",
+      "category": "entity_positive",
+      "description": "标准公司实体：应提取公司名称",
+      "document": {
+        "doc_id": "test_001",
+        "title": "宁德时代发布新一代麒麟电池",
+        "content": "宁德时代新能源科技股份有限公司今日发布新一代麒麟电池，能量密度较上一代提升13%，续航里程突破1000公里。公司董事长曾毓群表示，该电池已获得多家车企订单。",
+        "source_name": "新华社",
+        "published_at": "2026-04-15T10:00:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "宁德时代", "entity_type": "Company" },
+          { "mention": "曾毓群", "entity_type": "Person" }
+        ],
+        "forbidden_entities": ["13%", "1000公里"],
+        "relations": []
+      }
+    },
+    {
+      "test_id": "eval_ent_002",
+      "category": "entity_positive",
+      "description": "机构+人物：应提取政府机构和具体人名",
+      "document": {
+        "doc_id": "test_002",
+        "title": "美联储主席鲍威尔暗示暂不降息",
+        "content": "美联储主席杰罗姆·鲍威尔在华盛顿举行的新闻发布会上表示，当前通胀水平仍高于目标，短期内不急于降息。他强调需要更多经济数据来支持货币政策调整。",
+        "source_name": "路透社",
+        "published_at": "2026-04-12T03:30:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "美联储", "entity_type": "Organization" },
+          { "mention": "鲍威尔", "entity_type": "Person" }
+        ],
+        "forbidden_entities": ["通胀", "货币政策", "经济数据"],
+        "relations": []
+      }
+    },
+    {
+      "test_id": "eval_ent_003",
+      "category": "entity_positive",
+      "description": "产品实体：应提取具体产品品牌名",
+      "document": {
+        "doc_id": "test_003",
+        "title": "华为Mate 70 Pro首销火爆 首日销量破百万",
+        "content": "华为Mate 70 Pro今日正式开售，全国各大门店排起长队。据渠道消息，首日销量已突破100万台。该机型搭载麒麟9100芯片，售价6499元起。",
+        "source_name": "证券时报",
+        "published_at": "2026-03-20T09:00:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "华为", "entity_type": "Company" },
+          { "mention": "Mate 70 Pro", "entity_type": "Product" }
+        ],
+        "forbidden_entities": ["100万台", "6499元", "麒麟9100"],
+        "relations": []
+      }
+    },
+    {
+      "test_id": "eval_ent_004",
+      "category": "entity_positive",
+      "description": "资产实体：应提取具体资产",
+      "document": {
+        "doc_id": "test_004",
+        "title": "碧桂园以32亿元出售上海碧桂园中心",
+        "content": "碧桂园控股有限公司今日公告，以32亿元价格出售旗下上海碧桂园中心写字楼资产予深圳某投资公司。该资产位于上海浦东新区，总建筑面积约8万平方米。",
+        "source_name": "财联社",
+        "published_at": "2026-04-08T16:00:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "碧桂园", "entity_type": "Company" }
+        ],
+        "forbidden_entities": ["32亿元", "8万平方米", "写字楼"],
+        "relations": []
+      }
+    },
+    {
+      "test_id": "eval_ent_005",
+      "category": "abstract_filter",
+      "description": "抽象概念过滤：全球经济/新能源市场不应作为实体",
+      "document": {
+        "doc_id": "test_005",
+        "title": "全球经济增速放缓 新能源市场面临调整",
+        "content": "世界银行最新报告指出，2026年全球经济增速预计放缓至2.6%。报告认为，新能源市场在经历过去三年的高速增长后，正面临产能过剩和价格下行的双重压力。国际贸易摩擦加剧了不确定性。",
+        "source_name": "经济参考报",
+        "published_at": "2026-04-14T08:00:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "世界银行", "entity_type": "Organization" }
+        ],
+        "forbidden_entities": ["全球经济", "新能源市场", "产能过剩", "国际贸易摩擦", "价格下行"],
+        "relations": []
+      }
+    },
+    {
+      "test_id": "eval_ent_006",
+      "category": "abstract_filter",
+      "description": "业务描述过滤：算力租赁/医疗器械销售不应作为实体",
+      "document": {
+        "doc_id": "test_006",
+        "title": "锦鸡股份算力租赁业务增长 第二类医疗器械销售稳步推进",
+        "content": "锦鸡股份2025年年报显示，公司算力租赁业务实现营收3.2亿元，同比增长45%。同时，公司第二类医疗器械销售收入达1.8亿元。公司表示将继续加大在算力基础设施方面的投入。",
+        "source_name": "东方财富",
+        "published_at": "2026-04-10T11:00:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "锦鸡股份", "entity_type": "Company" }
+        ],
+        "forbidden_entities": ["算力租赁", "第二类医疗器械销售", "3.2亿元", "1.8亿元", "45%", "算力基础设施"],
+        "relations": []
+      }
+    },
+    {
+      "test_id": "eval_ent_007",
+      "category": "abstract_filter",
+      "description": "抽象行为过滤：围标串标/违法违规行为不应作为实体",
+      "document": {
+        "doc_id": "test_007",
+        "title": "住建部通报多起围标串标案例",
+        "content": "住房和城乡建设部今日通报了2025年下半年查处的12起围标串标典型案例。涉及企业包括中建三局、中铁十四局等，违法违规行为主要集中在政府投资项目招投标环节。住建部表示将加大处罚力度。",
+        "source_name": "人民日报",
+        "published_at": "2026-04-05T07:00:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "住房和城乡建设部", "entity_type": "Organization" },
+          { "mention": "中建三局", "entity_type": "Company" },
+          { "mention": "中铁十四局", "entity_type": "Company" }
+        ],
+        "forbidden_entities": ["围标串标", "违法违规行为", "招投标", "处罚"],
+        "relations": []
+      }
+    },
+    {
+      "test_id": "eval_ent_008",
+      "category": "abstract_filter",
+      "description": "宏观政策过滤：宏观经济政策/医疗设备租赁不应作为实体",
+      "document": {
+        "doc_id": "test_008",
+        "title": "发改委发布宏观经济政策指引 医疗设备租赁试点扩大",
+        "content": "国家发改委今日发布《关于深化宏观经济政策协调的指导意见》，提出加强财政政策和货币政策的协同效应。同日，工信部宣布将医疗设备租赁试点范围从5个城市扩大至20个城市。分析人士认为，这将利好相关产业链。",
+        "source_name": "中国证券报",
+        "published_at": "2026-04-11T06:00:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "发改委", "entity_type": "Organization" },
+          { "mention": "工信部", "entity_type": "Organization" }
+        ],
+        "forbidden_entities": ["宏观经济政策", "医疗设备租赁", "财政政策", "货币政策", "产业链"],
+        "relations": []
+      }
+    },
+    {
+      "test_id": "eval_ent_009",
+      "category": "financial_filter",
+      "description": "金融数据过滤：金额/股票代码/指数不应作为实体",
+      "document": {
+        "doc_id": "test_009",
+        "title": "贵州茅台股价收涨2.3% 成交额达85亿元",
+        "content": "今日收盘，贵州茅台（600519.SH）报1856.00元/股，上涨2.3%，成交额85.37亿元。恒生指数收涨0.8%，报20156点。分析师认为，白酒板块短期仍有上涨空间。",
+        "source_name": "上海证券报",
+        "published_at": "2026-04-09T15:30:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "贵州茅台", "entity_type": "Company" }
+        ],
+        "forbidden_entities": ["600519.SH", "1856.00元/股", "2.3%", "85.37亿元", "恒生指数", "20156点", "白酒板块"],
+        "relations": []
+      }
+    },
+    {
+      "test_id": "eval_ent_010",
+      "category": "financial_filter",
+      "description": "财务指标过滤：营业收入/净利润/A股不应作为实体",
+      "document": {
+        "doc_id": "test_010",
+        "title": "比亚迪2025年营业收入突破8000亿元",
+        "content": "比亚迪股份有限公司披露2025年年报，全年营业收入达8231亿元，同比增长38%。归属于上市公司股东的净利润为402亿元。A股市场对其业绩反应积极，次日股价上涨4.5%。",
+        "source_name": "第一财经",
+        "published_at": "2026-03-28T20:00:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "比亚迪", "entity_type": "Company" }
+        ],
+        "forbidden_entities": ["8231亿元", "402亿元", "38%", "4.5%", "营业收入", "净利润", "A股"],
+        "relations": []
+      }
+    },
+    {
+      "test_id": "eval_ent_011",
+      "category": "financial_filter",
+      "description": "价格/点数/合约过滤：原油价格/主力合约不应作为实体",
+      "document": {
+        "doc_id": "test_011",
+        "title": "国际油价跌破70美元 WTI原油主力合约下跌3.2%",
+        "content": "受全球需求担忧影响，WTI原油主力合约收盘下跌3.2%，报68.50美元/桶。布伦特原油期货下跌2.8%，报72.30美元/桶。现货黄金则逆势上涨1.2%，报2650美元/盎司。高盛维持对油价的看空判断。",
+        "source_name": "华尔街见闻",
+        "published_at": "2026-04-07T06:00:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "高盛", "entity_type": "Company" }
+        ],
+        "forbidden_entities": ["WTI原油", "布伦特原油", "主力合约", "68.50美元/桶", "3.2%", "现货黄金", "2650美元/盎司", "油价"],
+        "relations": []
+      }
+    },
+    {
+      "test_id": "eval_ent_012",
+      "category": "role_filter",
+      "description": "泛指角色过滤：记者/分析师/董事会不应作为实体",
+      "document": {
+        "doc_id": "test_012",
+        "title": "腾讯控股召开董事会讨论回购计划",
+        "content": "据记者了解，腾讯控股今日召开董事会，讨论新一轮股份回购计划。多位分析师预计回购规模将超1000亿港元。董事会成员一致同意加速回购节奏，以提振市场信心。公司发言人拒绝透露具体细节。",
+        "source_name": "南华早报",
+        "published_at": "2026-04-13T08:00:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "腾讯控股", "entity_type": "Company" }
+        ],
+        "forbidden_entities": ["记者", "分析师", "董事会", "发言人", "1000亿港元", "市场信心"],
+        "relations": []
+      }
+    },
+    {
+      "test_id": "eval_ent_013",
+      "category": "role_filter",
+      "description": "泛指角色+代词过滤：股东/我国不应作为实体",
+      "document": {
+        "doc_id": "test_013",
+        "title": "中芯国际获大基金二期注资 股东大会通过增发方案",
+        "content": "中芯国际集成电路制造有限公司公告称，国家大基金二期将向公司注资200亿元。此前股东大会已通过定向增发方案。我国半导体产业正加速国产替代进程，投资者普遍看好前景。",
+        "source_name": "中国基金报",
+        "published_at": "2026-04-06T10:00:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "中芯国际", "entity_type": "Company" }
+        ],
+        "forbidden_entities": ["股东", "我国", "投资者", "200亿元", "大基金二期", "半导体产业"],
+        "relations": []
+      }
+    },
+    {
+      "test_id": "eval_ent_014",
+      "category": "relation_positive",
+      "description": "投资关系：应提取A投资B的关系",
+      "document": {
+        "doc_id": "test_014",
+        "title": "软银愿景基金向OpenAI追加投资40亿美元",
+        "content": "据知情人士透露，软银愿景基金已向人工智能公司OpenAI追加投资40亿美元，使其在OpenAI的总投资额超过100亿美元。软银创始人孙正义表示，看好通用人工智能的发展前景。此举使软银成为OpenAI最大外部投资者。",
+        "source_name": "彭博社",
+        "published_at": "2026-04-11T14:00:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "软银", "entity_type": "Company" },
+          { "mention": "OpenAI", "entity_type": "Company" },
+          { "mention": "孙正义", "entity_type": "Person" }
+        ],
+        "forbidden_entities": ["40亿美元", "100亿美元", "通用人工智能"],
+        "relations": [
+          { "subject_mention": "软银", "relation_type": "投资", "object_mention": "OpenAI" }
+        ]
+      }
+    },
+    {
+      "test_id": "eval_ent_015",
+      "category": "relation_positive",
+      "description": "诉讼关系：应提取A起诉B的关系",
+      "document": {
+        "doc_id": "test_015",
+        "title": "Archer Aviation向ITC起诉Joby Aviation专利侵权",
+        "content": "美国电动航空器制造商Archer Aviation今日向美国国际贸易委员会（ITC）提起337调查申请，指控Joby Aviation侵犯其多项电动飞行器专利。Archer要求ITC发布禁止令，阻止Joby的产品进入美国市场。ITC已确认将于45天内决定是否立案。",
+        "source_name": "路透社",
+        "published_at": "2026-04-09T20:00:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "Archer Aviation", "entity_type": "Company" },
+          { "mention": "美国国际贸易委员会", "entity_type": "Organization" },
+          { "mention": "Joby Aviation", "entity_type": "Company" }
+        ],
+        "forbidden_entities": ["337调查", "专利侵权", "禁止令", "45天"],
+        "relations": [
+          { "subject_mention": "Archer Aviation", "relation_type": "诉讼", "object_mention": "Joby Aviation" }
+        ]
+      }
+    },
+    {
+      "test_id": "eval_ent_016",
+      "category": "relation_positive",
+      "description": "监管关系：应提取机构对公司的监管处罚",
+      "document": {
+        "doc_id": "test_016",
+        "title": "证监会因虚假陈述对康美药业处以60万元罚款",
+        "content": "中国证监会今日发布公告，认定康美药业股份有限公司在2018年至2020年期间存在虚增营业收入等虚假陈述行为，决定对公司处以60万元罚款，并对相关责任人给予警告和罚款。上交所同日表示将对公司股票实施退市风险警示。",
+        "source_name": "中国证券报",
+        "published_at": "2026-04-04T17:00:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "证监会", "entity_type": "Organization" },
+          { "mention": "康美药业", "entity_type": "Company" },
+          { "mention": "上交所", "entity_type": "Organization" }
+        ],
+        "forbidden_entities": ["60万元", "虚假陈述", "虚增营业收入", "退市风险警示"],
+        "relations": [
+          { "subject_mention": "证监会", "relation_type": "处罚", "object_mention": "康美药业" }
+        ]
+      }
+    },
+    {
+      "test_id": "eval_ent_017",
+      "category": "relation_positive",
+      "description": "并购关系：应提取A并购B的关系",
+      "document": {
+        "doc_id": "test_017",
+        "title": "微软宣布以690亿美元收购动视暴雪交易完成",
+        "content": "微软公司今日宣布，以690亿美元收购动视暴雪的交易已获得所有监管机构批准并正式完成。微软CEO萨蒂亚·纳德拉表示，此次收购将显著增强公司在游戏领域的竞争力。动视暴雪CEO鲍比·科蒂克将在过渡期后离职。",
+        "source_name": "华尔街日报",
+        "published_at": "2026-04-02T09:00:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "微软", "entity_type": "Company" },
+          { "mention": "动视暴雪", "entity_type": "Company" },
+          { "mention": "萨蒂亚·纳德拉", "entity_type": "Person" }
+        ],
+        "forbidden_entities": ["690亿美元", "游戏领域", "过渡期"],
+        "relations": [
+          { "subject_mention": "微软", "relation_type": "并购", "object_mention": "动视暴雪" }
+        ]
+      }
+    },
+    {
+      "test_id": "eval_ent_018",
+      "category": "relation_negative",
+      "description": "关系过滤：仅有单实体参与，不应提取关系",
+      "document": {
+        "doc_id": "test_018",
+        "title": "特斯拉上海超级工厂产量创新高",
+        "content": "特斯拉上海超级工厂4月产量达到8.6万辆，创历史新高。其中Model Y占比超过60%。特斯拉CEO马斯克在社交媒体上表示对中国团队的感谢。工厂目前产能利用率超过95%。",
+        "source_name": "财联社",
+        "published_at": "2026-05-01T10:00:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "特斯拉", "entity_type": "Company" },
+          { "mention": "马斯克", "entity_type": "Person" },
+          { "mention": "Model Y", "entity_type": "Product" }
+        ],
+        "forbidden_entities": ["8.6万辆", "60%", "95%", "上海超级工厂"],
+        "relations": []
+      }
+    },
+    {
+      "test_id": "eval_ent_019",
+      "category": "relation_negative",
+      "description": "关系过滤：不确定推测不应提取为关系",
+      "document": {
+        "doc_id": "test_019",
+        "title": "市场猜测阿里巴巴可能收购某物流公司",
+        "content": "近日有市场传闻称，阿里巴巴集团可能正在考虑收购一家国内头部物流公司。有分析人士推测这可能指向顺丰控股或京东物流。不过截至目前，阿里巴巴、顺丰和京东均未对此传闻作出回应。",
+        "source_name": "21世纪经济报道",
+        "published_at": "2026-04-12T07:00:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "阿里巴巴", "entity_type": "Company" },
+          { "mention": "顺丰控股", "entity_type": "Company" },
+          { "mention": "京东物流", "entity_type": "Company" }
+        ],
+        "forbidden_entities": ["市场传闻", "分析人士", "物流公司"],
+        "relations": []
+      }
+    },
+    {
+      "test_id": "eval_ent_020",
+      "category": "composite",
+      "description": "复合边缘案例：具名实体+抽象概念+关系混合",
+      "document": {
+        "doc_id": "test_020",
+        "title": "英伟达与台积电深化合作 全球AI芯片市场格局生变",
+        "content": "英伟达CEO黄仁勋昨日在GTC大会上宣布，将与台积电进一步深化芯片代工合作，下一代Blackwell架构GPU将独家由台积电生产。黄仁勋表示，全球AI芯片市场需求持续增长，预计2027年市场规模将超过3000亿美元。受此消息影响，英伟达股价盘后上涨4.2%，台积电ADR上涨2.8%。不过也有分析师警告，AI泡沫风险正在积累，新能源板块和算力租赁概念也受到影响。住建部近日发布的政策也间接提及了数据中心建设规划。",
+        "source_name": "财新网",
+        "published_at": "2026-04-14T08:00:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "英伟达", "entity_type": "Company" },
+          { "mention": "台积电", "entity_type": "Company" },
+          { "mention": "黄仁勋", "entity_type": "Person" },
+          { "mention": "住建部", "entity_type": "Organization" }
+        ],
+        "forbidden_entities": ["全球AI芯片市场", "3000亿美元", "4.2%", "2.8%", "AI泡沫", "新能源板块", "算力租赁概念", "数据中心建设", "Blackwell"],
+        "relations": [
+          { "subject_mention": "英伟达", "relation_type": "合作", "object_mention": "台积电" }
+        ]
+      }
+    },
+    {
+      "test_id": "eval_ent_021",
+      "category": "relation_positive",
+      "description": "控股关系：应提取A控股B的关系",
+      "document": {
+        "doc_id": "test_021",
+        "title": "比亚迪全资控股比亚迪电子 完成股权变更登记",
+        "content": "比亚迪股份有限公司今日公告，已完成对比亚迪电子（国际）有限公司的剩余股权收购，持股比例从65%提升至100%，比亚迪电子成为其全资子公司。",
+        "source_name": "财联社",
+        "published_at": "2026-04-15T18:00:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "比亚迪", "entity_type": "Company" },
+          { "mention": "比亚迪电子", "entity_type": "Company" }
+        ],
+        "forbidden_entities": ["65%", "100%"],
+        "relations": [
+          { "subject_mention": "比亚迪", "relation_type": "控股", "object_mention": "比亚迪电子" }
+        ]
+      }
+    },
+    {
+      "test_id": "eval_ent_022",
+      "category": "relation_positive",
+      "description": "收购关系：应提取A收购B的关系",
+      "document": {
+        "doc_id": "test_022",
+        "title": "兖矿能源拟收购红隼集团100%权益",
+        "content": "兖矿能源股份有限公司公告称，拟以不超过24亿美元收购红隼集团100%权益。兖矿能源董事长李伟表示，此次收购将显著增强公司在海外煤炭资源的布局。红隼集团主要资产位于澳大利亚昆士兰州。",
+        "source_name": "上海证券报",
+        "published_at": "2026-04-14T09:00:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "兖矿能源", "entity_type": "Company" },
+          { "mention": "红隼集团", "entity_type": "Company" },
+          { "mention": "李伟", "entity_type": "Person" }
+        ],
+        "forbidden_entities": ["24亿美元", "100%", "昆士兰州"],
+        "relations": [
+          { "subject_mention": "兖矿能源", "relation_type": "收购", "object_mention": "红隼集团" }
+        ]
+      }
+    },
+    {
+      "test_id": "eval_ent_023",
+      "category": "relation_positive",
+      "description": "制裁关系：应提取A制裁B的关系",
+      "document": {
+        "doc_id": "test_023",
+        "title": "美国宣布对俄罗斯实施新一轮制裁 涉及能源领域",
+        "content": "美国财政部今日宣布对俄罗斯实施新一轮经济制裁，新增制裁名单包括俄罗斯天然气工业股份公司和多家俄罗斯银行。财政部长耶伦表示，制裁旨在削弱俄罗斯的能源收入。欧盟同日宣布将对俄制裁延长六个月。",
+        "source_name": "路透社",
+        "published_at": "2026-04-11T22:00:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "美国财政部", "entity_type": "Organization" },
+          { "mention": "俄罗斯天然气工业股份公司", "entity_type": "Company" },
+          { "mention": "耶伦", "entity_type": "Person" },
+          { "mention": "欧盟", "entity_type": "Organization" }
+        ],
+        "forbidden_entities": ["经济制裁", "能源收入", "制裁名单", "能源领域"],
+        "relations": [
+          { "subject_mention": "美国财政部", "relation_type": "制裁", "object_mention": "俄罗斯天然气工业股份公司" }
+        ]
+      }
+    },
+    {
+      "test_id": "eval_ent_024",
+      "category": "relation_positive",
+      "description": "签署关系：应提取A与B签署协议的关系",
+      "document": {
+        "doc_id": "test_024",
+        "title": "宁德时代与福特签署电池供应协议 总价值超百亿美元",
+        "content": "宁德时代新能源科技股份有限公司与美国福特汽车公司今日签署长期电池供应协议，总价值预计超过100亿美元。根据协议，宁德时代将为福特旗下的电动车型提供磷酸铁锂电池。福特CEO吉姆·法利表示该协议将加速福特电动化转型。",
+        "source_name": "彭博社",
+        "published_at": "2026-04-13T08:00:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "宁德时代", "entity_type": "Company" },
+          { "mention": "福特", "entity_type": "Company" },
+          { "mention": "吉姆·法利", "entity_type": "Person" }
+        ],
+        "forbidden_entities": ["100亿美元", "电池供应协议", "磷酸铁锂电池", "电动化转型"],
+        "relations": [
+          { "subject_mention": "宁德时代", "relation_type": "签署", "object_mention": "福特" }
+        ]
+      }
+    },
+    {
+      "test_id": "eval_ent_025",
+      "category": "relation_positive",
+      "description": "谴责关系：应提取A谴责B的关系",
+      "document": {
+        "doc_id": "test_025",
+        "title": "欧盟谴责俄罗斯天然气工业切断对欧供应",
+        "content": "欧盟委员会今日发表声明，强烈谴责俄罗斯天然气工业股份公司单方面切断对欧洲的天然气供应。欧盟委员会主席冯德莱恩表示，此举违反了现有的能源合同，欧盟将采取法律行动。俄罗斯天然气工业则回应称断供原因是技术故障。",
+        "source_name": "路透社",
+        "published_at": "2026-04-10T04:00:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "欧盟委员会", "entity_type": "Organization" },
+          { "mention": "俄罗斯天然气工业股份公司", "entity_type": "Company" },
+          { "mention": "冯德莱恩", "entity_type": "Person" }
+        ],
+        "forbidden_entities": ["天然气供应", "能源合同", "法律行动", "技术故障"],
+        "relations": [
+          { "subject_mention": "欧盟委员会", "relation_type": "谴责", "object_mention": "俄罗斯天然气工业股份公司" }
+        ]
+      }
+    },
+    {
+      "test_id": "eval_ent_026",
+      "category": "relation_positive",
+      "description": "减持关系：应提取A减持B股份的关系",
+      "document": {
+        "doc_id": "test_026",
+        "title": "大股东减持宁德时代股份 套现超30亿元",
+        "content": "据港交所披露易数据，宁德时代联合创始人黄世霖于4月8日至10日期间，通过大宗交易方式合计减持宁德时代股份1200万股，套现约30.5亿元。减持后黄世霖持股比例降至4.8%。",
+        "source_name": "证券时报",
+        "published_at": "2026-04-11T07:00:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "宁德时代", "entity_type": "Company" },
+          { "mention": "黄世霖", "entity_type": "Person" }
+        ],
+        "forbidden_entities": ["1200万股", "30.5亿元", "4.8%", "港交所"],
+        "relations": [
+          { "subject_mention": "黄世霖", "relation_type": "减持", "object_mention": "宁德时代" }
+        ]
+      }
+    },
+    {
+      "test_id": "eval_ent_027",
+      "category": "relation_positive",
+      "description": "高管任职关系：应提取A担任B高管的关系",
+      "document": {
+        "doc_id": "test_027",
+        "title": "阿里巴巴任命吴泳铭为集团CEO",
+        "content": "阿里巴巴集团控股有限公司今日宣布，吴泳铭将接替张勇担任集团首席执行官（CEO），即日起生效。吴泳铭此前担任阿里巴巴数字商业事业部总裁。张勇将继续担任集团董事。",
+        "source_name": "南华早报",
+        "published_at": "2026-04-09T10:00:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "阿里巴巴", "entity_type": "Company" },
+          { "mention": "吴泳铭", "entity_type": "Person" },
+          { "mention": "张勇", "entity_type": "Person" }
+        ],
+        "forbidden_entities": ["首席执行官", "总裁", "董事"],
+        "relations": [
+          { "subject_mention": "吴泳铭", "relation_type": "高管任职", "object_mention": "阿里巴巴" }
+        ]
+      }
+    },
+    {
+      "test_id": "eval_ent_028",
+      "category": "relation_positive",
+      "description": "反对关系：应提取A反对B的关系",
+      "document": {
+        "doc_id": "test_028",
+        "title": "日本民众强烈反对政府增加防卫预算",
+        "content": "日本民众在东京举行大规模集会，强烈反对岸田文雄政府将防卫预算提高至GDP的2%。组织方称超过5万人参加了此次抗议活动。在野党立宪民主党也公开反对该预算方案。",
+        "source_name": "共同社",
+        "published_at": "2026-04-12T14:00:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "立宪民主党", "entity_type": "Organization" },
+          { "mention": "岸田文雄", "entity_type": "Person" }
+        ],
+        "forbidden_entities": ["防卫预算", "GDP", "2%", "5万人", "日本民众", "抗议活动"],
+        "relations": [
+          { "subject_mention": "立宪民主党", "relation_type": "反对", "object_mention": "岸田文雄" }
+        ]
+      }
+    },
+    {
+      "test_id": "eval_ent_029",
+      "category": "relation_positive",
+      "description": "威胁关系：应提取A威胁B的关系",
+      "document": {
+        "doc_id": "test_029",
+        "title": "朝鲜威胁对韩国实施先发制人打击",
+        "content": "朝鲜人民军总参谋部今日发表声明，威胁将对韩国实施先发制人的军事打击。声明称，如果韩国继续进行大规模军事演习，朝鲜将不得不采取军事行动。韩国国防部对此表示强烈谴责。",
+        "source_name": "韩联社",
+        "published_at": "2026-04-08T11:00:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "韩国国防部", "entity_type": "Organization" },
+          { "mention": "朝鲜人民军总参谋部", "entity_type": "Organization" }
+        ],
+        "forbidden_entities": ["先发制人", "军事打击", "军事演习", "军事行动"],
+        "relations": [
+          { "subject_mention": "朝鲜人民军总参谋部", "relation_type": "威胁", "object_mention": "韩国国防部" }
+        ]
+      }
+    },
+    {
+      "test_id": "eval_ent_030",
+      "category": "relation_positive",
+      "description": "袭击关系：应提取A袭击B的关系",
+      "document": {
+        "doc_id": "test_030",
+        "title": "胡塞武装袭击红海商船 多家航运公司绕行",
+        "content": "胡塞武装今日宣布对红海海域的一艘商船发动了无人机袭击。该商船隶属于丹麦马士基集团。袭击发生后，马士基集团和地中海航运均宣布将暂停红海航线，绕行好望角。全球航运运费应声上涨15%。",
+        "source_name": "路透社",
+        "published_at": "2026-04-07T16:00:00+08:00"
+      },
+      "expected": {
+        "entities": [
+          { "mention": "马士基集团", "entity_type": "Company" },
+          { "mention": "地中海航运", "entity_type": "Company" }
+        ],
+        "forbidden_entities": ["15%", "无人机袭击", "航运运费", "红海航线"],
+        "relations": [
+          { "subject_mention": "胡塞武装", "relation_type": "袭击", "object_mention": "马士基集团" }
+        ]
+      }
+    }
+  ]
+}

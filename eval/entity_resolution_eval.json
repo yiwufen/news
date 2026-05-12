@@ -1,0 +1,12 @@
+{
+  "precision": 1.0,
+  "recall": 1.0,
+  "f1": 1.0,
+  "true_positives": 7,
+  "false_negatives": 0,
+  "true_negatives": 246,
+  "false_positives": 0,
+  "total_pairs": 253,
+  "errors": [],
+  "timestamp": "2026-05-10T13:46:01.005706+00:00"
+}

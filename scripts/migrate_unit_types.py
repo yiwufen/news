@@ -1,5 +1,7 @@
 """One-time migration: normalize unit_type values in existing knowledge_units.
 
+Also rebuilds the FTS5 index so that normalized unit_type values are searchable.
+
 Usage:
     uv run python scripts/migrate_unit_types.py [--db data/news.db]
 """
@@ -27,6 +29,8 @@ def migrate(db_path: str = "data/news.db") -> int:
 
     updates: list[tuple[str, str, str]] = []
     type_counts: dict[str, int] = {}
+    mappings: list[tuple[str, str, int]] = []  # (old, new, count)
+    change_counts: dict[str, dict[str, int]] = {}  # old -> {new -> count}
 
     for row in rows:
         old_type = row["unit_type"]
@@ -36,6 +40,8 @@ def migrate(db_path: str = "data/news.db") -> int:
         type_counts[new_type] = type_counts.get(new_type, 0) + 1
 
         if old_type != new_type:
+            change_counts.setdefault(old_type, {})
+            change_counts[old_type][new_type] = change_counts[old_type].get(new_type, 0) + 1
             payload = json.loads(row["payload"])
             payload["unit_type"] = new_type
             updates.append(
@@ -54,7 +60,14 @@ def migrate(db_path: str = "data/news.db") -> int:
     print(f"Total KUs: {len(rows)}")
     print(f"Updated: {len(updates)}")
     print(f"Unique types after migration: {len(type_counts)}")
-    print("\nDistribution:")
+
+    if change_counts:
+        print(f"\n=== {len(change_counts)} values remapped ===")
+        for old, targets in sorted(change_counts.items(), key=lambda x: -sum(x[1].values())):
+            for new, cnt in targets.items():
+                print(f"  {old} -> {new} ({cnt} rows)")
+
+    print("\nDistribution after migration:")
     for ut, count in sorted(type_counts.items(), key=lambda x: -x[1]):
         pct = count / len(rows) * 100
         print(f"  {ut}: {count} ({pct:.1f}%)")
@@ -62,12 +75,26 @@ def migrate(db_path: str = "data/news.db") -> int:
     return len(updates)
 
 
+def rebuild_fts(db_path: str = "data/news.db") -> int:
+    """Rebuild the FTS5 index from all persisted KnowledgeUnit rows."""
+    from src.retrieval.indexing import rebuild_knowledge_indexes
+
+    count = rebuild_knowledge_indexes(db_path)
+    print(f"FTS5 index rebuilt: {count} rows")
+    return count
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Migrate unit_type to canonical values")
     parser.add_argument("--db", default="data/news.db", help="SQLite database path")
+    parser.add_argument("--skip-fts", action="store_true", help="Skip FTS5 rebuild")
     args = parser.parse_args()
+
     updated = migrate(args.db)
     print(f"\nMigration complete: {updated} rows updated")
+
+    if not args.skip_fts:
+        rebuild_fts(args.db)
 
 
 if __name__ == "__main__":

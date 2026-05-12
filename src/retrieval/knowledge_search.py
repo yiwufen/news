@@ -153,7 +153,8 @@ class KnowledgeSearcher:
         if not bm25_hits:
             bm25_hits = self._bm25_search(query, matched_entities)
 
-        # Path B: Dense retrieval (always attempt when available)
+        # Path B: Dense retrieval — runs as fallback when BM25 is empty,
+        # and as supplement when BM25 has results.
         dense_scores: dict[str, float] = self._dense_search(query)
 
         # Merge: add dense-only candidates to the pool
@@ -162,9 +163,19 @@ class KnowledgeSearcher:
             if kid not in existing_ids:
                 bm25_hits.append((kid, 0.0))
 
-        if not bm25_hits:
+        if not bm25_hits and not dense_scores:
+            # Pure time-range fallback: no entities, no search terms,
+            # but user specified a time range — return recent KUs.
+            if time_range:
+                time_ku_ids = self.units.find_by_time_range(
+                    time_range, limit=candidate_limit
+                )
+                if time_ku_ids:
+                    bm25_hits = [(kid, 0.0) for kid in time_ku_ids]
+
+        if not bm25_hits and not dense_scores:
             result = self._empty_result(request, matched_entities)
-            result.retrieval_path = "bm25_fallback"
+            result.retrieval_path = "no_results"
             return result
 
         result = self._build_ranked_result(
@@ -182,6 +193,8 @@ class KnowledgeSearcher:
             result.retrieval_path = "entity_id_lookup"
         elif dense_scores:
             result.retrieval_path = "dense"
+        elif time_range and not query.original_query.strip() and not query.entities:
+            result.retrieval_path = "time_range"
         else:
             result.retrieval_path = "bm25_fallback"
         return result
@@ -315,13 +328,21 @@ class KnowledgeSearcher:
                     event_types=event_types,
                 )
 
+        # Dense fallback when BM25 finds nothing
+        dense_scores: dict[str, float] = {}
+        if not bm25_hits:
+            dense_scores = self._dense_search(query)
+            for kid in dense_scores:
+                bm25_hits.append((kid, 0.0))
+
         result = self._build_ranked_result(
             request=request,
             bm25_hits=bm25_hits,
             matched_entities=matched_entities,
+            dense_scores=dense_scores,
             profile=profile,
         )
-        result.retrieval_path = "bm25_fallback"
+        result.retrieval_path = "dense_fallback" if dense_scores and not entity_id_filter else "bm25_fallback"
         return result
 
     # ------------------------------------------------------------------

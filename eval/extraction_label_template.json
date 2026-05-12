@@ -1,0 +1,1105 @@
+{
+  "version": "1.0",
+  "created_at": "2026-05-10T15:25:25.149020+00:00",
+  "description": "Pre-filled extraction labeling template — annotator marks label fields",
+  "instructions": {
+    "entity_label": "Set to \"correct\" (entity is right), \"wrong_type\" (entity exists but type wrong), or \"should_remove\" (not an entity)",
+    "relation_label": "Set to \"correct\" or \"should_remove\"",
+    "missing_entities": "Add entities the LLM missed: [{\"mention\": \"X\", \"entity_type\": \"Company\"}]",
+    "missing_relations": "Add relations the LLM missed: [{\"subject_mention\": \"A\", \"relation_type\": \"投资\", \"object_mention\": \"B\"}]",
+    "status": "Set to \"labeled\" when done, \"skipped\" to skip"
+  },
+  "templates": [
+    {
+      "test_id": "label_em_202604103",
+      "status": "unlabeled",
+      "document": {
+        "doc_id": "em_202604103701049483",
+        "title": "以军总参谋长：将继续在黎巴嫩境内作战",
+        "content": "【以军总参谋长：将继续在黎巴嫩境内作战】当地时间4月9日，以色列国防军总参谋长扎米尔表示，以色列国防军正处于战争状态，并未停火。以军将继续在黎巴嫩境内作战，这是以军的主要作战区域。他同时表示，以色列与伊朗处于停火状态，但以军可以随时以强有力的方式重启那里的战斗。",
+        "source_name": "东方财富快讯",
+        "published_at": "2026-04-10 15:06:44"
+      },
+      "pre_extracted": [
+        {
+          "summary": "以色列国防军总参谋长扎米尔表示以军将继续在黎巴嫩境内作战",
+          "unit_type": "military_action",
+          "entities": [
+            {
+              "mention": "扎米尔",
+              "entity_type": "Person",
+              "label": ""
+            },
+            {
+              "mention": "以色列国防军",
+              "entity_type": "Organization",
+              "label": ""
+            },
+            {
+              "mention": "黎巴嫩",
+              "entity_type": "Organization",
+              "label": ""
+            }
+          ],
+          "relation_hints": [
+            {
+              "subject_mention": "以色列国防军",
+              "relation_type": "military_action",
+              "object_mention": "黎巴嫩",
+              "label": ""
+            }
+          ]
+        },
+        {
+          "summary": "以色列与伊朗处于停火状态，但以军可以随时以强有力的方式重启那里的战斗",
+          "unit_type": "political_statement",
+          "entities": [
+            {
+              "mention": "以色列",
+              "entity_type": "Organization",
+              "label": ""
+            },
+            {
+              "mention": "伊朗",
+              "entity_type": "Organization",
+              "label": ""
+            }
+          ],
+          "relation_hints": []
+        }
+      ],
+      "error": null,
+      "annotations": {
+        "missing_entities": [],
+        "missing_relations": [],
+        "notes": ""
+      }
+    },
+    {
+      "test_id": "label_em_202604163",
+      "status": "unlabeled",
+      "document": {
+        "doc_id": "em_202604163707362153",
+        "title": "人民同泰：一季度归母净利润4846.4万元 同比增加5.72%",
+        "content": "【人民同泰：一季度归母净利润4846.4万元 同比增加5.72%】人民同泰4月16日公告，2026年第一季度实现营业收入28.24亿元，同比增长5.89%；归属于上市公司股东的净利润4846.4万元，同比增长5.72%；基本每股收益0.0836元。",
+        "source_name": "东方财富快讯",
+        "published_at": "2026-04-16 15:54:35"
+      },
+      "pre_extracted": [
+        {
+          "summary": "人民同泰2026年第一季度实现营业收入28.24亿元，同比增长5.89%，归属于上市公司股东的净利润4846.4万元，同比增长5.72%，基本每股收益0.0836元",
+          "unit_type": "financial_performance",
+          "entities": [
+            {
+              "mention": "人民同泰",
+              "entity_type": "Company",
+              "label": ""
+            }
+          ],
+          "relation_hints": []
+        }
+      ],
+      "error": null,
+      "annotations": {
+        "missing_entities": [],
+        "missing_relations": [],
+        "notes": ""
+      }
+    },
+    {
+      "test_id": "label_em_202605103",
+      "status": "unlabeled",
+      "document": {
+        "doc_id": "em_202605103732450895",
+        "title": "2026中国品牌价值评价信息在浙江发布",
+        "content": "【2026中国品牌价值评价信息在浙江发布】5月10日，由中国品牌建设促进会、新华社品牌工作办公室主办，《中国品牌》杂志社承办的“2026中国品牌价值评价信息发布”活动在浙江德清举行。来自国家有关部委、地方政府、中央企业和知名品牌以及新闻媒体等各界代表逾600人参加活动。",
+        "source_name": "东方财富快讯",
+        "published_at": "2026-05-10 22:41:02"
+      },
+      "pre_extracted": [
+        {
+          "summary": "2026中国品牌价值评价信息发布活动在浙江德清举行",
+          "unit_type": "announcement",
+          "entities": [
+            {
+              "mention": "中国品牌建设促进会",
+              "entity_type": "Organization",
+              "label": ""
+            },
+            {
+              "mention": "新华社品牌工作办公室",
+              "entity_type": "Organization",
+              "label": ""
+            },
+            {
+              "mention": "《中国品牌》杂志社",
+              "entity_type": "Organization",
+              "label": ""
+            },
+            {
+              "mention": "浙江德清",
+              "entity_type": "Organization",
+              "label": ""
+            }
+          ],
+          "relation_hints": []
+        }
+      ],
+      "error": null,
+      "annotations": {
+        "missing_entities": [],
+        "missing_relations": [],
+        "notes": ""
+      }
+    },
+    {
+      "test_id": "label_em_202604153",
+      "status": "unlabeled",
+      "document": {
+        "doc_id": "em_202604153706205810",
+        "title": "量化交易巨头简街与CoreWeave签署60亿美元AI云计算协议",
+        "content": "【量化交易巨头简街与CoreWeave签署60亿美元AI云计算协议】量化交易巨头简街（Jane Street）与CoreWeave签署60亿美元AI云计算协议。CoreWeave表示，将向Jane Street提供包括英伟达VERA RUBIN在内的下一代计算资源访问权限。",
+        "source_name": "东方财富快讯",
+        "published_at": "2026-04-15 20:25:00"
+      },
+      "pre_extracted": [
+        {
+          "summary": "量化交易巨头简街与CoreWeave签署60亿美元AI云计算协议",
+          "unit_type": "investment",
+          "entities": [
+            {
+              "mention": "简街",
+              "entity_type": "Company",
+              "label": ""
+            },
+            {
+              "mention": "Jane Street",
+              "entity_type": "Company",
+              "label": ""
+            },
+            {
+              "mention": "CoreWeave",
+              "entity_type": "Company",
+              "label": ""
+            }
+          ],
+          "relation_hints": []
+        },
+        {
+          "summary": "CoreWeave将向Jane Street提供包括英伟达VERA RUBIN在内的下一代计算资源访问权限",
+          "unit_type": "investment",
+          "entities": [
+            {
+              "mention": "CoreWeave",
+              "entity_type": "Company",
+              "label": ""
+            },
+            {
+              "mention": "Jane Street",
+              "entity_type": "Company",
+              "label": ""
+            },
+            {
+              "mention": "英伟达",
+              "entity_type": "Company",
+              "label": ""
+            },
+            {
+              "mention": "VERA RUBIN",
+              "entity_type": "Product",
+              "label": ""
+            }
+          ],
+          "relation_hints": []
+        }
+      ],
+      "error": null,
+      "annotations": {
+        "missing_entities": [],
+        "missing_relations": [],
+        "notes": ""
+      }
+    },
+    {
+      "test_id": "label_em_202604083",
+      "status": "unlabeled",
+      "document": {
+        "doc_id": "em_202604083697926193",
+        "title": "工业有色ETF鹏华涨超5%，海外铝供给缺口持续扩大",
+        "content": "【工业有色ETF鹏华涨超5%，海外铝供给缺口持续扩大】工业金属持续拉升，消息面上，摩根士丹利分析师表示，中东冲突造成的铝供应损失可能会持续到2026年。该行称，重启受影响的业务（约占全球供应量的4%）可能需要长达12个月。因此，摩根士丹利分析师认为“2026年铝价面临上行风险”。该行指出，随着实物金属市场收紧，日本、欧洲和美国的地区溢价相对于伦敦基准价格正在上升。",
+        "source_name": "东方财富快讯",
+        "published_at": "2026-04-08 14:12:38"
+      },
+      "pre_extracted": [
+        {
+          "summary": "工业有色ETF鹏华涨超5%，海外铝供给缺口持续扩大",
+          "unit_type": "price_change",
+          "entities": [
+            {
+              "mention": "工业有色ETF鹏华",
+              "entity_type": "Product",
+              "label": ""
+            },
+            {
+              "mention": "摩根士丹利",
+              "entity_type": "Company",
+              "label": ""
+            }
+          ],
+          "relation_hints": []
+        },
+        {
+          "summary": "摩根士丹利分析师表示中东冲突造成的铝供应损失可能持续到2026年，重启受影响业务可能需要长达12个月",
+          "unit_type": "market_analysis",
+          "entities": [
+            {
+              "mention": "摩根士丹利",
+              "entity_type": "Company",
+              "label": ""
+            },
+            {
+              "mention": "中东",
+              "entity_type": "Organization",
+              "label": ""
+            }
+          ],
+          "relation_hints": []
+        },
+        {
+          "summary": "摩根士丹利认为2026年铝价面临上行风险",
+          "unit_type": "market_analysis",
+          "entities": [
+            {
+              "mention": "摩根士丹利",
+              "entity_type": "Company",
+              "label": ""
+            },
+            {
+              "mention": "铝价",
+              "entity_type": "Product",
+              "label": ""
+            }
+          ],
+          "relation_hints": []
+        },
+        {
+          "summary": "随着实物金属市场收紧，日本、欧洲和美国的地区溢价相对于伦敦基准价格正在上升",
+          "unit_type": "market_analysis",
+          "entities": [
+            {
+              "mention": "日本",
+              "entity_type": "Organization",
+              "label": ""
+            },
+            {
+              "mention": "欧洲",
+              "entity_type": "Organization",
+              "label": ""
+            },
+            {
+              "mention": "美国",
+              "entity_type": "Organization",
+              "label": ""
+            },
+            {
+              "mention": "伦敦",
+              "entity_type": "Organization",
+              "label": ""
+            }
+          ],
+          "relation_hints": []
+        }
+      ],
+      "error": null,
+      "annotations": {
+        "missing_entities": [],
+        "missing_relations": [],
+        "notes": ""
+      }
+    },
+    {
+      "test_id": "label_em_202604083",
+      "status": "unlabeled",
+      "document": {
+        "doc_id": "em_202604083696918437",
+        "title": "经济日报：探索证券行业数字人民币应用",
+        "content": "【经济日报：探索证券行业数字人民币应用】不久前，全国首单数字人民币智能合约农民工工资发放业务在四川成都落地。数字人民币作为国家重要的数字金融基础设施，正加快从试点探索迈向规模化应用、生态化建设的新阶段。对于证券行业而言，应以全局视野、系统思维主动融入数字人民币推广应用大局，在科技金融、绿色金融、普惠金融、养老金融、数字金融“五篇大文章”实践中找准定位、彰显作为。",
+        "source_name": "东方财富快讯",
+        "published_at": "2026-04-08 07:56:08"
+      },
+      "pre_extracted": [
+        {
+          "summary": "全国首单数字人民币智能合约农民工工资发放业务在四川成都落地",
+          "unit_type": "announcement",
+          "entities": [
+            {
+              "mention": "数字人民币",
+              "entity_type": "Product",
+              "label": ""
+            },
+            {
+              "mention": "农民工工资发放业务",
+              "entity_type": "Product",
+              "label": ""
+            },
+            {
+              "mention": "四川成都",
+              "entity_type": "Organization",
+              "label": ""
+            }
+          ],
+          "relation_hints": []
+        },
+        {
+          "summary": "数字人民币正加快从试点探索迈向规模化应用、生态化建设的新阶段",
+          "unit_type": "industry_analysis",
+          "entities": [
+            {
+              "mention": "数字人民币",
+              "entity_type": "Product",
+              "label": ""
+            },
+            {
+              "mention": "试点探索",
+              "entity_type": "Product",
+              "label": ""
+            },
+            {
+              "mention": "规模化应用",
+              "entity_type": "Product",
+              "label": ""
+            },
+            {
+              "mention": "生态化建设",
+              "entity_type": "Product",
+              "label": ""
+            }
+          ],
+          "relation_hints": []
+        },
+        {
+          "summary": "证券行业应融入数字人民币推广应用大局，在科技金融、绿色金融、普惠金融、养老金融、数字金融'五篇大文章'实践中找准定位",
+          "unit_type": "business_strategy",
+          "entities": [
+            {
+              "mention": "证券行业",
+              "entity_type": "Organization",
+              "label": ""
+            },
+            {
+              "mention": "数字人民币",
+              "entity_type": "Product",
+              "label": ""
+            },
+            {
+              "mention": "科技金融",
+              "entity_type": "Product",
+              "label": ""
+            },
+            {
+              "mention": "绿色金融",
+              "entity_type": "Product",
+              "label": ""
+            },
+            {
+              "mention": "普惠金融",
+              "entity_type": "Product",
+              "label": ""
+            },
+            {
+              "mention": "养老金融",
+              "entity_type": "Product",
+              "label": ""
+            },
+            {
+              "mention": "数字金融",
+              "entity_type": "Product",
+              "label": ""
+            }
+          ],
+          "relation_hints": []
+        }
+      ],
+      "error": null,
+      "annotations": {
+        "missing_entities": [],
+        "missing_relations": [],
+        "notes": ""
+      }
+    },
+    {
+      "test_id": "label_em_202604153",
+      "status": "unlabeled",
+      "document": {
+        "doc_id": "em_202604153705904377",
+        "title": "伊朗称逮捕5名美以雇佣人员 另查封13人资产",
+        "content": "【伊朗称逮捕5名美以雇佣人员 另查封13人资产】当地时间15日，伊朗南部霍尔木兹甘省警方表示，已于近期逮捕5名被指受雇于美国和以色列的人员。据称，这些人员通过网络与境外敌对媒体及其上级联络人保持联系。同一天，伊朗西部哈马丹省检方宣布，已下令查封另外13名美以雇佣人员相关资产。截至目前，该省已查封36名相关人员资产。",
+        "source_name": "东方财富快讯",
+        "published_at": "2026-04-15 16:10:37"
+      },
+      "pre_extracted": [
+        {
+          "summary": "伊朗警方逮捕5名被指受雇于美国和以色列的人员",
+          "unit_type": "regulatory_action",
+          "entities": [
+            {
+              "mention": "伊朗",
+              "entity_type": "Organization",
+              "label": ""
+            },
+            {
+              "mention": "美国",
+              "entity_type": "Organization",
+              "label": ""
+            },
+            {
+              "mention": "以色列",
+              "entity_type": "Organization",
+              "label": ""
+            }
+          ],
+          "relation_hints": []
+        },
+        {
+          "summary": "伊朗检方下令查封13名美以雇佣人员相关资产",
+          "unit_type": "regulatory_action",
+          "entities": [
+            {
+              "mention": "伊朗",
+              "entity_type": "Organization",
+              "label": ""
+            },
+            {
+              "mention": "美国",
+              "entity_type": "Organization",
+              "label": ""
+            },
+            {
+              "mention": "以色列",
+              "entity_type": "Organization",
+              "label": ""
+            }
+          ],
+          "relation_hints": []
+        },
+        {
+          "summary": "伊朗哈马丹省已查封36名相关人员资产",
+          "unit_type": "regulatory_action",
+          "entities": [
+            {
+              "mention": "伊朗",
+              "entity_type": "Organization",
+              "label": ""
+            }
+          ],
+          "relation_hints": []
+        }
+      ],
+      "error": null,
+      "annotations": {
+        "missing_entities": [],
+        "missing_relations": [],
+        "notes": ""
+      }
+    },
+    {
+      "test_id": "label_em_202604163",
+      "status": "unlabeled",
+      "document": {
+        "doc_id": "em_202604163707126685",
+        "title": "预告：广东省人工智能应用对接大会将于4月27日召开",
+        "content": "【预告：广东省人工智能应用对接大会将于4月27日召开】4月27日，广东省人工智能应用对接大会即将召开。据悉，广东省人工智能应用对接大会会期一天，按照“1+5”形式分为上午大会及下午5个专题对接会，主会场设在深圳，各市设视频分会场，网络线上全程直播。",
+        "source_name": "东方财富快讯",
+        "published_at": "2026-04-16 10:38:30"
+      },
+      "pre_extracted": [
+        {
+          "summary": "广东省人工智能应用对接大会将于4月27日召开",
+          "unit_type": "meeting",
+          "entities": [
+            {
+              "mention": "广东省人工智能应用对接大会",
+              "entity_type": "Organization",
+              "label": ""
+            }
+          ],
+          "relation_hints": []
+        }
+      ],
+      "error": null,
+      "annotations": {
+        "missing_entities": [],
+        "missing_relations": [],
+        "notes": ""
+      }
+    },
+    {
+      "test_id": "label_em_202604113",
+      "status": "unlabeled",
+      "document": {
+        "doc_id": "em_202604113701966276",
+        "title": "地平线余凯：“小龙虾”将上车",
+        "content": "【地平线余凯：“小龙虾”将上车】地平线创始人、CEO余凯今日在智能电动汽车发展高层论坛（2026）上表示，地平线将推出舱驾融合一体的芯片方案以及软件解决方案，其首款参与融合的智能体芯片“星空”将在两个域的两个芯片合二为一，把两套的内存简化成一套，成本减少1500-4000元，同时“星空”将非常适合运行类似于“小龙虾”这样的智能体OS。",
+        "source_name": "东方财富快讯",
+        "published_at": "2026-04-11 13:31:45"
+      },
+      "pre_extracted": [
+        {
+          "summary": "地平线创始人、CEO余凯表示将推出舱驾融合一体的芯片方案及软件解决方案，首款参与融合的智能体芯片'星空'将在两个域的两个芯片合二为一，成本减少1500-4000元",
+          "unit_type": "product_launch",
+          "entities": [
+            {
+              "mention": "地平线",
+              "entity_type": "Company",
+              "label": ""
+            },
+            {
+              "mention": "余凯",
+              "entity_type": "Person",
+              "label": ""
+            },
+            {
+              "mention": "星空",
+              "entity_type": "Product",
+              "label": ""
+            }
+          ],
+          "relation_hints": [
+            {
+              "subject_mention": "余凯",
+              "relation_type": "高管任职",
+              "object_mention": "地平线",
+              "label": ""
+            }
+          ]
+        }
+      ],
+      "error": null,
+      "annotations": {
+        "missing_entities": [],
+        "missing_relations": [],
+        "notes": ""
+      }
+    },
+    {
+      "test_id": "label_em_202604083",
+      "status": "unlabeled",
+      "document": {
+        "doc_id": "em_202604083698000073",
+        "title": "韩国政府着手确认滞留霍尔木兹海峡油轮通航条件",
+        "content": "【韩国政府着手确认滞留霍尔木兹海峡油轮通航条件】在美国和伊朗实际上已就为期两周的停火及开放霍尔木兹海峡达成一致的背景下，韩国政府正着手确认目前滞留在该海峡的7艘油轮能否通行。韩国产业通商部一名负责人8日表示，目前正通过外交渠道核实霍尔木兹海峡通航的具体情况。",
+        "source_name": "东方财富快讯",
+        "published_at": "2026-04-08 15:25:41"
+      },
+      "pre_extracted": [
+        {
+          "summary": "韩国政府确认滞留霍尔木兹海峡油轮通航条件",
+          "unit_type": "diplomatic_event",
+          "entities": [
+            {
+              "mention": "韩国政府",
+              "entity_type": "Organization",
+              "label": ""
+            },
+            {
+              "mention": "韩国产业通商部",
+              "entity_type": "Organization",
+              "label": ""
+            },
+            {
+              "mention": "霍尔木兹海峡",
+              "entity_type": "Place",
+              "label": ""
+            }
+          ],
+          "relation_hints": [
+            {
+              "subject_mention": "韩国政府",
+              "relation_type": "监管",
+              "object_mention": "霍尔木兹海峡",
+              "label": ""
+            },
+            {
+              "subject_mention": "韩国产业通商部",
+              "relation_type": "监管",
+              "object_mention": "霍尔木兹海峡",
+              "label": ""
+            }
+          ]
+        }
+      ],
+      "error": null,
+      "annotations": {
+        "missing_entities": [],
+        "missing_relations": [],
+        "notes": ""
+      }
+    },
+    {
+      "test_id": "label_em_202604113",
+      "status": "unlabeled",
+      "document": {
+        "doc_id": "em_202604113701965121",
+        "title": "地平线余凯：舱驾融合智能体SoC芯片最高可节省4000元单车成本",
+        "content": "【地平线余凯：舱驾融合智能体SoC芯片最高可节省4000元单车成本】“舱驾融合智能体SoC芯片（系统级芯片）通过控制器融合，可以节省50%的（芯片）空间，共用零件和算力能节省30%的（芯片）器件，并能节省1500~4000元的单车成本。”4月11日，地平线创始人兼CEO余凯在智能电动汽车发展高层论坛（2026）上表示，舱驾融合智能体soC芯片及其软件解决方案，或是未来自动驾驶芯片行业发展的方向。",
+        "source_name": "东方财富快讯",
+        "published_at": "2026-04-11 13:24:01"
+      },
+      "pre_extracted": [
+        {
+          "summary": "舱驾融合智能体SoC芯片可通过控制器融合节省50%空间，共用零件和算力节省30%器件，并节省1500~4000元单车成本",
+          "unit_type": "product_launch",
+          "entities": [
+            {
+              "mention": "地平线",
+              "entity_type": "Company",
+              "label": ""
+            },
+            {
+              "mention": "余凯",
+              "entity_type": "Person",
+              "label": ""
+            },
+            {
+              "mention": "舱驾融合智能体SoC芯片",
+              "entity_type": "Product",
+              "label": ""
+            }
+          ],
+          "relation_hints": []
+        }
+      ],
+      "error": null,
+      "annotations": {
+        "missing_entities": [],
+        "missing_relations": [],
+        "notes": ""
+      }
+    },
+    {
+      "test_id": "label_em_202604203",
+      "status": "unlabeled",
+      "document": {
+        "doc_id": "em_202604203710642947",
+        "title": "创维数字：第一季度净利润同比增长1455.79%",
+        "content": "【创维数字：第一季度净利润同比增长1455.79%】4月20日，创维数字(000810.SZ)公告称，2026年第一季度实现营业收入24.94亿元，同比增长38.67%；归属于上市公司股东的净利润为8288.34万元，同比增长1455.79%。业绩变动主要系智能终端及专业显示业务收入增加所致。",
+        "source_name": "东方财富快讯",
+        "published_at": "2026-04-20 16:37:33"
+      },
+      "pre_extracted": [
+        {
+          "summary": "创维数字2026年第一季度净利润同比增长1455.79%，营业收入为24.94亿元，同比增长38.67%",
+          "unit_type": "financial_performance",
+          "entities": [
+            {
+              "mention": "创维数字",
+              "entity_type": "Company",
+              "label": ""
+            },
+            {
+              "mention": "智能终端",
+              "entity_type": "Product",
+              "label": ""
+            },
+            {
+              "mention": "专业显示业务",
+              "entity_type": "Product",
+              "label": ""
+            }
+          ],
+          "relation_hints": []
+        }
+      ],
+      "error": null,
+      "annotations": {
+        "missing_entities": [],
+        "missing_relations": [],
+        "notes": ""
+      }
+    },
+    {
+      "test_id": "label_em_202604153",
+      "status": "unlabeled",
+      "document": {
+        "doc_id": "em_202604153705650230",
+        "title": "国家医保局：积极支持创新药全球化发展、建设中国-东盟区域医药交易（集采）平台",
+        "content": "【国家医保局：积极支持创新药全球化发展、建设中国-东盟区域医药交易（集采）平台】国家医保局医药价格和招标采购司司长王小宁15日在国务院政策例行吹风会上表示，我们积极支持创新药全球化发展，上线运行中国药品价格登记系统，支持医药企业构建全球化多元化的价格体系。",
+        "source_name": "东方财富快讯",
+        "published_at": "2026-04-15 10:49:22"
+      },
+      "pre_extracted": [
+        {
+          "summary": "国家医保局医药价格和招标采购司司长王小宁表示积极支持创新药全球化发展，上线运行中国药品价格登记系统，支持医药企业构建全球化多元化的价格体系",
+          "unit_type": "policy_announcement",
+          "entities": [
+            {
+              "mention": "国家医保局",
+              "entity_type": "Organization",
+              "label": ""
+            },
+            {
+              "mention": "王小宁",
+              "entity_type": "Person",
+              "label": ""
+            },
+            {
+              "mention": "中国药品价格登记系统",
+              "entity_type": "Product",
+              "label": ""
+            }
+          ],
+          "relation_hints": []
+        }
+      ],
+      "error": null,
+      "annotations": {
+        "missing_entities": [],
+        "missing_relations": [],
+        "notes": ""
+      }
+    },
+    {
+      "test_id": "label_em_202604123",
+      "status": "unlabeled",
+      "document": {
+        "doc_id": "em_202604123702114927",
+        "title": "伊朗外交部：伊朗和巴基斯坦等的联系和磋商将继续进行",
+        "content": "【伊朗外交部：伊朗和巴基斯坦等的联系和磋商将继续进行】据伊朗媒体4月12日报道，伊朗外交部发言人说，伊美谈判是“在经历了40天的强加战争之后举行的，而且是在充满不信任和猜疑的气氛中进行的”。本次谈判是近年来耗时最长的一次，总共持续了24到25个小时。伊朗、巴基斯坦和地区其他伙伴之间的联系和磋商将继续进行。",
+        "source_name": "东方财富快讯",
+        "published_at": "2026-04-12 11:40:46"
+      },
+      "pre_extracted": [
+        {
+          "summary": "伊朗外交部表示伊朗和巴基斯坦等将继续进行联系和磋商",
+          "unit_type": "diplomatic_event",
+          "entities": [
+            {
+              "mention": "伊朗外交部",
+              "entity_type": "Organization",
+              "label": ""
+            },
+            {
+              "mention": "伊朗",
+              "entity_type": "Country",
+              "label": ""
+            },
+            {
+              "mention": "巴基斯坦",
+              "entity_type": "Country",
+              "label": ""
+            }
+          ],
+          "relation_hints": [
+            {
+              "subject_mention": "伊朗",
+              "relation_type": "合作",
+              "object_mention": "巴基斯坦",
+              "label": ""
+            }
+          ]
+        },
+        {
+          "summary": "伊美谈判在经历了40天的强加战争后举行，耗时24到25小时",
+          "unit_type": "diplomatic_event",
+          "entities": [
+            {
+              "mention": "伊朗",
+              "entity_type": "Country",
+              "label": ""
+            },
+            {
+              "mention": "美国",
+              "entity_type": "Country",
+              "label": ""
+            }
+          ],
+          "relation_hints": [
+            {
+              "subject_mention": "伊朗",
+              "relation_type": "竞争",
+              "object_mention": "美国",
+              "label": ""
+            }
+          ]
+        }
+      ],
+      "error": null,
+      "annotations": {
+        "missing_entities": [],
+        "missing_relations": [],
+        "notes": ""
+      }
+    },
+    {
+      "test_id": "label_em_202604143",
+      "status": "unlabeled",
+      "document": {
+        "doc_id": "em_202604143704269272",
+        "title": "科普一下丨为何要将算力机房“搬”入太空？",
+        "content": "【科普一下丨为何要将算力机房“搬”入太空？】AI算力需求爆发式增长，产业界开始将目光从地面机房投向太空轨道，推动“太空算力”概念持续火爆。太空算力具备哪些核心优势？顺利将机房搬入太空需攻克哪些技术痛点？请专家科普一下。",
+        "source_name": "东方财富快讯",
+        "published_at": "2026-04-14 14:20:03"
+      },
+      "pre_extracted": [
+        {
+          "summary": "产业界开始将目光从地面机房投向太空轨道，推动太空算力概念火爆",
+          "unit_type": "industry_analysis",
+          "entities": [
+            {
+              "mention": "太空算力",
+              "entity_type": "Product",
+              "label": ""
+            }
+          ],
+          "relation_hints": []
+        }
+      ],
+      "error": null,
+      "annotations": {
+        "missing_entities": [],
+        "missing_relations": [],
+        "notes": ""
+      }
+    },
+    {
+      "test_id": "label_em_202604133",
+      "status": "unlabeled",
+      "document": {
+        "doc_id": "em_202604133702396985",
+        "title": "美伊对峙再升级！特朗普罕见承认：11月中期选举前油价或维持高位",
+        "content": "【美伊对峙再升级！特朗普罕见承认：11月中期选举前油价或维持高位】美国总统特朗普周日表示，石油和汽油价格可能会在11月中期选举前一直维持高位——罕见地承认自己六周前作出的对伊朗发动袭击这一决定可能带来的政治代价。当在一次采访中被问及到秋季油价是否会走低时，特朗普表示，“可能会（降低），也可能一样，或许再高一点，但应该会跟当前水平差不多。”",
+        "source_name": "东方财富快讯",
+        "published_at": "2026-04-13 08:31:21"
+      },
+      "pre_extracted": [
+        {
+          "summary": "特朗普表示石油和汽油价格可能在11月中期选举前维持高位",
+          "unit_type": "political_statement",
+          "entities": [
+            {
+              "mention": "特朗普",
+              "entity_type": "Person",
+              "label": ""
+            },
+            {
+              "mention": "伊朗",
+              "entity_type": "Country",
+              "label": ""
+            }
+          ],
+          "relation_hints": [
+            {
+              "subject_mention": "特朗普",
+              "relation_type": "军事行动",
+              "object_mention": "伊朗",
+              "label": ""
+            }
+          ]
+        },
+        {
+          "summary": "特朗普承认对伊朗发动袭击决定可能带来政治代价",
+          "unit_type": "announcement",
+          "entities": [
+            {
+              "mention": "特朗普",
+              "entity_type": "Person",
+              "label": ""
+            }
+          ],
+          "relation_hints": []
+        }
+      ],
+      "error": null,
+      "annotations": {
+        "missing_entities": [],
+        "missing_relations": [],
+        "notes": ""
+      }
+    },
+    {
+      "test_id": "label_em_202604163",
+      "status": "unlabeled",
+      "document": {
+        "doc_id": "em_202604163707495583",
+        "title": "宏和科技：一季度归母净利润同比增长354.22%",
+        "content": "【宏和科技：一季度归母净利润同比增长354.22%】宏和科技4月16日公告，2026年第一季度实现营业收入4.42亿元，同比增长79.72%；归属于上市公司股东的净利润1.4亿元，上年同期归属于上市公司股东的净利润3087.32万元，同比增长354.22%；基本每股收益0.16元。",
+        "source_name": "东方财富快讯",
+        "published_at": "2026-04-16 17:30:11"
+      },
+      "pre_extracted": [
+        {
+          "summary": "宏和科技2026年第一季度实现归母净利润1.4亿元，同比增长354.22%",
+          "unit_type": "financial_performance",
+          "entities": [
+            {
+              "mention": "宏和科技",
+              "entity_type": "Company",
+              "label": ""
+            }
+          ],
+          "relation_hints": []
+        },
+        {
+          "summary": "宏和科技2026年第一季度实现营业收入4.42亿元，同比增长79.72%",
+          "unit_type": "financial_performance",
+          "entities": [
+            {
+              "mention": "宏和科技",
+              "entity_type": "Company",
+              "label": ""
+            }
+          ],
+          "relation_hints": []
+        },
+        {
+          "summary": "宏和科技2026年第一季度基本每股收益0.16元",
+          "unit_type": "financial_performance",
+          "entities": [
+            {
+              "mention": "宏和科技",
+              "entity_type": "Company",
+              "label": ""
+            }
+          ],
+          "relation_hints": []
+        }
+      ],
+      "error": null,
+      "annotations": {
+        "missing_entities": [],
+        "missing_relations": [],
+        "notes": ""
+      }
+    },
+    {
+      "test_id": "label_em_202604113",
+      "status": "unlabeled",
+      "document": {
+        "doc_id": "em_202604113701963541",
+        "title": "上海航交所：运输市场供需格局宽松 沿海散货综合指数震荡整理",
+        "content": "【上海航交所：运输市场供需格局宽松 沿海散货综合指数震荡整理】4月11日，上海航运交易所发布的中国沿海(散货)运输市场周度报告显示，本周，近日南方多地出现降雨及强对流天气，火电淡季需求走弱，终端煤炭库存充足，采购意愿偏低，同时进江运力相对充裕，运输市场供需格局宽松，沿海散货综合指数震荡整理。4月10日，上海航运交易所发布的中国沿海（散货）综合运价指数报收1199.88点，较上期上涨0.4%。",
+        "source_name": "东方财富快讯",
+        "published_at": "2026-04-11 13:06:49"
+      },
+      "pre_extracted": [
+        {
+          "summary": "上海航运交易所发布沿海散货运输市场周度报告，指出市场供需格局宽松，沿海散货综合指数震荡整理",
+          "unit_type": "market_analysis",
+          "entities": [
+            {
+              "mention": "上海航运交易所",
+              "entity_type": "Organization",
+              "label": ""
+            },
+            {
+              "mention": "沿海散货综合指数",
+              "entity_type": "Product",
+              "label": ""
+            }
+          ],
+          "relation_hints": []
+        },
+        {
+          "summary": "4月10日中国沿海(散货)综合运价指数报收1199.88点，较上期上涨0.4%",
+          "unit_type": "price_change",
+          "entities": [
+            {
+              "mention": "沿海(散货)综合运价指数",
+              "entity_type": "Product",
+              "label": ""
+            }
+          ],
+          "relation_hints": []
+        }
+      ],
+      "error": null,
+      "annotations": {
+        "missing_entities": [],
+        "missing_relations": [],
+        "notes": ""
+      }
+    },
+    {
+      "test_id": "label_em_202604143",
+      "status": "unlabeled",
+      "document": {
+        "doc_id": "em_202604143704316397",
+        "title": "伊朗官员说美若明智就别再冒险",
+        "content": "【伊朗官员说美若明智就别再冒险】当地时间4月13日，伊朗议会国家安全和外交政策委员会主席阿齐兹接受总台记者专访。阿齐兹指出，长期以来，美国对伊朗始终存在战略误判，在40天的美以伊战争中，美国没有达成任何既定目标，其军事行动反而损害了地区乃至全球的利益。如今美国非但没有从战争中吸取教训，反而继续误判当前局势，美国对霍尔木兹海峡的所谓“封锁”行动，只会损害美国的自身利益。",
+        "source_name": "东方财富快讯",
+        "published_at": "2026-04-14 15:06:24"
+      },
+      "pre_extracted": [
+        {
+          "summary": "伊朗议会国家安全和外交政策委员会主席阿齐兹称美国对伊朗存在战略误判，警告美国不要再冒险",
+          "unit_type": "political_statement",
+          "entities": [
+            {
+              "mention": "伊朗议会国家安全和外交政策委员会主席阿齐兹",
+              "entity_type": "Person",
+              "label": ""
+            },
+            {
+              "mention": "美国",
+              "entity_type": "Organization",
+              "label": ""
+            }
+          ],
+          "relation_hints": []
+        }
+      ],
+      "error": null,
+      "annotations": {
+        "missing_entities": [],
+        "missing_relations": [],
+        "notes": ""
+      }
+    },
+    {
+      "test_id": "label_em_202604133",
+      "status": "unlabeled",
+      "document": {
+        "doc_id": "em_202604133702338846",
+        "title": "尼日利亚反恐空袭击中乡村集市 至少30人死亡",
+        "content": "【尼日利亚反恐空袭击中乡村集市 至少30人死亡】阿布贾消息：尼日利亚当地媒体报道，尼空军11日傍晚在对尼东北部疑似恐怖分子据点实施空袭时，击中位于博尔诺州与约贝州交界附近的一处乡村集市，造成至少30人死亡。",
+        "source_name": "东方财富快讯",
+        "published_at": "2026-04-13 01:15:18"
+      },
+      "pre_extracted": [
+        {
+          "summary": "尼日利亚空军空击疑似恐怖分子据点时误击乡村集市，造成至少30人死亡",
+          "unit_type": "military_action",
+          "entities": [
+            {
+              "mention": "尼日利亚空军",
+              "entity_type": "Organization",
+              "label": ""
+            },
+            {
+              "mention": "恐怖分子据点",
+              "entity_type": null,
+              "label": ""
+            },
+            {
+              "mention": "乡村集市",
+              "entity_type": null,
+              "label": ""
+            },
+            {
+              "mention": "尼日利亚",
+              "entity_type": "Organization",
+              "label": ""
+            }
+          ],
+          "relation_hints": []
+        }
+      ],
+      "error": null,
+      "annotations": {
+        "missing_entities": [],
+        "missing_relations": [],
+        "notes": ""
+      }
+    }
+  ]
+}

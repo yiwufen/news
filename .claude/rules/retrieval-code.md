@@ -38,3 +38,35 @@ uv run python scripts/eval_report.py --input eval/golden_dataset_v2.json
 - 改动后：重跑 report，报告指标变化
 - 如果 Recall@5 下降超过 2 个百分点，必须说明原因并确认是否可接受
 - 关注各 query_type 的指标变化，不只用全局指标判断
+
+## 实体解析评估（Entity Resolution Eval）
+
+修改 `src/entities.py` 中的合并逻辑（`_find_match`、`normalize_entity_name`、`resolve_units_with_cache`）后，**必须**运行实体解析评估：
+
+```bash
+uv run python scripts/eval_entity_resolution.py
+```
+
+### 当前基线（2026-05-10，253 pairs，规则标注）
+
+| 指标 | 基线值 |
+|------|--------|
+| Precision | 1.000 |
+| Recall | 1.000 |
+| F1 | 1.000 |
+| False Positives | 0 |
+| False Negatives | 0 |
+
+> 结果保存在 `eval/entity_resolution_eval.json`。
+
+### 评估维度
+
+- **Precision（精度）**：不同实体未被误合并。覆盖子公司/相似名称场景（美的集团≠美的置业、小米≠小米金融、恒大健康≠恒大地产）
+- **Recall（召回）**：同一实体的不同表述被正确合并。覆盖跨语言别名（BYD→比亚迪）、类型不一致（腾讯 Person→腾讯控股 Company）、后缀变体（宁德时代股份有限公司→宁德时代）
+
+### 要求
+
+- Precision 不允许下降（误合并不可接受，保守策略底线）
+- Recall 下降超过 0.1 必须说明原因
+- 新增的 ground truth 用例应同时包含 precision 和 recall case
+- 如果发现新的边界 case，补充到 `GROUND_TRUTH` 列表中

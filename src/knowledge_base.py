@@ -105,9 +105,14 @@ class TimeRef(BaseModel):
 
 
 class RelationHint(BaseModel):
-    """Potential relationship hint extracted from text."""
+    """Potential relationship hint extracted from text.
+
+    LLM fills subject_mention/object_mention; pipeline backfills entity_ids.
+    """
 
     relation_type: str
+    subject_mention: str | None = None
+    object_mention: str | None = None
     subject_entity_id: str | None = None
     object_entity_id: str | None = None
     confidence: float = Field(ge=0.0, le=1.0, default=0.5)
@@ -629,6 +634,27 @@ class KnowledgeUnitRepository(_SQLiteRepository):
         """
         with self._connect() as connection:
             rows = connection.execute(sql, params).fetchall()
+        return [row["ku_id"] for row in rows]
+
+    def find_by_time_range(
+        self,
+        time_range: tuple[str, str],
+        *,
+        limit: int = 100,
+    ) -> list[str]:
+        """Return ku_ids for KUs within the given time range.
+
+        Used as fallback when no entities or search terms are available.
+        """
+        sql = """
+            SELECT ku_id
+            FROM knowledge_units
+            WHERE substr(COALESCE(event_time, published_at), 1, 10) BETWEEN ? AND ?
+            ORDER BY published_at DESC
+            LIMIT ?
+        """
+        with self._connect() as connection:
+            rows = connection.execute(sql, (*time_range, limit)).fetchall()
         return [row["ku_id"] for row in rows]
 
     def rebuild_fts_index(self) -> int:
