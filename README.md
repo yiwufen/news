@@ -7,11 +7,11 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.13+-3776AB?logo=python&logoColor=white" alt="Python" />
-  <img src="https://img.shields.io/badge/Vector-LanceDB-008CC1?logo=vector&logoColor=white" alt="Vector DB" />
+  <img src="https://img.shields.io/badge/Vector-FAISS-008CC1?logo=vector&logoColor=white" alt="Vector DB" />
   <img src="https://img.shields.io/badge/Graph-Neo4j-008CC1?logo=neo4j&logoColor=white" alt="Graph DB" />
   <img src="https://img.shields.io/badge/Search-Hybrid_(BM25_%2B_Dense_%2B_Graph)-FF6F00" alt="Hybrid Search" />
   <img src="https://img.shields.io/badge/LLM-Anthropic_Claude-191919?logo=anthropic&logoColor=white" alt="LLM" />
-  <img src="https://img.shields.io/badge/Tests-188+_passed-4CAF50?logo=pytest&logoColor=white" alt="Tests" />
+  <img src="https://img.shields.io/badge/Tests-147+_passed-4CAF50?logo=pytest&logoColor=white" alt="Tests" />
   <img src="https://img.shields.io/badge/Type-Pyright_0_errors-4CAF50" alt="Type Safe" />
 </p>
 
@@ -47,7 +47,7 @@ flowchart TB
     subgraph Storage["Storage Layer"]
         SQL["SQLite<br/>Primary Store"]
         NEO["Neo4j<br/>Knowledge Graph"]
-        LDB["LanceDB<br/>Dense Vector Index"]
+        LDB["FAISS<br/>Dense Vector Index"]
         FTS["FTS5<br/>BM25 Full-text Index"]
     end
 
@@ -95,7 +95,7 @@ flowchart TB
 | Feature | What It Does | Why It Matters |
 | --- | --- | --- |
 | **Hybrid Retrieval** | 三条检索路径并行：Entity-ID 精确查找 + Dense 向量语义检索 + BM25 全文匹配，Reciprocal Rank Fusion 融合排序 | 兼顾精确召回与语义理解，不同查询意图走最优路径 |
-| **Dense Vector Search** | LanceDB 存储 + OpenAI-compatible Embedding API，余弦相似度检索 | 支持语义级模糊查询，捕获 BM25 无法覆盖的同义/近义表达 |
+| **Dense Vector Search** | FAISS IndexFlatIP + OpenAI-compatible Embedding API，余弦相似度检索 | 支持语义级模糊查询，捕获 BM25 无法覆盖的同义/近义表达 |
 | **GraphRAG** | Neo4j 实体-事件图谱，支持 1-hop/2-hop 遍历与关系路径发现 | 从"找文章"升级为"找关系"，发现隐含关联 |
 | **Statement-Level Extraction** | LLM 从每篇新闻中抽取原子级事实（KnowledgeUnit），而非整篇文档 | 精准溯源，避免整篇文档噪声 |
 | **Conservative Clustering** | 仅当实体一致、事件类型相同、时间邻近、语义相似时才合并 | 避免过度聚合导致的信息幻觉 |
@@ -110,7 +110,7 @@ flowchart TB
 | --- | --- | --- |
 | **LLM Extraction** | Anthropic Claude | 结构化知识抽取 (RawDocument → KnowledgeUnit) |
 | **Embedding** | OpenAI-compatible API (`text-embedding-3-small`) | 语义向量化，支持任意兼容 API |
-| **Vector DB** | LanceDB (embedded) | Dense 向量索引，余弦相似度检索 |
+| **Vector DB** | FAISS (IndexFlatIP) | Dense 向量索引，inner product = cosine similarity |
 | **Full-text Search** | SQLite FTS5 | BM25 全文索引，中文分词 (jieba) |
 | **Knowledge Graph** | Neo4j | 实体-事件关系图谱，多跳遍历 |
 | **Primary Store** | SQLite | 文档、知识单元、实体、事件簇存储 |
@@ -166,7 +166,7 @@ docker compose exec app knowledge-cli search --entities "小米集团"
 ```mermaid
 flowchart LR
     Q["Query"] --> EID["Entity-ID Lookup<br/>精确实体匹配"]
-    Q --> DENSE["Dense Retrieval<br/>LanceDB 向量检索"]
+    Q --> DENSE["Dense Retrieval<br/>FAISS 向量检索"]
     Q --> BM25["BM25 Search<br/>FTS5 全文检索"]
 
     EID --> FUSION["RRF Fusion<br/>+ Intent-Aware Scoring"]
@@ -183,7 +183,7 @@ flowchart LR
 | Path | Method | Best For | Weight |
 | --- | --- | --- | --- |
 | **Entity-ID** | JSON column lookup on `entity_ids` | 精确实体查询 | Entity bonus: 6-10x |
-| **Dense** | LanceDB cosine similarity (top-60) | 语义模糊查询、主题研究 | Dense weight: 6-8x |
+| **Dense** | FAISS inner product (top-60) | 语义模糊查询、主题研究 | Dense weight: 6-8x |
 | **BM25** | SQLite FTS5 + jieba 分词 | 关键词精确匹配 | BM25 weight: 0.5-0.8x |
 
 ### Intent-Aware Scoring Profiles
@@ -203,7 +203,7 @@ flowchart LR
 系统在任何检索组件不可用时自动降级，不会中断服务：
 
 - **无 Embedding API** → 跳过 Dense 路径，BM25 + Entity-ID 仍可用
-- **LanceDB 为空** → 提示运行 `knowledge-cli index-vectors` 构建
+- **向量索引为空** → 提示运行 `knowledge-cli index-vectors` 构建
 - **Neo4j 不可用** → Graph 增强跳过，核心检索不受影响
 
 ---
@@ -249,7 +249,7 @@ erDiagram
 | Layer | Storage | Index | Purpose |
 | --- | --- | --- | --- |
 | RawDocument | SQLite `news_articles` | - | 原始新闻文章 |
-| KnowledgeUnit | SQLite `knowledge_units` | FTS5 + LanceDB | 最小可检索单元 (statement-level) |
+| KnowledgeUnit | SQLite `knowledge_units` | FTS5 + FAISS | 最小可检索单元 (statement-level) |
 | Entity | SQLite `entities` + Neo4j | - | 标准化实体 (Company / Person / Org) |
 | EventCluster | SQLite `event_clusters` + Neo4j | - | 保守聚合的事件簇 |
 
@@ -321,7 +321,7 @@ news/
 │   ├── entity_context_filter.py # LLM extraction entity context injection
 │   ├── retrieval/               # Hybrid retrieval engine
 │   │   ├── knowledge_search.py  #   Multi-path search orchestration
-│   │   ├── vector_index.py      #   LanceDB dense vector index
+│   │   ├── vector_index.py      #   FAISS dense vector index
 │   │   ├── embedding.py         #   OpenAI-compatible embedding provider
 │   │   ├── scoring.py           #   Intent-aware scoring profiles
 │   │   └── indexing.py          #   Index building utilities
@@ -330,7 +330,7 @@ news/
 │   ├── schemas/                 # StructuredQuery, IntentType
 │   ├── pipeline/                # Continuous ingestion pipeline
 │   └── llm/                     # LLM client configuration
-├── tests/                       # 188+ tests, 0 type errors
+├── tests/                       # 147+ tests, 0 type errors
 ├── Dockerfile                   # Multi-stage build
 ├── docker-compose.yml           # App + Neo4j orchestration
 └── pyproject.toml               # Dependencies + CLI entry point
@@ -342,7 +342,7 @@ news/
 
 ```bash
 uv sync --group dev     # Install dev dependencies
-uv run pytest           # Run tests (188+ passed)
+uv run pytest           # Run tests (147+ passed)
 uv run pyright .        # Type check (0 errors)
 ```
 

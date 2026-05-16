@@ -151,13 +151,6 @@ class KnowledgeUnit(BaseModel):
             raise ValueError("KnowledgeUnit requires at least one evidence span")
         return value
 
-    @field_validator("entities")
-    @classmethod
-    def validate_entities(cls, value: list[EntityRef]) -> list[EntityRef]:
-        if not value:
-            raise ValueError("KnowledgeUnit requires at least one entity mention")
-        return value
-
     @model_validator(mode="after")
     def assign_stable_ku_id(self) -> KnowledgeUnit:
         if self.ku_id:

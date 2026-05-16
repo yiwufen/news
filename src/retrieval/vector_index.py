@@ -1,19 +1,21 @@
-"""LanceDB-backed vector index for KnowledgeUnit dense retrieval."""
+"""FAISS-backed vector index for KnowledgeUnit dense retrieval."""
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
-import lancedb
-import pyarrow as pa
+import faiss
+import numpy as np
 
 from src.knowledge_base import KnowledgeUnit
 from src.retrieval.embedding import EmbeddingProvider
 
 logger = logging.getLogger(__name__)
 
-_TABLE_NAME = "knowledge_units"
+_INDEX_FILE = "faiss.index"
+_ID_MAP_FILE = "id_map.json"
 
 
 def build_embedding_text(unit: KnowledgeUnit) -> str:
@@ -34,49 +36,84 @@ def build_embedding_text(unit: KnowledgeUnit) -> str:
 
 
 class VectorIndex:
-    """Vector index backed by LanceDB.
+    """Vector index backed by FAISS (IndexFlatIP with L2-normalized vectors).
 
-    Embedded mode — no server required. Stores embeddings with metadata
-    and supports cosine similarity search with optional filters.
+    Cosine similarity via inner product on unit vectors.  No server required.
+    Index and ID map are persisted to disk after each write operation.
     """
 
     def __init__(self, db_path: str, provider: EmbeddingProvider) -> None:
-        # db_path is the SQLite path; vector DB lives alongside it
-        vec_dir = str(Path(db_path).parent / "vector_db")
-        self._db = lancedb.connect(vec_dir)
+        self._vec_dir = Path(db_path).parent / "vector_db"
         self._provider = provider
         self._dim: int | None = None
 
-    def _table_names(self) -> list[str]:
-        return self._db.list_tables().tables  # type: ignore[no-any-return]
+        # State loaded lazily
+        self._index: faiss.Index | None = None
+        self._id_map: dict[int, str] = {}  # int64 → ku_id
+        self._reverse_map: dict[str, int] = {}  # ku_id → int64
+        self._next_id: int = 0
 
-    def _ensure_table(self, dim: int) -> lancedb.table.Table:
-        """Get or create the LanceDB table."""
-        self._dim = dim
-        if _TABLE_NAME in self._table_names():
-            return self._db.open_table(_TABLE_NAME)
-        # Create with empty schema — first batch will define columns
-        schema = pa.schema([
-            pa.field("ku_id", pa.string()),
-            pa.field("vector", pa.list_(pa.float32(), dim)),
-            pa.field("model_name", pa.string()),
-            pa.field("source_text", pa.string()),
-        ])
-        return self._db.create_table(_TABLE_NAME, schema=schema)
+    # ------------------------------------------------------------------
+    # Persistence helpers
+    # ------------------------------------------------------------------
+
+    def _index_path(self) -> Path:
+        return self._vec_dir / _INDEX_FILE
+
+    def _id_map_path(self) -> Path:
+        return self._vec_dir / _ID_MAP_FILE
+
+    def _load(self) -> None:
+        """Load existing index and ID map from disk (if present)."""
+        if self._index is not None:
+            return
+
+        if self._index_path().exists():
+            idx = faiss.read_index(str(self._index_path()))
+            assert idx is not None
+            self._index = idx
+            self._dim = idx.d
+            logger.info("Loaded FAISS index (%d vectors)", idx.ntotal)
+        else:
+            self._index = None
+            self._dim = None
+
+        if self._id_map_path().exists():
+            raw: dict[str, str] = json.loads(self._id_map_path().read_text(encoding="utf-8"))
+            self._id_map = {int(k): v for k, v in raw.items()}
+            self._reverse_map = {v: k for k, v in self._id_map.items()}
+            self._next_id = max(self._id_map.keys(), default=-1) + 1
+        else:
+            self._id_map = {}
+            self._reverse_map = {}
+            self._next_id = 0
+
+    def _save(self) -> None:
+        """Persist current index and ID map to disk."""
+        if self._index is None:
+            return
+        self._vec_dir.mkdir(parents=True, exist_ok=True)
+        faiss.write_index(self._index, str(self._index_path()))
+        raw = {str(k): v for k, v in self._id_map.items()}
+        self._id_map_path().write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+
+    def _create_index(self, dim: int) -> faiss.Index:
+        """Create a new FAISS IndexIDMap wrapping IndexFlatIP."""
+        flat = faiss.IndexFlatIP(dim)
+        return faiss.IndexIDMap(flat)
+
+    # ------------------------------------------------------------------
+    # Public interface (unchanged from LanceDB version)
+    # ------------------------------------------------------------------
 
     def index_units(self, units: list[KnowledgeUnit], *, batch_size: int = 20) -> int:
         """Embed and store vectors for KUs not yet indexed. Returns count."""
         if not units:
             return 0
 
-        existing_ids: set[str] = set()
-        if _TABLE_NAME in self._table_names():
-            table = self._db.open_table(_TABLE_NAME)
-            arrow_table = table.to_arrow()
-            for ku_id in arrow_table.column("ku_id").to_pylist():
-                existing_ids.add(ku_id)
+        self._load()
 
-        new_units = [u for u in units if u.ku_id not in existing_ids]
+        new_units = [u for u in units if u.ku_id not in self._reverse_map]
         if not new_units:
             return 0
 
@@ -87,63 +124,79 @@ class VectorIndex:
             vectors = self._provider.embed(texts)
             dim = len(vectors[0])
 
-            table = self._ensure_table(dim)
+            if self._index is None:
+                self._dim = dim
+                self._index = self._create_index(dim)
 
-            records = [
-                {
-                    "ku_id": unit.ku_id,
-                    "vector": vector,
-                    "model_name": self._provider.model_name,
-                    "source_text": text,
-                }
-                for unit, vector, text in zip(batch, vectors, texts)
-            ]
-            table.add(records)
+            arr = np.array(vectors, dtype=np.float32)
+            faiss.normalize_L2(arr)
+
+            ids = np.array(
+                [self._next_id + j for j in range(len(batch))],
+                dtype=np.int64,
+            )
+            assert self._index is not None
+            self._index.add_with_ids(arr, ids)  # type: ignore[call-arg]
+
+            for j, unit in enumerate(batch):
+                int_id = int(ids[j])
+                self._id_map[int_id] = unit.ku_id
+                self._reverse_map[unit.ku_id] = int_id
+            self._next_id += len(batch)
+
             total_indexed += len(batch)
             logger.info("Indexed %d/%d vectors", total_indexed, len(new_units))
 
+        self._save()
         return total_indexed
 
-    def search(
-        self, query_text: str, *, top_k: int = 20
-    ) -> list[tuple[str, float]]:
+    def search(self, query_text: str, *, top_k: int = 20) -> list[tuple[str, float]]:
         """Cosine similarity search. Returns (ku_id, similarity) sorted desc."""
-        if _TABLE_NAME not in self._table_names():
+        self._load()
+        if self._index is None or self._index.ntotal == 0:
             return []
 
         query_vectors = self._provider.embed([query_text])
         if not query_vectors:
             return []
 
-        table = self._db.open_table(_TABLE_NAME)
-        query = table.search(query_vectors[0])
-        results = (
-            query.metric("cosine")  # type: ignore[union-attr]
-            .limit(top_k)
-            .select(["ku_id"])
-            .to_list()
-        )
+        q = np.array([query_vectors[0]], dtype=np.float32)
+        faiss.normalize_L2(q)
 
-        # LanceDB cosine distance: 0 = identical, 2 = opposite
-        return [
-            (str(row["ku_id"]), 1.0 - float(row["_distance"]))
-            for row in results
-        ]
+        k = min(top_k, self._index.ntotal)
+        distances, indices = self._index.search(q, k)  # type: ignore[call-arg]
+
+        results: list[tuple[str, float]] = []
+        for score, idx in zip(distances[0], indices[0]):
+            if idx == -1:
+                continue
+            ku_id = self._id_map.get(int(idx))
+            if ku_id is not None:
+                results.append((ku_id, float(score)))
+        return results
 
     def is_available(self) -> bool:
-        if _TABLE_NAME not in self._table_names():
-            return False
-        table = self._db.open_table(_TABLE_NAME)
-        return table.count_rows() > 0
+        self._load()
+        return self._index is not None and self._index.ntotal > 0
 
     def indexed_count(self) -> int:
-        if _TABLE_NAME not in self._table_names():
+        self._load()
+        if self._index is None:
             return 0
-        table = self._db.open_table(_TABLE_NAME)
-        return table.count_rows()
+        return self._index.ntotal
 
     def rebuild(self, units: list[KnowledgeUnit]) -> int:
         """Full rebuild: drop and re-index all."""
-        if _TABLE_NAME in self._table_names():
-            self._db.drop_table(_TABLE_NAME)
+        # Remove old files
+        if self._index_path().exists():
+            self._index_path().unlink()
+        if self._id_map_path().exists():
+            self._id_map_path().unlink()
+
+        # Reset in-memory state
+        self._index = None
+        self._id_map = {}
+        self._reverse_map = {}
+        self._next_id = 0
+
         return self.index_units(units)

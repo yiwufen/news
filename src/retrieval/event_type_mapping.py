@@ -6,29 +6,32 @@ the mapping is maintained in a single place.
 
 from __future__ import annotations
 
-from src.schemas.enums import UnitType, _UNIT_TYPE_ALIASES, get_unit_type_synonyms
+import logging
+
+from src.schemas.enums import UnitType, get_unit_type_synonyms, normalize_unit_type
+
+logger = logging.getLogger(__name__)
 
 
 def expand_event_types(user_types: list[str]) -> list[str]:
     """Expand user-facing event type terms to all known database variants.
 
-    Each input term is first normalized to a canonical ``UnitType``, then all
-    known synonyms for that type are returned.  Unknown terms pass through
-    unchanged so that future database values still work without a mapping update.
+    Each input term is normalized to a canonical ``UnitType`` via
+    ``normalize_unit_type`` (alias + keyword pattern matching).  Terms that
+    cannot be resolved to a known type are **dropped** instead of passed
+    through, because raw Chinese strings will never match the English
+    ``unit_type`` values stored in the database.
     """
     expanded: list[str] = []
     seen: set[str] = set()
     for term in user_types:
-        canonical = _UNIT_TYPE_ALIASES.get(term.lower())
-        if canonical is not None:
-            for synonym in get_unit_type_synonyms(canonical):
-                key = synonym.lower()
-                if key not in seen:
-                    seen.add(key)
-                    expanded.append(synonym)
-        else:
-            key = term.lower()
+        canonical = normalize_unit_type(term)
+        if canonical == UnitType.OTHER:
+            logger.debug("expand_event_types: unmapped term '%s' dropped", term)
+            continue
+        for synonym in get_unit_type_synonyms(canonical):
+            key = synonym.lower()
             if key not in seen:
                 seen.add(key)
-                expanded.append(term)
+                expanded.append(synonym)
     return expanded

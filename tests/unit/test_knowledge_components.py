@@ -1153,7 +1153,7 @@ def test_entity_id_lookup_finds_kus_by_entity(tmp_path) -> None:
 
 
 def test_relaxation_cascade_returns_results_when_entity_not_found(tmp_path) -> None:
-    """When entity is not in DB, BM25 fallback returns results instead of empty."""
+    """When entity is not in DB, BM25 fallback runs; result depends on content match."""
     searcher, _ = _setup_searcher_with_entities(
         tmp_path,
         entity_specs=[
@@ -1164,7 +1164,8 @@ def test_relaxation_cascade_returns_results_when_entity_not_found(tmp_path) -> N
         ],
     )
 
-    # "量化交易" is not an entity — should fall through to BM25
+    # "量化交易" is not an entity and not in any KU text — should fall through
+    # to BM25, which also finds nothing, yielding no_results.
     result = searcher.search(
         KnowledgeSearchRequest(
             structured_query=StructuredQuery(
@@ -1178,8 +1179,9 @@ def test_relaxation_cascade_returns_results_when_entity_not_found(tmp_path) -> N
         )
     )
 
-    # Should NOT hard-gate to empty — BM25 fallback runs
-    assert result.retrieval_path == "bm25_fallback"
+    # BM25 fallback was attempted but found no matching content
+    assert result.retrieval_path == "no_results"
+    assert result.total_count == 0
 
 
 def test_comparative_analysis_balances_both_entities(tmp_path) -> None:

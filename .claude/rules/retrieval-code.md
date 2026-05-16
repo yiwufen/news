@@ -20,17 +20,27 @@
 uv run python scripts/eval_report.py --input eval/golden_dataset_v2.json
 ```
 
-### 当前基线（2026-05-10，358 queries，规则预标注，Phase 1/2/3 后）
+### 当前基线（2026-05-16，300 queries，规则查询生成，rule-based）
 
 | 指标 | 基线值 |
 |------|--------|
-| Recall@5 | 12.8% |
-| Recall@20 | 17.3% |
-| MRR | 0.102 |
-| NDCG@10 | 0.668 |
+| Recall@5 | 71.7% |
+| Recall@20 | 89.3% |
+| MRR | 0.535 |
+| NDCG@10 | 0.667 |
 
-> 注：v1 基线（364 queries）Recall@5=29.4%, NDCG@10=0.564。v2 查询更多样、更难，
-> 且基于新检索系统生成，两者不宜直接比较绝对值。
+#### 按 query_type
+
+| 类型 | 数量 | Recall@5 | MRR | NDCG@10 |
+|------|------|----------|-----|---------|
+| entity_event_type | 51 | 92.2% | 0.700 | 0.778 |
+| multi_entity | 56 | 92.9% | 0.791 | 0.877 |
+| entity_time | 41 | 70.7% | 0.545 | 0.683 |
+| broad_topic | 72 | 55.6% | 0.383 | 0.532 |
+| entity_only | 80 | 58.8% | 0.383 | 0.531 |
+
+> 生成命令：`uv run python scripts/eval_generate.py --rule-based --output eval/golden_dataset_v2.json`
+> 旧基线（v2, LLM 生成）因数据库重建导致 90% ground truth KU 失效，指标不可信。
 
 ### 要求
 

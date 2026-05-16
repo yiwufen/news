@@ -110,9 +110,16 @@ SYSTEM_PROMPT = """你是一名金融检索评估专家。你的任务是从给�
    - hard: 需要多跳推理或跨实体关联
 4. query_text 必须是自然的中文，符合金融分析师的表达习惯
 5. 如果 KU 的实体不足 2 个，跳过 multi_entity 类型
-6. entities 字段填写查询实际使用的实体名称
+6. entities 字段只填写 KU 中标注的标准实体（Standard Entities），不要把产品类别、描述性词汇等非实体当作查询实体
 7. time_range 格式: {"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"} 或 null
-8. event_types 填写中文事件类型名称或 null"""
+8. event_types 必须从以下标准值中选择，或设为 null："""
+
+
+def _build_system_prompt() -> str:
+    """Append canonical UnitType values to SYSTEM_PROMPT so the LLM uses them."""
+    from src.schemas.enums import UnitType
+    valid_types = [t.value for t in UnitType if t != UnitType.OTHER]
+    return SYSTEM_PROMPT + "\n   " + ", ".join(valid_types)
 
 
 # ── 分层采样 ──────────────────────────────────────────────
@@ -212,7 +219,6 @@ def stratified_sample_kus(
 
 def _build_ku_prompt(ku: KnowledgeUnit, entity_names: list[str]) -> str:
     """构建 LLM 输入 prompt。"""
-    entity_mentions = [e.mention for e in ku.entities]
     event_time = ku.time.event_time.isoformat() if ku.time.event_time else "未知"
     published = ku.time.published_at.isoformat()
 
@@ -221,12 +227,15 @@ def _build_ku_prompt(ku: KnowledgeUnit, entity_names: list[str]) -> str:
 ## 知识单元
 - 类型: {ku.unit_kind} / {ku.unit_type}
 - 摘要: {ku.summary}
-- 涉及实体: {', '.join(entity_mentions)}
-- 标准实体: {', '.join(entity_names)}
+- 标准实体: {', '.join(entity_names) if entity_names else '无'}
 - 事件时间: {event_time}
 - 发布时间: {published}
 - 标签: {', '.join(ku.tags) if ku.tags else '无'}
-"""
+
+## 重要约束
+- entities 字段只能使用上面列出的标准实体名称
+- multi_entity 类型只在该 KU 有 2 个及以上标准实体时使用
+- 不要把描述性词汇（如"风险"、"增长"）当作 entity"""
 
 
 def generate_queries_for_ku(
@@ -238,6 +247,7 @@ def generate_queries_for_ku(
 ) -> list[dict[str, Any]]:
     """为单个 KU 调用 LLM 生成候选查询。"""
     prompt = _build_ku_prompt(ku, entity_names)
+    system_prompt = _build_system_prompt()
     max_tokens = get_offline_max_tokens()
 
     for attempt in range(max_retries + 1):
@@ -245,7 +255,7 @@ def generate_queries_for_ku(
             response: Message = client.messages.create(
                 model=model,
                 max_tokens=max_tokens,
-                system=SYSTEM_PROMPT,
+                system=system_prompt,
                 tools=[QUERY_GEN_TOOL_SCHEMA],
                 tool_choice={"type": "tool", "name": "generate_search_queries"},
                 messages=[{"role": "user", "content": prompt}],
@@ -333,6 +343,84 @@ def run_retrieval_for_query(
 
 # ── 主流程 ────────────────────────────────────────────────
 
+def _generate_rule_queries(
+    ku: KnowledgeUnit,
+    entity_names: list[str],
+) -> list[dict[str, Any]]:
+    """Generate queries directly from KU data without LLM.
+
+    Produces predictable queries that map to the retrieval system's capabilities.
+    """
+    queries: list[dict[str, Any]] = []
+    event_time = ku.time.event_time
+    published = ku.time.published_at
+    unit_type = ku.unit_type
+
+    if not entity_names:
+        return queries
+
+    primary_entity = entity_names[0]
+
+    # 1. entity_only: just the primary entity name
+    queries.append({
+        "query_text": primary_entity,
+        "query_type": "entity_only",
+        "difficulty": "easy",
+        "entities": [primary_entity],
+        "time_range": None,
+        "event_types": None,
+    })
+
+    # 2. entity_time: entity + time range around event
+    if event_time:
+        from datetime import timedelta
+        start = (event_time - timedelta(days=30)).strftime("%Y-%m-%d")
+        end = (event_time + timedelta(days=7)).strftime("%Y-%m-%d")
+        queries.append({
+            "query_text": f"{primary_entity} {event_time.strftime('%Y年%m月')}",
+            "query_type": "entity_time",
+            "difficulty": "medium",
+            "entities": [primary_entity],
+            "time_range": {"start": start, "end": end},
+            "event_types": None,
+        })
+
+    # 3. entity_event_type: entity + canonical unit_type
+    if unit_type and unit_type != "other":
+        queries.append({
+            "query_text": f"{primary_entity} {unit_type}",
+            "query_type": "entity_event_type",
+            "difficulty": "medium",
+            "entities": [primary_entity],
+            "time_range": None,
+            "event_types": [unit_type],
+        })
+
+    # 4. multi_entity: only if 2+ resolved entities
+    if len(entity_names) >= 2:
+        queries.append({
+            "query_text": f"{entity_names[0]}和{entity_names[1]}",
+            "query_type": "multi_entity",
+            "difficulty": "medium",
+            "entities": entity_names[:2],
+            "time_range": None,
+            "event_types": None,
+        })
+
+    # 5. broad_topic: entity + summary keywords
+    if ku.tags:
+        queries.append({
+            "query_text": f"{primary_entity} {' '.join(ku.tags[:3])}",
+            "query_type": "broad_topic",
+            "difficulty": "hard",
+            "entities": [primary_entity],
+            "time_range": None,
+            "event_types": None,
+        })
+
+    return queries
+
+
 def build_golden_dataset(
     db_path: str = "data/news.db",
     target_kus: int = 80,
@@ -341,6 +429,7 @@ def build_golden_dataset(
     top_k: int = 20,
     limit: int | None = None,
     output_path: str = "eval/golden_dataset_v1.json",
+    rule_based: bool = False,
 ) -> dict[str, Any]:
     """采样 KU → 生成查询 → 跑检索 → 输出 JSON。"""
     logger.info("加载知识库: %s", db_path)
@@ -359,9 +448,12 @@ def build_golden_dataset(
     sampled = stratified_sample_kus(all_kus, target_count=sample_size, seed=seed)
     logger.info("采样 %d KU (seed=%d)", len(sampled), seed)
 
-    # LLM 初始化
-    client, model = create_offline_llm_client()
-    logger.info("LLM client ready: model=%s", model)
+    # LLM 初始化 (only if not rule-based)
+    client = None
+    model = None
+    if not rule_based:
+        client, model = create_offline_llm_client()
+        logger.info("LLM client ready: model=%s", model)
 
     items: list[dict[str, Any]] = []
     total_queries = 0
@@ -375,13 +467,28 @@ def build_golden_dataset(
                 ku_entity_names.append(entity_ref.mention)
 
         # 生成查询
-        gen_queries = generate_queries_for_ku(ku, ku_entity_names, client, model)
+        if rule_based:
+            gen_queries = _generate_rule_queries(ku, ku_entity_names)
+        else:
+            gen_queries = generate_queries_for_ku(ku, ku_entity_names, client, model)
         if not gen_queries:
             logger.warning("跳过 ku=%s: 无法生成查询", ku.ku_id)
             continue
 
         item_queries: list[dict[str, Any]] = []
         for gen_q in gen_queries:
+            # 过滤：multi_entity 查询的实体必须是标准实体
+            if gen_q.get("query_type") == "multi_entity":
+                q_entities = gen_q.get("entities", [])
+                valid = [e for e in q_entities if e in ku_entity_names]
+                if len(valid) < 2:
+                    logger.debug(
+                        "跳过 multi_entity 查询: 实体不足 2 个标准实体 (got %s, valid %s)",
+                        q_entities, valid,
+                    )
+                    continue
+                gen_q["entities"] = valid
+
             total_queries += 1
 
             # 跑检索
@@ -491,6 +598,7 @@ def main() -> None:
     parser.add_argument("--top-k", type=int, default=20, help="检索返回数量")
     parser.add_argument("--graph", action="store_true", default=False, help="启用图谱增强")
     parser.add_argument("--output", default="eval/golden_dataset_v1.json", help="输出路径")
+    parser.add_argument("--rule-based", action="store_true", default=False, help="使用规则生成查询（不需要 LLM）")
     args = parser.parse_args()
 
     build_golden_dataset(
@@ -501,6 +609,7 @@ def main() -> None:
         top_k=args.top_k,
         limit=args.limit,
         output_path=args.output,
+        rule_based=args.rule_based,
     )
 
 

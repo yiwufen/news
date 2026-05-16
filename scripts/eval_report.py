@@ -226,12 +226,44 @@ def print_report(dataset: dict[str, Any]) -> None:
     print(f"\n{'=' * 60}")
 
 
+def check_freshness(dataset: dict[str, Any], db_path: str = "data/news.db") -> int:
+    """Check how many ground truth KUs still exist in the database.
+
+    Returns the number of missing KU IDs.  Prints a warning if any are stale.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from src.knowledge_base import KnowledgeUnitRepository
+
+    repo = KnowledgeUnitRepository(db_path)
+    all_ids = {ku.ku_id for ku in repo.get_all()}
+    items = dataset.get("items", [])
+    missing = sum(1 for it in items if it["ground_truth_ku"]["ku_id"] not in all_ids)
+    total = len(items)
+
+    if missing > 0:
+        pct = missing / total * 100 if total else 0
+        print(f"\n  ⚠  数据集过期: {missing}/{total} ({pct:.0f}%) ground truth KU 已不在当前知识库中")
+        print(f"     生成时间: {dataset.get('created_at', '?')}")
+        print(f"     请重新运行 eval_generate.py 以生成新数据集\n")
+    else:
+        print(f"  [OK] 数据集新鲜度检查通过: {total}/{total} ground truth KU 有效")
+    return missing
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="黄金数据集指标报告")
     parser.add_argument("--input", required=True, help="数据集 JSON 路径")
+    parser.add_argument("--db", default="data/news.db", help="知识库路径（新鲜度检查）")
+    parser.add_argument("--skip-freshness", action="store_true", help="跳过新鲜度检查")
     args = parser.parse_args()
 
     dataset = _load_dataset(args.input)
+
+    if not args.skip_freshness:
+        missing = check_freshness(dataset, args.db)
+        if missing > 0:
+            print("  (使用 --skip-freshness 强制显示过期数据集的报告)\n")
+
     print_report(dataset)
 
 

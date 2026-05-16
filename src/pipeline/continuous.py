@@ -263,8 +263,7 @@ class ContinuousPipeline:
                 elif entity_ref.mention.strip() not in unit.tags:
                     unit.tags.append(entity_ref.mention.strip())
             unit.entities = valid_entities
-            if unit.entities:
-                valid_units.append(unit)
+            valid_units.append(unit)
         units = valid_units
         result.units = units
 
