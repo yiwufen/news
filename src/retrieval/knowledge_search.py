@@ -13,7 +13,7 @@ import logging
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 
 from src.entities import (
     Entity,
@@ -454,7 +454,8 @@ class KnowledgeSearcher:
             return self._search_bm25_fallback(request, matched_entities)
 
         # Bucket by month for temporal coverage
-        units = self.units.get_by_ids(ku_ids)
+        all_units = self.units.get_by_ids(ku_ids)
+        units = self._filter_candidates(all_units, query)
         buckets: dict[str, list[KnowledgeUnit]] = defaultdict(list)
         for unit in units:
             anchor = self._unit_anchor(unit)
@@ -573,10 +574,9 @@ class KnowledgeSearcher:
         if not candidate_ids:
             return self._empty_result(request, matched_entities)
 
-        unit_map = {
-            unit.ku_id: unit
-            for unit in self.units.get_by_ids(candidate_ids)
-        }
+        all_units = self.units.get_by_ids(candidate_ids)
+        filtered_units = self._filter_candidates(all_units, request.structured_query)
+        unit_map = {unit.ku_id: unit for unit in filtered_units}
         bm25_lookup = dict(bm25_hits)
         ranked_hits: list[tuple[float, KnowledgeUnit, dict[str, object]]] = []
         matched_entity_ids = {entity.entity_id for entity in matched_entities}
@@ -604,6 +604,10 @@ class KnowledgeSearcher:
             ),
             reverse=True,
         )
+        ranked_hits = self._apply_intent_reranking(
+            ranked_hits, request.structured_query.intent
+        )
+        ranked_hits = self._diversify_by_cluster(ranked_hits)
         selected = ranked_hits[: request.top_k]
         selected_units = [unit for _, unit, _ in selected]
         selected_unit_ids = [unit.ku_id for unit in selected_units]
@@ -667,10 +671,9 @@ class KnowledgeSearcher:
         if not candidate_ids:
             return self._empty_result(request, matched_entities)
 
-        unit_map = {
-            unit.ku_id: unit
-            for unit in self.units.get_by_ids(candidate_ids)
-        }
+        all_units = self.units.get_by_ids(candidate_ids)
+        filtered_units = self._filter_candidates(all_units, request.structured_query)
+        unit_map = {unit.ku_id: unit for unit in filtered_units}
         bm25_lookup = dict(bm25_hits)
         ranked_hits: list[tuple[float, KnowledgeUnit, dict[str, object]]] = []
         matched_entity_ids = {entity.entity_id for entity in matched_entities}
@@ -711,6 +714,7 @@ class KnowledgeSearcher:
             ),
             reverse=True,
         )
+        ranked_hits = self._diversify_by_cluster(ranked_hits)
         selected = ranked_hits[: request.top_k]
         selected_units = [unit for _, unit, _ in selected]
         selected_unit_ids = [unit.ku_id for unit in selected_units]
@@ -1052,4 +1056,57 @@ class KnowledgeSearcher:
         return '"' + value.replace('"', '""') + '"'
 
     def _unit_anchor(self, unit: KnowledgeUnit) -> datetime:
-        return unit.time.event_time or unit.time.published_at
+        anchor = unit.time.event_time or unit.time.published_at
+        if anchor is None:
+            return datetime.min.replace(tzinfo=UTC)
+        return anchor
+
+    def _diversify_by_cluster(
+        self,
+        ranked_hits: list[tuple[float, KnowledgeUnit, dict[str, object]]],
+        max_per_cluster: int = 3,
+    ) -> list[tuple[float, KnowledgeUnit, dict[str, object]]]:
+        """Limit KUs per cluster to ensure diversity in top-K."""
+        cluster_counts: dict[str | None, int] = defaultdict(int)
+        diversified = []
+        for score, unit, meta in ranked_hits:
+            cid = unit.cluster_id
+            if cid is not None and cluster_counts[cid] >= max_per_cluster:
+                continue
+            cluster_counts[cid] += 1
+            diversified.append((score, unit, meta))
+        return diversified
+
+    def _apply_intent_reranking(
+        self,
+        ranked_hits: list[tuple[float, KnowledgeUnit, dict[str, object]]],
+        intent: IntentType,
+    ) -> list[tuple[float, KnowledgeUnit, dict[str, object]]]:
+        """Boost scores based on intent-specific semantic signals."""
+        from src.retrieval.scoring import RISK_UNIT_TYPES
+
+        if intent == IntentType.RISK_ASSESSMENT:
+            for i, (score, unit, meta) in enumerate(ranked_hits):
+                if unit.unit_type in RISK_UNIT_TYPES:
+                    ranked_hits[i] = (score + 5.0, unit, meta)
+        elif intent == IntentType.EVENT_IMPACT_ANALYSIS:
+            for i, (score, unit, meta) in enumerate(ranked_hits):
+                if unit.relation_hints:
+                    ranked_hits[i] = (score + 3.0, unit, meta)
+        ranked_hits.sort(key=lambda x: x[0], reverse=True)
+        return ranked_hits
+
+    def _filter_candidates(
+        self,
+        units: list[KnowledgeUnit],
+        query: StructuredQuery,
+    ) -> list[KnowledgeUnit]:
+        """Enforce time_range and event_types on hydrated KUs in memory."""
+        filtered = units
+        if query.time_range:
+            filtered = [u for u in filtered if self._matches_time(u, query)]
+        if query.filters.event_types:
+            event_types = self._expand_event_types(query)
+            if event_types:
+                filtered = [u for u in filtered if u.unit_type in event_types]
+        return filtered
