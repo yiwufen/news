@@ -104,6 +104,18 @@ def cmd_search(args: argparse.Namespace) -> None:
     sys.stdout.write("\n")
 
 
+def cmd_graph_expand(args: argparse.Namespace) -> None:
+    """Expand specific graph clusters into full detail (Tier-2)."""
+    from src.orchestration.graph import expand_graph_detail
+
+    result = expand_graph_detail(
+        cluster_ids=args.cluster_ids,
+        db_path=args.db,
+    )
+    json.dump(result, sys.stdout, ensure_ascii=True, indent=2)
+    sys.stdout.write("\n")
+
+
 # ---------------------------------------------------------------------------
 # ingest (single-shot)
 # ---------------------------------------------------------------------------
@@ -353,6 +365,19 @@ def main() -> None:
         "--db", type=str, default=DEFAULT_DB_PATH, help="SQLite database path"
     )
     search_parser.set_defaults(func=cmd_search)
+
+    # --- graph-expand ---
+    expand_parser = subparsers.add_parser(
+        "graph-expand", help="Expand graph cluster details (Tier-2)"
+    )
+    expand_parser.add_argument(
+        "--cluster-ids", nargs="+", required=True,
+        help="Cluster IDs to expand",
+    )
+    expand_parser.add_argument(
+        "--db", type=str, default=DEFAULT_DB_PATH, help="SQLite database path"
+    )
+    expand_parser.set_defaults(func=cmd_graph_expand)
 
     # --- ingest ---
     ingest_parser = subparsers.add_parser("ingest", help="Run offline ingestion")

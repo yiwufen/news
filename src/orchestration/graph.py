@@ -81,13 +81,29 @@ def _enhance_with_graph(
         graph_result = retriever.search(
             structured_query,
             start_entities=start_entities,
+            summary_only=True,
         )
     return _GraphEnhancement(
         graph_result=graph_result,
-        entities=[entity.model_dump(mode="json") for entity in graph_result.expanded_entities],
-        event_clusters=[cluster.model_dump(mode="json") for cluster in graph_result.expanded_clusters],
+        entities=[],
+        event_clusters=[],
         errors=[f"[graph] {error}" for error in graph_result.errors],
     )
+
+
+def expand_graph_detail(
+    *,
+    cluster_ids: list[str],
+    db_path: str = DEFAULT_DB_PATH,
+) -> dict[str, Any]:
+    """Expand specific clusters into full graph detail (Tier-2).
+
+    Called by the ``graph-expand`` CLI subcommand.
+    """
+    entity_repo = EntityRepository(db_path)
+    retriever = KnowledgeGraphRetriever(db_path=db_path, entity_repo=entity_repo)
+    result = retriever.expand_clusters(cluster_ids)
+    return result.to_graph_dict(enabled=True)
 
 
 def _merge_by_id(
@@ -169,13 +185,15 @@ def run_pipeline(
     merged_clusters = _merge_by_id(serialized["event_clusters"], graph_clu, "cluster_id")
 
     if graph_enhancement is not None and graph_enabled:
+        gr = graph_enhancement.graph_result
+        summary = gr.summary
         graph_meta = GraphMeta(
             graph_enabled=True,
-            graph_used=graph_enhancement.graph_result.used,
-            candidate_count=graph_enhancement.graph_result.candidate_count,
-            expanded_cluster_count=graph_enhancement.graph_result.expanded_cluster_count,
-            expanded_entity_count=graph_enhancement.graph_result.expanded_entity_count,
-            hit_reasons=graph_enhancement.graph_result.hit_reasons,
+            graph_used=gr.used,
+            candidate_count=gr.candidate_count,
+            expanded_cluster_count=summary.get("event_cluster_count", 0),
+            expanded_entity_count=summary.get("expanded_entity_count", 0),
+            hit_reasons=gr.hit_reasons,
             hops=effective_query.hops,
         )
     else:

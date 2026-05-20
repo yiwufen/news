@@ -59,11 +59,24 @@ knowledge-cli search --entities "小米集团" "腾讯" --intent COMPARATIVE_ANA
 Returns JSON with:
 
 - `knowledge_units` — Matched evidence units (summaries, entities, evidence text)
-- `entities` — Matched and graph-expanded entity records
-- `event_clusters` — Aggregated event views
-- `graph_data` — Graph nodes, edges, and paths (when graph is enabled)
+- `entities` — Matched entity records from text retrieval
+- `event_clusters` — Aggregated event views from text retrieval
+- `graph_data` — Graph metadata:
+  - `summary` — Start entities, cluster count, entity count
+  - `clusters_overview` — Lightweight cluster list (id, title, type, member_count, neighbor_entities, hit_reasons). Use this to decide which clusters to explore further.
+  - `nodes`/`edges`/`paths` — Only present for relationship path queries (RELATIONSHIP_QUERY)
 - `retrieval` — BM25 search metadata and scores
 - `errors` — Any soft failures
+
+## Tier-2 Graph Expansion
+
+When you need full graph detail for specific clusters, use:
+
+```bash
+knowledge-cli graph-expand --cluster-ids "clu_abc123" "clu_def456"
+```
+
+Returns JSON with `nodes`, `edges`, `paths` for the selected clusters.
 
 ## Instructions
 
@@ -73,6 +86,7 @@ Returns JSON with:
 4. If the user's query mentions two entities and their relationship, use `--intent RELATIONSHIP_QUERY --target-entity "B" --hops N`.
 5. If the user asks about time progression, use `--intent ENTITY_TIMELINE` with a `--time-range`.
 6. Entity names containing spaces do NOT need extra quoting beyond the surrounding quotes.
+7. When the user asks about specific clusters or wants deeper analysis, note the `cluster_id` values from `graph_data.clusters_overview` and run `knowledge-cli graph-expand --cluster-ids <ids>` to get full nodes, edges, and paths.
 
 ## Examples from user arguments
 

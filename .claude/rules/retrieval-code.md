@@ -57,7 +57,7 @@ uv run python scripts/eval_report.py --input eval/golden_dataset_v2.json
 uv run python scripts/eval_entity_resolution.py
 ```
 
-### 当前基线（2026-05-10，253 pairs，规则标注）
+### 当前基线（2026-05-16，2145 pairs，67 mentions，规则标注）
 
 | 指标 | 基线值 |
 |------|--------|
@@ -71,8 +71,8 @@ uv run python scripts/eval_entity_resolution.py
 
 ### 评估维度
 
-- **Precision（精度）**：不同实体未被误合并。覆盖子公司/相似名称场景（美的集团≠美的置业、小米≠小米金融、恒大健康≠恒大地产）
-- **Recall（召回）**：同一实体的不同表述被正确合并。覆盖跨语言别名（BYD→比亚迪）、类型不一致（腾讯 Person→腾讯控股 Company）、后缀变体（宁德时代股份有限公司→宁德时代）
+- **Precision（精度）**：不同实体未被误合并。覆盖子公司/相似名称场景（美的集团≠美的置业、小米≠小米金融、恒大健康≠恒大地产、蔚来≠蔚来汽车≠蔚来能源、中信证券≠中信建投）
+- **Recall（召回）**：同一实体的不同表述被正确合并。覆盖跨语言别名（BYD→比亚迪、Tesla→特斯拉、IMF→国际货币基金组织、Pony Ma→马化腾）、类型不一致（腾讯 Person→腾讯控股 Company）、后缀变体（宁德时代股份有限公司→宁德时代）、复合后缀（阿里巴巴集团控股有限公司→阿里巴巴）、人名尊称（马化腾先生→马化腾）、跨语言新实体创建（IMF→国际货币基金组织）
 
 ### 要求
 

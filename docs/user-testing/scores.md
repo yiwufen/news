@@ -409,3 +409,146 @@
 1. em_202605113732558627_1: 宁德时代成立银川时代电服科技有限公司和兰州时代电服科技有限公司
 2. ku_b2e6443029c3765d: 中际旭创取代宁德时代成为主动权益基金第一大重仓股
 3. ku_edb195bf4935ce09: 宁德时代举办超级科技日活动
+
+## Q20260516-001
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-16 |
+| **Session** | ut-developer-20260516-103000 |
+| **Scenario** | S012 (Defect #1 - non-existent entity) |
+| **Query** | `knowledge-cli search --entities "不存在公司XYZ123"` |
+| **Intent** | ENTITY_OVERVIEW |
+| **Result Count** | 118 |
+| **Relevance** | 1 |
+| **Info Density** | 1 |
+| **Redundancy** | 2 |
+| **Temporal** | 2 |
+| **Overall** | 1.5 |
+
+### Scoring Rationale
+- **Relevance**: 1 — 20条KU中0条与"不存在公司XYZ123"相关。BM25回退匹配了完全不相关的结果（璟鸿科技、*ST黑猫、新海宜等）
+- **Info Density**: 1 — 返回的信息全部关于错误实体，对查询毫无价值
+- **Redundancy**: 2 — 结果中涉及多个不同实体，无明显重复，但都是噪声
+- **Temporal**: 2 — 部分KU有event_time，但因全部无关而无意义
+
+### Top 3 Results Summary
+1. ku_ae64c071e007526d: 公司关于股东实际控制人... (完全无关)
+2. ku_41d291baecea2ae7: *ST黑猫股票... (完全无关)
+3. ku_49e13a929ec0d362: 苏州新海宜... (完全无关)
+
+---
+
+## Q20260516-002
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-16 |
+| **Session** | ut-developer-20260516-103000 |
+| **Scenario** | S012 (Defect #2 - event type EN) |
+| **Query** | `knowledge-cli search --entities "恒大集团" --event-types "debt_default"` |
+| **Intent** | ENTITY_OVERVIEW (with event type filter) |
+| **Result Count** | 61 |
+| **Relevance** | 2 |
+| **Info Density** | 2 |
+| **Redundancy** | 3 |
+| **Temporal** | 2 |
+| **Overall** | 2.3 |
+
+### Scoring Rationale
+- **Relevance**: 2 — 仅1/20条KU的unit_type="debt_default"，过滤几乎无效。多数结果为恒大集团的非债务违约事件
+- **Info Density**: 2 — 信息与恒大集团相关但非请求的债务违约事件
+- **Redundancy**: 3 — 结果覆盖多个不同方面（股价、投资等），无严重重复
+- **Temporal**: 2 — 部分KU有event_time，但时间范围不受约束
+
+### Top 3 Results Summary
+1. ku_xxx: 恒大集团 financial_performance (非debt_default)
+2. ku_xxx: 恒大集团 company_establishment (非debt_default)
+3. ku_xxx: 恒大集团 debt_default (唯一匹配)
+
+---
+
+## Q20260516-003
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-16 |
+| **Session** | ut-developer-20260516-103000 |
+| **Scenario** | S012 (Defect #2 - event type CN) |
+| **Query** | `knowledge-cli search --entities "恒大集团" --event-types "债务违约"` |
+| **Intent** | ENTITY_OVERVIEW (with event type filter) |
+| **Result Count** | 60 |
+| **Relevance** | 2 |
+| **Info Density** | 2 |
+| **Redundancy** | 3 |
+| **Temporal** | 2 |
+| **Overall** | 2.3 |
+
+### Scoring Rationale
+- **Relevance**: 2 — 0/20条KU匹配"债务违约"，过滤完全无效。与英文版debt_default不同，中文版甚至0条匹配
+- **Info Density**: 2 — 同英文版，信息相关但非目标事件类型
+- **Redundancy**: 3 — 结果多样但非目标
+- **Temporal**: 2 — 时间信息不完整
+
+### Top 3 Results Summary
+1. ku_xxx: 恒大 financial_performance (非债务违约)
+2. ku_xxx: 恒大 other (非债务违约)
+3. ku_xxx: 恒大 stock_price_change (非债务违约)
+
+---
+
+## Q20260516-004
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-16 |
+| **Session** | ut-developer-20260516-103000 |
+| **Scenario** | ad-hoc (time_range Apr 2026) |
+| **Query** | `knowledge-cli search --entities "小米集团" --time-range "2026-04-01:2026-04-30"` |
+| **Intent** | ENTITY_OVERVIEW (with time filter) |
+| **Result Count** | 60 |
+| **Relevance** | 4 |
+| **Info Density** | 3 |
+| **Redundancy** | 3 |
+| **Temporal** | 1 |
+| **Overall** | 2.8 |
+
+### Scoring Rationale
+- **Relevance**: 4 — KU内容与小米集团高度相关（股价、业务布局、卖空等）
+- **Info Density**: 3 — 包含具体数据（跌幅3%、卖空降90%），但部分KU信息简略
+- **Redundancy**: 3 — 有股价变动类KU重复（涨跌新闻），但多样性尚可
+- **Temporal**: 1 — 时间过滤未生效，结果与无过滤完全相同。event_time=None的比例仍然偏高
+
+### Top 3 Results Summary
+1. ku_f5868c0f8b8f257f: 小米集团股价下跌超过3% (event_time=2026-04-09)
+2. ku_363e499517c66118: 小米集团涨1.44% (event_time=None)
+3. ku_e6fd9ace2076c7d6: 雷军介绍小米业务布局 (event_time=2026-04-13)
+
+---
+
+## Q20260516-005
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-16 |
+| **Session** | ut-developer-20260516-103000 |
+| **Scenario** | ad-hoc (time_range 2025) |
+| **Query** | `knowledge-cli search --entities "小米集团" --time-range "2025-01-01:2025-12-31"` |
+| **Intent** | ENTITY_OVERVIEW (with time filter) |
+| **Result Count** | 60 |
+| **Relevance** | 1 |
+| **Info Density** | 3 |
+| **Redundancy** | 3 |
+| **Temporal** | 1 |
+| **Overall** | 2.0 |
+
+### Scoring Rationale
+- **Relevance**: 1 — 请求2025年数据，返回的全部是2026年4月数据，时间过滤完全无效
+- **Info Density**: 3 — KU本身信息完整，但非请求时间段
+- **Redundancy**: 3 — 与Apr2026查询结果100%相同
+- **Temporal**: 1 — 100%结果不在请求的时间范围内。event_time=2026-04-09出现在2025年查询中
+
+### Top 3 Results Summary
+1. ku_f5868c0f8b8f257f: 小米集团股价下跌超过3% (event_time=2026-04-09, 不在2025范围)
+2. ku_363e499517c66118: 小米集团涨1.44% (event_time=None)
+3. ku_e6fd9ace2076c7d6: 雷军介绍小米业务布局 (event_time=2026-04-13, 不在2025范围)

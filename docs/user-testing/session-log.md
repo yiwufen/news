@@ -95,3 +95,18 @@
 
 ### Summary
 以金融分析师视角执行宁德时代（CATL）专项测试，共 12 组搜索。核心发现：(1) **100% event_time 为 None**——宁德时代所有 KU 缺少时间信息，比之前测试的 54% 缺失率更严重，时间线查询完全不可用；(2) **"超级科技日"占 Top 10 的 80%**——单一事件严重挤占信息多样性，确认 Defect #11（无去重）；(3) **所有 intent 产出完全相同的结果**——OVERVIEW=RISK=GUARANTEE=TOPIC 完全一致，确认 Defect #15；(4) **RELATIONSHIP_QUERY 图谱为空**——graph_used=True 但 0 nodes/edges，图谱缺少 Entity→Entity 关系边导致多跳遍历失败；(5) **"宁德"简称解析到错误实体**——解析为"宁德"(Company)而非宁德时代。积极发现：CATL 英文别名正确解析；COMPARATIVE_ANALYSIS 改善（15:5 vs 之前 20:0）；Neo4j 运行正常（192 nodes for ENTITY_OVERVIEW）；S010 schema 验证全部通过。
+
+## Session: ut-developer-20260516-103000
+
+| Field | Value |
+|-------|-------|
+| **Started** | 2026-05-16 10:30:00 |
+| **Ended** | 2026-05-16 11:15:00 |
+| **Persona** | developer |
+| **Scenarios Claimed** | S011, S012, S015 |
+| **Scenarios Completed** | S011, S012, S015, ad-hoc (time_range verification) |
+| **Findings Filed** | F20260516-001 ~ F20260516-009 (9 findings) |
+| **Status** | COMPLETED |
+
+### Summary
+以 Agent 开发者视角执行了 S011（边界输入）、S012（已知缺陷验证）、S015（一致性测试）和 ad-hoc 时间范围验证。核心发现：(1) **event_type 过滤完全无效**——debt_default 仅 1/20 匹配，债务违约 0/20 匹配（CRITICAL，Defect #2 仍存在）；(2) **time_range 过滤完全无效**——2025 年和 2026 年 4 月返回完全相同的结果集（CRITICAL，Defect #5 仍存在）；(3) **负数和零 top-k 无验证**——top-k=-1 返回全部结果，top-k=0 返回 total_count=60 但 KU=0 的不一致状态（MEDIUM）；(4) **hops=5 导致无限挂起**——无超时保护（HIGH）；(5) **非存在实体 BM25 回退返回 118 条无关结果无警告**（HIGH）。积极发现：S015 一致性测试通过（完全确定性结果）；Defect #1（实体硬门）已修复（BM25 回退生效）；Defect #9（非主实体 Cluster）已修复。

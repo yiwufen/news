@@ -1,13 +1,15 @@
 """Golden Test Suite for Entity Resolution.
 
-Covers precision (must NOT merge), recall (must merge), and normalization.
-Architecture reference: docs/design-issues/entity-resolution-impl-plan.md
+Covers precision (must NOT merge), recall (must merge), normalization,
+embedding disambiguation, and description generation.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -15,6 +17,7 @@ from src.entities import (
     Entity,
     EntityRepository,
     EntityResolver,
+    _cosine_similarity,
     _infer_entity_type,
     normalize_entity_name,
 )
@@ -29,6 +32,7 @@ def _make_entity(
     entity_type: str = "Company",
     aliases: list[str] | None = None,
     identifiers: dict[str, str] | None = None,
+    description: str | None = None,
 ) -> Entity:
     now = datetime.now(UTC)
     return Entity(
@@ -36,9 +40,83 @@ def _make_entity(
         canonical_name=canonical_name,
         aliases=aliases or [canonical_name],
         identifiers=identifiers or {},
+        description=description,
         created_at=now,
         updated_at=now,
     )
+
+
+def _resolve_with_context(
+    resolver: EntityResolver,
+    mention: str,
+    summary: str = "test",
+    evidence_texts: list[str] | None = None,
+    entity_type: str = "Company",
+    identifiers: dict[str, str] | None = None,
+    entities_cache: dict[str, Entity] | None = None,
+) -> Entity | None:
+    """Resolve a mention with specific KU context for disambiguation testing."""
+    from src.knowledge_base import (
+        EntityRef,
+        EvidenceSpan,
+        KnowledgeUnit,
+        SourceRef,
+        TimeRef,
+    )
+
+    cache = entities_cache if entities_cache is not None else {}
+    unit = KnowledgeUnit(
+        unit_kind="event",
+        unit_type="market_analysis",
+        summary=summary,
+        entities=[
+            EntityRef(
+                mention=mention,
+                entity_type=entity_type,
+                identifiers=identifiers or {},
+            )
+        ],
+        source=SourceRef(doc_id="doc_test", source_name="test"),
+        evidence=[EvidenceSpan(text=t) for t in (evidence_texts or ["test evidence"])],
+        time=TimeRef(published_at=datetime.now(UTC), extracted_at=datetime.now(UTC)),
+    )
+    resolver.resolve_units_with_cache([unit], cache, persist=False)
+    return cache.get(unit.entities[0].entity_id)
+
+
+def _make_mock_embedding_provider(
+    similarities: dict[str, float] | None = None,
+) -> Any:
+    """Create a mock embedding provider that returns predictable vectors.
+
+    similarities: maps text substring → desired cosine similarity with the KU context.
+    Base vector is [1, 0]. Candidate vectors are [score, sqrt(1-score²)] so that
+    cosine similarity equals score exactly.
+    """
+    provider = MagicMock()
+    provider.dim = 2
+
+    _similarities = similarities
+    import math as _math
+
+    def mock_embed(texts: list[str]) -> list[list[float]]:
+        results: list[list[float]] = []
+        if not texts:
+            return results
+        # KU context — unit vector along first axis
+        results.append([1.0, 0.0])
+        for text in texts[1:]:
+            score = 0.3  # default low similarity
+            if _similarities:
+                for key, val in _similarities.items():
+                    if key in text:
+                        score = val
+                        break
+            results.append([score, _math.sqrt(max(0, 1.0 - score * score))])
+        return results
+
+    provider.embed = MagicMock(side_effect=mock_embed)
+    return provider
 
 
 def _resolve_single(
@@ -201,15 +279,9 @@ class TestRecall:
         cache = {existing.entity_id: existing}
 
         resolved = _resolve_single(resolver, "腾讯控股", entities_cache=cache)
-        # normalize('腾讯控股') = '腾讯控股' ≠ normalize('腾讯') = '腾讯'
-        # but SequenceMatcher('腾讯控股', '腾讯') = 0.667 < 0.95
-        # This is a known limitation — compound suffixes like '控股' not in suffix list.
-        # Log result for visibility; current behavior is to NOT merge (conservative).
-        if resolved.entity_id == existing.entity_id:
-            pytest.skip("Merged via SequenceMatcher — acceptable")
-        else:
-            # Expected conservative behavior — document it
-            assert resolved.entity_id != existing.entity_id
+        assert resolved.entity_id == existing.entity_id, (
+            "腾讯控股 must merge into 腾讯 via suffix normalization"
+        )
 
 
 # ===========================================================================
@@ -276,3 +348,153 @@ class TestAliasDedup:
         assert len(norm_set) == len(entity.aliases), (
             f"Duplicate normalized aliases: {entity.aliases}"
         )
+
+
+# ===========================================================================
+# Embedding Disambiguation
+# ===========================================================================
+
+class TestDisambiguation:
+    """Embedding-based disambiguation for same-name entities."""
+
+    def test_single_candidate_no_disambiguation(self, tmp_path: Path):
+        """Single candidate is returned directly without calling embedding."""
+        db_path = str(tmp_path / "test.db")
+        repo = EntityRepository(db_path)
+        provider = _make_mock_embedding_provider()
+        resolver = EntityResolver(repo, embedding_provider=provider)
+
+        existing = _make_entity("腾讯控股")
+        cache = {existing.entity_id: existing}
+
+        result = _resolve_with_context(
+            resolver, "腾讯控股", summary="test", entities_cache=cache,
+        )
+        assert result is not None
+        assert result.entity_id == existing.entity_id
+        provider.embed.assert_not_called()
+
+    def test_no_provider_falls_back_to_first(self, tmp_path: Path):
+        """Without embedding provider, multiple candidates → first one wins."""
+        db_path = str(tmp_path / "test.db")
+        repo = EntityRepository(db_path)
+        resolver = EntityResolver(repo)
+
+        e1 = _make_entity("苹果公司", description="一家美国科技公司")
+        e2 = _make_entity("苹果期货", entity_type="Product", description="农产品期货")
+        # Make both match by sharing the same alias "苹果"
+        e1_updated = _make_entity(
+            "苹果公司", aliases=["苹果公司", "苹果"], description="一家美国科技公司",
+        )
+        cache = {
+            e1_updated.entity_id: e1_updated,
+            e2.entity_id: e2,
+        }
+        # Add e2 with same alias to make both match
+        e2_updated = _make_entity(
+            "苹果期货", entity_type="Product", aliases=["苹果期货", "苹果"],
+            description="农产品期货",
+        )
+        cache = {
+            e1_updated.entity_id: e1_updated,
+            e2_updated.entity_id: e2_updated,
+        }
+
+        result = _resolve_with_context(
+            resolver, "苹果", summary="苹果发布新财报", entities_cache=cache,
+        )
+        assert result is not None
+        # Without disambiguation, should get the first candidate
+        assert result.entity_id in {e1_updated.entity_id, e2_updated.entity_id}
+
+    def test_disambiguation_picks_better_match(self, tmp_path: Path):
+        """With embedding provider, picks the candidate with higher similarity."""
+        db_path = str(tmp_path / "test.db")
+        repo = EntityRepository(db_path)
+        provider = _make_mock_embedding_provider(
+            similarities={"美国科技": 0.85, "农产品期货": 0.2},
+        )
+        resolver = EntityResolver(repo, embedding_provider=provider)
+
+        e1 = _make_entity(
+            "苹果公司", aliases=["苹果公司", "苹果"], description="一家美国科技公司",
+        )
+        e2 = _make_entity(
+            "苹果期货", entity_type="Product", aliases=["苹果期货", "苹果"],
+            description="农产品期货品种",
+        )
+        cache = {e1.entity_id: e1, e2.entity_id: e2}
+
+        result = _resolve_with_context(
+            resolver, "苹果", summary="苹果公司发布Q4财报营收超预期",
+            entities_cache=cache,
+        )
+        assert result is not None
+        assert result.entity_id == e1.entity_id, (
+            "Should disambiguate to 苹果公司 for financial context"
+        )
+
+    def test_disambiguation_below_threshold_returns_none(self, tmp_path: Path):
+        """Both candidates below threshold → treat as new entity."""
+        db_path = str(tmp_path / "test.db")
+        repo = EntityRepository(db_path)
+        provider = _make_mock_embedding_provider(
+            similarities={"科技公司": 0.1, "期货品种": 0.1},  # both low
+        )
+        resolver = EntityResolver(repo, embedding_provider=provider)
+
+        e1 = _make_entity(
+            "苹果公司", aliases=["苹果"], description="科技公司",
+        )
+        e2 = _make_entity(
+            "苹果期货", entity_type="Product", aliases=["苹果"], description="期货品种",
+        )
+        cache = {e1.entity_id: e1, e2.entity_id: e2}
+
+        result = _resolve_with_context(
+            resolver, "苹果", summary="苹果价格波动", entities_cache=cache,
+        )
+        # Below threshold → None → new entity created
+        assert result is not None
+        assert result.entity_id not in {e1.entity_id, e2.entity_id}, (
+            "Should create new entity when all candidates below threshold"
+        )
+
+    def test_disambiguation_skipped_without_description(self, tmp_path: Path):
+        """If any candidate lacks description, falls back to first candidate."""
+        db_path = str(tmp_path / "test.db")
+        repo = EntityRepository(db_path)
+        provider = _make_mock_embedding_provider()
+        resolver = EntityResolver(repo, embedding_provider=provider)
+
+        e1 = _make_entity("苹果公司", aliases=["苹果"], description="科技公司")
+        e2 = _make_entity(
+            "苹果期货", entity_type="Product", aliases=["苹果"], description=None,
+        )
+        cache = {e1.entity_id: e1, e2.entity_id: e2}
+
+        result = _resolve_with_context(
+            resolver, "苹果", summary="test", entities_cache=cache,
+        )
+        assert result is not None
+        provider.embed.assert_not_called()
+
+
+# ===========================================================================
+# Cosine Similarity
+# ===========================================================================
+
+class TestCosineSimilarity:
+    """Unit tests for the cosine similarity helper."""
+
+    def test_identical_vectors(self):
+        assert abs(_cosine_similarity([1.0, 0.0], [1.0, 0.0]) - 1.0) < 1e-6
+
+    def test_orthogonal_vectors(self):
+        assert abs(_cosine_similarity([1.0, 0.0], [0.0, 1.0])) < 1e-6
+
+    def test_zero_vector(self):
+        assert _cosine_similarity([0.0, 0.0], [1.0, 1.0]) == 0.0
+
+    def test_opposite_vectors(self):
+        assert abs(_cosine_similarity([1.0, 0.0], [-1.0, 0.0]) + 1.0) < 1e-6

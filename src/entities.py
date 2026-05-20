@@ -5,14 +5,34 @@ Standard entity models, repositories, and conservative resolution helpers.
 from __future__ import annotations
 
 import json
+import logging
+import math
 import re
 import sqlite3
 import unicodedata
 from datetime import UTC, datetime
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Iterable, Literal, cast
+from typing import TYPE_CHECKING, Any, Iterable, Literal, cast
 from uuid import uuid4
+
+import math
+
+if TYPE_CHECKING:
+    from src.retrieval.embedding import EmbeddingProvider
+
+logger = logging.getLogger(__name__)
+
+_DISAMBIGUATION_THRESHOLD = 0.5
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
 
 from pydantic import BaseModel, Field
 
@@ -39,6 +59,8 @@ _ENTITY_SUFFIXES = (
     "集团",
     "控股",
     "公司",
+    "先生",
+    "女士",
     "companylimited",
     "colimited",
     "coltd",
@@ -228,16 +250,20 @@ def _strip_separators(value: str) -> str:
 def normalize_entity_name(name: str) -> str:
     """Normalize an entity name for conservative matching.
 
-    Single-pass suffix stripping: removes the longest matching corporate suffix
-    exactly once. Prevents over-stripping (e.g. '控股有限公司' → '' ).
+    Multi-pass suffix stripping: repeatedly removes the longest matching corporate
+    suffix until no more suffixes can be stripped (e.g. '控股股份有限公司' →
+    '控股' stripped, then '股份有限公司' stripped). Always preserves at least
+    one non-suffix character.
     """
-    normalized = _strip_separators(name)
-    if not normalized:
+    current = _strip_separators(name)
+    if not current:
         return ""
-    match = _SUFFIX_PATTERN.search(normalized)
-    if match and match.start() > 0:
-        return normalized[: match.start()]
-    return normalized
+    while True:
+        match = _SUFFIX_PATTERN.search(current)
+        if not match or match.start() == 0:
+            break
+        current = current[: match.start()]
+    return current
 
 
 def build_entity_name_variants(*names: str) -> set[str]:
@@ -356,6 +382,7 @@ class EntityRepository:
         "jd.com": "京东",
         "jd": "京东",
         "pinduoduo": "拼多多",
+        "pdd": "拼多多",
         "didi": "滴滴",
         "huawei": "华为",
         "zte": "中兴通讯",
@@ -372,6 +399,20 @@ class EntityRepository:
         "foxconn": "富士康",
         "tsmc": "台积电",
         "samsung": "三星",
+        "tesla": "特斯拉",
+        "tesla inc": "特斯拉",
+        "tesla motors": "特斯拉",
+        "imf": "国际货币基金组织",
+        "international monetary fund": "国际货币基金组织",
+        "oppo": "欧珀",
+        "pony ma": "马化腾",
+    }
+
+    # Chinese short-name aliases: abbreviated name → canonical full name
+    _CHINESE_SHORT_ALIASES: dict[str, str] = {
+        "宁德": "宁德时代",
+        "辉达": "英伟达",
+        "海思": "华为海思",
     }
 
     def __init__(self, db_path: str = "data/news.db"):
@@ -383,6 +424,22 @@ class EntityRepository:
         connection = sqlite3.connect(self.db_path)
         connection.row_factory = sqlite3.Row
         return connection
+
+    @staticmethod
+    def _ensure_column(
+        connection: sqlite3.Connection,
+        table_name: str,
+        column_name: str,
+        definition: str,
+    ) -> None:
+        columns = {
+            row["name"]
+            for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+        }
+        if column_name not in columns:
+            connection.execute(
+                f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}"
+            )
 
     def _init_table(self) -> None:
         with self._connect() as connection:
@@ -401,6 +458,35 @@ class EntityRepository:
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(canonical_name)"
             )
+            self._ensure_column(connection, "entities", "normalized_name", "TEXT")
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_entities_norm_name ON entities(normalized_name)"
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS entity_aliases (
+                    entity_id TEXT NOT NULL,
+                    normalized_alias TEXT NOT NULL,
+                    PRIMARY KEY (entity_id, normalized_alias)
+                )
+                """
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_entity_aliases_value ON entity_aliases(normalized_alias, entity_id)"
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS entity_identifiers (
+                    entity_id TEXT NOT NULL,
+                    identifier_key TEXT NOT NULL,
+                    identifier_value TEXT NOT NULL,
+                    PRIMARY KEY (entity_id, identifier_key)
+                )
+                """
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_entity_identifiers_lookup ON entity_identifiers(identifier_key, identifier_value, entity_id)"
+            )
             connection.commit()
 
     def save_batch(self, entities: list[Entity]) -> int:
@@ -414,6 +500,7 @@ class EntityRepository:
                 next(iter(entity.identifiers.values()), None),
                 entity.updated_at.isoformat(),
                 json.dumps(entity.model_dump(mode="json"), ensure_ascii=False),
+                normalize_entity_name(entity.canonical_name),
             )
             for entity in entities
         ]
@@ -421,18 +508,51 @@ class EntityRepository:
             connection.executemany(
                 """
                 INSERT INTO entities (
-                    entity_id, canonical_name, entity_type, primary_identifier, updated_at, payload
+                    entity_id, canonical_name, entity_type, primary_identifier,
+                    updated_at, payload, normalized_name
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(entity_id) DO UPDATE SET
                     canonical_name = excluded.canonical_name,
                     entity_type = excluded.entity_type,
                     primary_identifier = excluded.primary_identifier,
                     updated_at = excluded.updated_at,
-                    payload = excluded.payload
+                    payload = excluded.payload,
+                    normalized_name = excluded.normalized_name
                 """,
                 rows,
             )
+            # Maintain alias and identifier index tables
+            entity_ids = [entity.entity_id for entity in entities]
+            placeholders = ", ".join("?" for _ in entity_ids)
+            connection.execute(
+                f"DELETE FROM entity_aliases WHERE entity_id IN ({placeholders})",
+                entity_ids,
+            )
+            connection.execute(
+                f"DELETE FROM entity_identifiers WHERE entity_id IN ({placeholders})",
+                entity_ids,
+            )
+            alias_rows: list[tuple[str, str]] = []
+            ident_rows: list[tuple[str, str, str]] = []
+            for entity in entities:
+                norm_name = normalize_entity_name(entity.canonical_name)
+                for alias in entity.aliases:
+                    norm_alias = normalize_entity_name(alias)
+                    if norm_alias and norm_alias != norm_name:
+                        alias_rows.append((entity.entity_id, norm_alias))
+                for key, value in entity.identifiers.items():
+                    ident_rows.append((entity.entity_id, key, value))
+            if alias_rows:
+                connection.executemany(
+                    "INSERT OR IGNORE INTO entity_aliases (entity_id, normalized_alias) VALUES (?, ?)",
+                    alias_rows,
+                )
+            if ident_rows:
+                connection.executemany(
+                    "INSERT OR IGNORE INTO entity_identifiers (entity_id, identifier_key, identifier_value) VALUES (?, ?, ?)",
+                    ident_rows,
+                )
             connection.commit()
         return len(entities)
 
@@ -455,17 +575,87 @@ class EntityRepository:
             ).fetchall()
         return [Entity.model_validate(json.loads(row["payload"])) for row in rows]
 
+    def _entities_by_normalized_names(
+        self, normalized_names: list[str]
+    ) -> list[Entity]:
+        if not normalized_names:
+            return []
+        placeholders = ", ".join("?" for _ in normalized_names)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"SELECT payload FROM entities WHERE normalized_name IN ({placeholders})",
+                normalized_names,
+            ).fetchall()
+        return [Entity.model_validate(json.loads(row["payload"])) for row in rows]
+
+    def _entities_by_alias(self, normalized_alias: str) -> list[Entity]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT e.payload FROM entities e
+                JOIN entity_aliases a ON e.entity_id = a.entity_id
+                WHERE a.normalized_alias = ?
+                """,
+                (normalized_alias,),
+            ).fetchall()
+        return [Entity.model_validate(json.loads(row["payload"])) for row in rows]
+
+    def _entities_by_identifier(
+        self, key: str, value: str
+    ) -> list[Entity]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT e.payload FROM entities e
+                JOIN entity_identifiers i ON e.entity_id = i.entity_id
+                WHERE i.identifier_key = ? AND i.identifier_value = ?
+                """,
+                (key, value),
+            ).fetchall()
+        return [Entity.model_validate(json.loads(row["payload"])) for row in rows]
+
+    def _entities_by_identifier_value(self, value: str) -> list[Entity]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT DISTINCT e.payload FROM entities e
+                JOIN entity_identifiers i ON e.entity_id = i.entity_id
+                WHERE i.identifier_value = ?
+                """,
+                (value,),
+            ).fetchall()
+        return [Entity.model_validate(json.loads(row["payload"])) for row in rows]
+
+    def _entities_by_normalized_prefix(self, q_lower: str) -> list[Entity]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT payload FROM entities WHERE normalized_name LIKE ?",
+                (f"%{q_lower}%",),
+            ).fetchall()
+        return [Entity.model_validate(json.loads(row["payload"])) for row in rows]
+
+    def _entities_by_normalized_names_and_aliases(
+        self, normalized_names: list[str]
+    ) -> list[Entity]:
+        if not normalized_names:
+            return []
+        seen_ids: set[str] = set()
+        result: list[Entity] = []
+        for e in self._entities_by_normalized_names(normalized_names):
+            if e.entity_id not in seen_ids:
+                seen_ids.add(e.entity_id)
+                result.append(e)
+        for norm in normalized_names:
+            for e in self._entities_by_alias(norm):
+                if e.entity_id not in seen_ids:
+                    seen_ids.add(e.entity_id)
+                    result.append(e)
+        return result
+
     def find_by_names(self, query_names: Iterable[str]) -> list[Entity]:
         names = [name for name in query_names if name.strip()]
         if not names:
             return []
-        candidates = self.get_all()
-
-        # Pre-build identifier reverse lookup: identifier_value → entity
-        identifier_lookup: dict[str, Entity] = {}
-        for entity in candidates:
-            for value in entity.identifiers.values():
-                identifier_lookup[value.lower()] = entity
 
         matched: list[Entity] = []
         matched_ids: set[str] = set()
@@ -473,21 +663,30 @@ class EntityRepository:
         for query_name in names:
             q_lower = query_name.strip().lower()
 
-            # Layer 1: standard name matching (unchanged behavior)
-            for entity in candidates:
+            # Layer 1: standard name matching via normalized_name/alias index
+            layer1_match: Entity | None = None
+            query_variants = list(build_entity_name_variants(query_name))
+            norm_candidates = self._entities_by_normalized_names_and_aliases(
+                query_variants,
+            )
+            for entity in norm_candidates:
                 if entity.entity_id in matched_ids:
                     continue
                 if entity_matches_query_name(
                     [entity.canonical_name, *entity.aliases],
                     query_name,
                 ):
-                    matched.append(entity)
-                    matched_ids.add(entity.entity_id)
+                    layer1_match = entity
+                    break
 
-            # Layer 2: cross-lingual alias → resolve to Chinese name → match again
+            # Layer 2: cross-lingual alias → resolve to Chinese name → match
             chinese_name = self._CROSS_LINGUAL_ALIASES.get(q_lower)
             if chinese_name:
-                for entity in candidates:
+                chinese_variants = list(build_entity_name_variants(chinese_name))
+                cross_candidates = self._entities_by_normalized_names_and_aliases(
+                    chinese_variants,
+                )
+                for entity in cross_candidates:
                     if entity.entity_id in matched_ids:
                         continue
                     if entity_matches_query_name(
@@ -497,20 +696,81 @@ class EntityRepository:
                         matched.append(entity)
                         matched_ids.add(entity.entity_id)
 
+            # Layer 2.5: Chinese short-name alias → resolve to full name
+            short_alias = self._CHINESE_SHORT_ALIASES.get(q_lower)
+            alias_target: Entity | None = None
+            if short_alias:
+                short_variants = list(build_entity_name_variants(short_alias))
+                short_candidates = self._entities_by_normalized_names_and_aliases(
+                    short_variants,
+                )
+                for entity in short_candidates:
+                    if entity.entity_id in matched_ids:
+                        continue
+                    if entity_matches_query_name(
+                        [entity.canonical_name, *entity.aliases],
+                        short_alias,
+                    ):
+                        alias_target = entity
+                        break
+
+            if alias_target is not None:
+                # Prefer alias target if layer-1 match is a low-data entity
+                if layer1_match is not None and len(layer1_match.source_ku_ids) <= 5:
+                    matched.append(alias_target)
+                    matched_ids.add(alias_target.entity_id)
+                elif layer1_match is None:
+                    matched.append(alias_target)
+                    matched_ids.add(alias_target.entity_id)
+                elif layer1_match is not None:
+                    # Both exist; keep layer-1 match (it's a real entity)
+                    matched.append(layer1_match)
+                    matched_ids.add(layer1_match.entity_id)
+            elif layer1_match is not None:
+                matched.append(layer1_match)
+                matched_ids.add(layer1_match.entity_id)
+
             # Layer 3: identifier reverse lookup (ticker, ISIN, etc.)
-            entity_by_id = identifier_lookup.get(q_lower)
-            if entity_by_id and entity_by_id.entity_id not in matched_ids:
-                matched.append(entity_by_id)
-                matched_ids.add(entity_by_id.entity_id)
+            entity_by_id = self._entities_by_identifier_value(q_lower)
+            for e in entity_by_id:
+                if e.entity_id not in matched_ids:
+                    matched.append(e)
+                    matched_ids.add(e.entity_id)
+                    break
+
+            # Layer 4: containment fallback for short names (<= 3 chars)
+            if layer1_match is None and alias_target is None and len(q_lower) <= 3:
+                contained = self._entities_by_normalized_prefix(q_lower)
+                best_contained: Entity | None = None
+                best_ku_count = -1
+                for entity in contained:
+                    if entity.entity_id in matched_ids:
+                        continue
+                    norm = normalize_entity_name(entity.canonical_name)
+                    if q_lower in norm and len(norm) > len(q_lower):
+                        ku_count = len(entity.source_ku_ids)
+                        if ku_count > best_ku_count:
+                            best_ku_count = ku_count
+                            best_contained = entity
+                if best_contained is not None:
+                    matched.append(best_contained)
+                    matched_ids.add(best_contained.entity_id)
 
         return matched
 
 
 class EntityResolver:
-    """Conservative entity resolution."""
+    """Conservative entity resolution with optional embedding-based disambiguation."""
 
-    def __init__(self, repository: EntityRepository):
+    def __init__(
+        self,
+        repository: EntityRepository,
+        embedding_provider: EmbeddingProvider | None = None,
+        description_generator: Any | None = None,
+    ):
         self.repository = repository
+        self._embedding_provider = embedding_provider
+        self._description_generator = description_generator
 
     def resolve_units(
         self,
@@ -555,7 +815,7 @@ class EntityResolver:
 
         for unit in units:
             for entity_ref in unit.entities:
-                matched = self._find_match(
+                candidates = self._find_candidates(
                     entity_ref.mention,
                     entity_ref.identifiers,
                     entities_cache,
@@ -563,13 +823,27 @@ class EntityResolver:
                     name_index,
                     alias_index,
                 )
+                matched = self._select_match(
+                    candidates,
+                    unit_summary=unit.summary,
+                    unit_evidence=[e.text for e in unit.evidence],
+                )
                 if matched is None:
+                    # Use cross-lingual Chinese name as canonical when available
+                    cross_lingual_name = EntityRepository._CROSS_LINGUAL_ALIASES.get(
+                        entity_ref.mention.strip().lower()
+                    )
+                    canonical = cross_lingual_name or entity_ref.mention
+                    initial_aliases = [canonical] if cross_lingual_name else [entity_ref.mention]
+                    if cross_lingual_name and entity_ref.mention not in initial_aliases:
+                        initial_aliases.append(entity_ref.mention)
+
                     matched = Entity(
                         entity_type=_resolve_entity_type(
                             entity_ref.entity_type, entity_ref.mention
                         ),
-                        canonical_name=entity_ref.mention,
-                        aliases=[entity_ref.mention],
+                        canonical_name=canonical,
+                        aliases=initial_aliases,
                         identifiers=dict(entity_ref.identifiers),
                         source_ku_ids=[unit.ku_id],
                         created_at=now,
@@ -580,6 +854,26 @@ class EntityResolver:
                     norm_cache[matched.entity_id] = nk
                     if nk:
                         name_index.setdefault(nk, []).append(matched.entity_id)
+                    for alias in matched.aliases:
+                        ak = normalize_entity_name(alias)
+                        if ak and ak != nk:
+                            alias_index.setdefault(ak, []).append(matched.entity_id)
+                    # Generate description for new entity
+                    if self._description_generator and not matched.description:
+                        try:
+                            desc = self._description_generator.generate(
+                                matched.canonical_name,
+                                matched.entity_type,
+                                matched.identifiers,
+                                [unit.summary],
+                            )
+                            if desc:
+                                matched.description = desc
+                        except Exception as exc:
+                            logger.warning(
+                                "Description generation failed for '%s': %s",
+                                matched.canonical_name, exc,
+                            )
                 else:
                     # Alias dedup: skip if normalized form already present
                     mention_norm = normalize_entity_name(entity_ref.mention)
@@ -607,7 +901,92 @@ class EntityResolver:
             self.repository.save_batch(resolved_entities)
         return units, resolved_entities
 
-    def _find_match(
+    def _select_match(
+        self,
+        candidates: list[Entity],
+        unit_summary: str = "",
+        unit_evidence: list[str] | None = None,
+    ) -> Entity | None:
+        """Select the best entity from candidates.
+
+        For a single candidate, returns it directly. For multiple candidates,
+        uses embedding-based disambiguation if an embedding provider is
+        configured and all candidates have descriptions. Otherwise falls back
+        to the first candidate (highest layer priority).
+        """
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return candidates[0]
+
+        # Multiple candidates: attempt embedding disambiguation
+        if self._embedding_provider is not None:
+            return self._disambiguate(candidates, unit_summary, unit_evidence)
+
+        return candidates[0]
+
+    def _disambiguate(
+        self,
+        candidates: list[Entity],
+        unit_summary: str,
+        unit_evidence: list[str] | None,
+    ) -> Entity | None:
+        """Disambiguate among multiple candidates using embedding similarity."""
+        # Fall back if any candidate lacks a description
+        if any(not c.description for c in candidates):
+            logger.debug(
+                "Disambiguation skipped: some candidates lack descriptions"
+            )
+            return candidates[0]
+
+        # Build context text from KU summary + evidence
+        parts = [unit_summary]
+        if unit_evidence:
+            parts.extend(unit_evidence)
+        ku_context = " ".join(parts)
+
+        if not ku_context.strip():
+            return candidates[0]
+
+        # Build description texts for each candidate
+        candidate_texts = [c.description for c in candidates if c.description]
+
+        # Compute embeddings
+        all_texts = [ku_context] + candidate_texts
+        try:
+            embeddings = self._embedding_provider.embed(all_texts)  # type: ignore[union-attr]
+        except Exception:
+            logger.warning("Embedding failed during disambiguation, falling back")
+            return candidates[0]
+
+        ku_embedding = embeddings[0]
+
+        # Find best candidate by cosine similarity
+        best_idx = 0
+        best_score = -1.0
+        for i, candidate_embedding in enumerate(embeddings[1:]):
+            score = _cosine_similarity(ku_embedding, candidate_embedding)
+            if score > best_score:
+                best_score = score
+                best_idx = i
+
+        if best_score >= _DISAMBIGUATION_THRESHOLD:
+            logger.debug(
+                "Disambiguated '%s' → '%s' (score=%.3f)",
+                candidates[best_idx].canonical_name,
+                candidates[best_idx].canonical_name,
+                best_score,
+            )
+            return candidates[best_idx]
+
+        logger.debug(
+            "Disambiguation: best score %.3f below threshold %.3f, treating as new entity",
+            best_score,
+            _DISAMBIGUATION_THRESHOLD,
+        )
+        return None
+
+    def _find_candidates(
         self,
         mention: str,
         identifiers: dict[str, str],
@@ -615,16 +994,20 @@ class EntityResolver:
         norm_cache: dict[str, str],
         name_index: dict[str, list[str]],
         alias_index: dict[str, list[str]],
-    ) -> Entity | None:
+    ) -> list[Entity]:
+        """Return all candidate entities for a mention, ordered by layer priority."""
         normalized = normalize_entity_name(mention)
+        candidates: dict[str, Entity] = {}
 
-        # Layer 1: identifier exact match (high confidence, no type check)
+        # Layer 1: identifier exact match via entity_identifiers table (indexed)
         if identifiers:
-            for entity in entities_cache.values():
-                if entity.identifiers:
-                    for key, value in identifiers.items():
-                        if entity.identifiers.get(key) == value:
-                            return entity
+            for key, value in identifiers.items():
+                for entity in self.repository._entities_by_identifier(key, value):
+                    if entity.entity_id not in candidates:
+                        if entity.entity_id not in entities_cache:
+                            entities_cache[entity.entity_id] = entity
+                            norm_cache[entity.entity_id] = normalize_entity_name(entity.canonical_name)
+                        candidates[entity.entity_id] = entities_cache[entity.entity_id]
 
         # Layer 1.5: cross-lingual alias → resolve to Chinese name → match
         cross_lingual = EntityRepository._CROSS_LINGUAL_ALIASES.get(
@@ -633,24 +1016,43 @@ class EntityResolver:
         if cross_lingual:
             cross_norm = normalize_entity_name(cross_lingual)
             for eid in name_index.get(cross_norm, []):
-                return entities_cache[eid]
+                if eid not in candidates:
+                    candidates[eid] = entities_cache[eid]
             for eid in alias_index.get(cross_norm, []):
-                return entities_cache[eid]
+                if eid not in candidates:
+                    candidates[eid] = entities_cache[eid]
 
-        # Layer 2: normalized canonical name exact match via index (O(1), no type check)
+        # Layer 1.6: Chinese short-name alias → resolve to full name → match
+        short_alias = EntityRepository._CHINESE_SHORT_ALIASES.get(
+            mention.strip().lower()
+        )
+        if short_alias and not cross_lingual:
+            short_norm = normalize_entity_name(short_alias)
+            for eid in name_index.get(short_norm, []):
+                if eid not in candidates:
+                    candidates[eid] = entities_cache[eid]
+            for eid in alias_index.get(short_norm, []):
+                if eid not in candidates:
+                    candidates[eid] = entities_cache[eid]
+
+        # Layer 2: normalized canonical name exact match via index (O(1))
         for eid in name_index.get(normalized, []):
-            return entities_cache[eid]
+            if eid not in candidates:
+                candidates[eid] = entities_cache[eid]
 
-        # Layer 3: normalized alias exact match via index (O(1), no type check)
+        # Layer 3: normalized alias exact match via index (O(1))
         for eid in alias_index.get(normalized, []):
-            return entities_cache[eid]
+            if eid not in candidates:
+                candidates[eid] = entities_cache[eid]
 
         # Layer 4: SequenceMatcher fuzzy match (type constraint preserved)
         inferred_type = _infer_entity_type(mention)
         for entity in entities_cache.values():
+            if entity.entity_id in candidates:
+                continue
             norm_name = norm_cache[entity.entity_id]
             similarity = SequenceMatcher(None, normalized, norm_name).ratio()
             if similarity >= 0.95 and entity.entity_type == inferred_type:
-                return entity
+                candidates[entity.entity_id] = entity
 
-        return None
+        return list(candidates.values())

@@ -31,6 +31,18 @@ class GraphConnectionLike(Protocol):
 
 
 @dataclass
+class GraphClusterSummary:
+    """Lightweight cluster overview for tier-1 delivery."""
+
+    cluster_id: str
+    title: str
+    cluster_type: str
+    member_count: int
+    neighbor_entity_names: list[str]
+    hit_reasons: list[str]
+
+
+@dataclass
 class GraphRetrievalResult:
     used: bool
     nodes: list[dict[str, Any]] = field(default_factory=list)
@@ -39,6 +51,7 @@ class GraphRetrievalResult:
     summary: dict[str, Any] = field(default_factory=dict)
     expanded_entities: list[Entity] = field(default_factory=list)
     expanded_clusters: list[EventCluster] = field(default_factory=list)
+    cluster_summaries: list[GraphClusterSummary] = field(default_factory=list)
     hit_reasons: dict[str, list[str]] = field(default_factory=dict)
     candidate_count: int = 0
     errors: list[str] = field(default_factory=list)
@@ -52,14 +65,28 @@ class GraphRetrievalResult:
         return len(self.expanded_entities)
 
     def to_graph_dict(self, enabled: bool) -> dict[str, Any]:
-        return {
+        base: dict[str, Any] = {
             "enabled": enabled,
             "used": self.used,
-            "nodes": self.nodes,
-            "edges": self.edges,
-            "paths": self.paths,
             "summary": self.summary,
         }
+        if self.cluster_summaries:
+            base["clusters_overview"] = [
+                {
+                    "cluster_id": s.cluster_id,
+                    "title": s.title,
+                    "cluster_type": s.cluster_type,
+                    "member_count": s.member_count,
+                    "neighbor_entities": s.neighbor_entity_names,
+                    "hit_reasons": s.hit_reasons,
+                }
+                for s in self.cluster_summaries
+            ]
+        if self.nodes or self.edges or self.paths:
+            base["nodes"] = self.nodes
+            base["edges"] = self.edges
+            base["paths"] = self.paths
+        return base
 
     @classmethod
     def empty(
@@ -90,6 +117,27 @@ def _build_summary(
         ],
         "event_cluster_count": len(clusters),
         "expanded_entity_count": len(expanded_entities),
+        "expanded": expanded,
+    }
+
+
+def _build_summary_from_counts(
+    start_entities: list[Entity],
+    *,
+    cluster_count: int,
+    entity_count: int,
+    expanded: bool,
+) -> dict[str, Any]:
+    return {
+        "start_entities": [
+            {
+                "entity_id": entity.entity_id,
+                "name": entity.canonical_name,
+            }
+            for entity in start_entities
+        ],
+        "event_cluster_count": cluster_count,
+        "expanded_entity_count": entity_count,
         "expanded": expanded,
     }
 
@@ -140,6 +188,7 @@ class KnowledgeGraphRetriever:
         structured_query: StructuredQuery,
         *,
         start_entities: list[Entity],
+        summary_only: bool = False,
     ) -> GraphRetrievalResult:
         if not start_entities:
             return GraphRetrievalResult.empty(start_entities=[])
@@ -195,6 +244,15 @@ class KnowledgeGraphRetriever:
             for cluster_id, row in cluster_rows.items()
             if self._matches_filters(row, structured_query)
         ]
+
+        if summary_only:
+            return self._build_summary_result(
+                start_entities=start_entities,
+                cluster_rows=cluster_rows,
+                filtered_cluster_ids=filtered_cluster_ids,
+                candidate_count=candidate_count,
+            )
+
         expanded_clusters = self.cluster_repo.get_by_ids(filtered_cluster_ids)
         cluster_map = {cluster.cluster_id: cluster for cluster in expanded_clusters}
         if not cluster_map:
@@ -244,6 +302,145 @@ class KnowledgeGraphRetriever:
             candidate_count=candidate_count,
         )
 
+    def _build_summary_result(
+        self,
+        *,
+        start_entities: list[Entity],
+        cluster_rows: dict[str, dict[str, Any]],
+        filtered_cluster_ids: list[str],
+        candidate_count: int,
+    ) -> GraphRetrievalResult:
+        """Build a lightweight result with cluster summaries instead of full objects."""
+        start_ids = {entity.entity_id for entity in start_entities}
+        neighbor_ids_per_cluster: dict[str, set[str]] = {}
+
+        for cluster_id in filtered_cluster_ids:
+            neighbor_ids_per_cluster[cluster_id] = {
+                nid
+                for nid in cluster_rows[cluster_id]["neighbor_entity_ids"]
+                if nid and nid not in start_ids
+            }
+
+        all_neighbor_ids = sorted(
+            {nid for ids in neighbor_ids_per_cluster.values() for nid in ids}
+        )
+        neighbor_names = self._resolve_entity_names(all_neighbor_ids)
+
+        summaries: list[GraphClusterSummary] = []
+        hit_reasons: dict[str, list[str]] = {}
+
+        for cluster_id in filtered_cluster_ids:
+            row = cluster_rows[cluster_id]
+            neighbor_names_for_cluster = sorted(
+                neighbor_names.get(nid, nid)
+                for nid in neighbor_ids_per_cluster[cluster_id]
+            )
+            seed_reasons = sorted(
+                f"seed_entity:{e.canonical_name}"
+                for e in start_entities
+                if e.entity_id in row["start_entity_ids"]
+            )
+            summaries.append(
+                GraphClusterSummary(
+                    cluster_id=cluster_id,
+                    title=row.get("cluster_title", ""),
+                    cluster_type=row.get("cluster_type", ""),
+                    member_count=row.get("member_count", 0),
+                    neighbor_entity_names=neighbor_names_for_cluster,
+                    hit_reasons=seed_reasons,
+                )
+            )
+            hit_reasons[cluster_id] = seed_reasons
+
+        return GraphRetrievalResult(
+            used=True,
+            cluster_summaries=summaries,
+            summary=_build_summary_from_counts(
+                start_entities,
+                cluster_count=len(filtered_cluster_ids),
+                entity_count=len(all_neighbor_ids),
+                expanded=bool(filtered_cluster_ids),
+            ),
+            hit_reasons=hit_reasons,
+            candidate_count=candidate_count,
+        )
+
+    def expand_clusters(
+        self,
+        cluster_ids: list[str],
+        *,
+        start_entities: list[Entity] | None = None,
+    ) -> GraphRetrievalResult:
+        """Load full details for specific clusters (Tier-2 expansion)."""
+        if not cluster_ids:
+            return GraphRetrievalResult(
+                used=True,
+                candidate_count=0,
+                summary=_build_summary(start_entities or [], [], [], expanded=False),
+            )
+
+        expanded_clusters = self.cluster_repo.get_by_ids(cluster_ids)
+        cluster_map = {c.cluster_id: c for c in expanded_clusters}
+
+        if not cluster_map:
+            return GraphRetrievalResult(
+                used=True,
+                candidate_count=0,
+                summary=_build_summary(start_entities or [], [], [], expanded=False),
+            )
+
+        all_entity_ids: set[str] = set()
+        for cluster in expanded_clusters:
+            all_entity_ids.update(cluster.entity_ids)
+
+        start_ids = {e.entity_id for e in (start_entities or [])}
+        neighbor_ids = sorted(all_entity_ids - start_ids)
+        expanded_entities = self.entity_repo.get_by_ids(neighbor_ids)
+        expanded_entity_map = {e.entity_id: e for e in expanded_entities}
+        start_entity_map = {e.entity_id: e for e in (start_entities or [])}
+
+        cluster_rows = {
+            c.cluster_id: {
+                "start_entity_ids": {eid for eid in c.entity_ids if eid in start_ids},
+                "neighbor_entity_ids": {eid for eid in c.entity_ids if eid not in start_ids},
+            }
+            for c in expanded_clusters
+        }
+
+        nodes = self._build_nodes(start_entities or [], expanded_clusters, expanded_entities)
+        edges = self._build_edges(cluster_rows, list(cluster_map.keys()), start_entity_map, expanded_entity_map)
+        paths, hit_reasons = self._build_paths(
+            cluster_rows,
+            list(cluster_map.keys()),
+            start_entities=start_entities or [],
+            expanded_clusters=cluster_map,
+            expanded_entities=expanded_entity_map,
+        )
+
+        return GraphRetrievalResult(
+            used=True,
+            nodes=nodes,
+            edges=edges,
+            paths=paths,
+            summary=_build_summary(
+                start_entities or [],
+                list(cluster_map.values()),
+                expanded_entities,
+                expanded=True,
+            ),
+            expanded_entities=expanded_entities,
+            expanded_clusters=list(cluster_map.values()),
+            hit_reasons=hit_reasons,
+            candidate_count=len(expanded_clusters),
+        )
+
+    def _resolve_entity_names(self, entity_ids: list[str]) -> dict[str, str]:
+        """Resolve entity IDs to names without loading full objects."""
+        if not entity_ids:
+            return {}
+        entities = self.entity_repo.get_by_ids(entity_ids)
+        return {e.entity_id: e.canonical_name for e in entities}
+
     def _group_cluster_rows(self, records: list[Any]) -> dict[str, dict[str, Any]]:
         grouped: dict[str, dict[str, Any]] = {}
         for record in records:
@@ -256,6 +453,8 @@ class KnowledgeGraphRetriever:
                     "start_entity_ids": set(),
                     "neighbor_entity_ids": set(),
                     "cluster_type": record["cluster_type"],
+                    "cluster_title": record.get("cluster_title"),
+                    "member_count": record.get("member_count", 0),
                     "time_range_json": record["time_range_json"],
                 },
             )

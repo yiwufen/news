@@ -2,11 +2,11 @@
   "precision": 1.0,
   "recall": 1.0,
   "f1": 1.0,
-  "true_positives": 7,
+  "true_positives": 39,
   "false_negatives": 0,
-  "true_negatives": 246,
+  "true_negatives": 2106,
   "false_positives": 0,
-  "total_pairs": 253,
+  "total_pairs": 2145,
   "errors": [],
-  "timestamp": "2026-05-14T04:58:54.271773+00:00"
+  "timestamp": "2026-05-20T04:55:03.838184+00:00"
 }

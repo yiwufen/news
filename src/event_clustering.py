@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -97,6 +98,10 @@ def _cluster_date_bounds(cluster: EventCluster) -> tuple[date, date] | None:
         return None
     anchor = cluster.time_anchor.date() if isinstance(cluster.time_anchor, datetime) else cluster.time_anchor
     return anchor, anchor
+
+
+def _hash_entity_ids(sorted_ids: list[str]) -> str:
+    return hashlib.sha256("|".join(sorted(sorted_ids)).encode()).hexdigest()[:32]
 
 
 def _explicit_event_date(unit: KnowledgeUnit) -> str | None:
@@ -297,6 +302,22 @@ class EventClusterRepository:
         connection.row_factory = sqlite3.Row
         return connection
 
+    @staticmethod
+    def _ensure_column(
+        connection: sqlite3.Connection,
+        table_name: str,
+        column_name: str,
+        definition: str,
+    ) -> None:
+        columns = {
+            row["name"]
+            for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+        }
+        if column_name not in columns:
+            connection.execute(
+                f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}"
+            )
+
     def _init_table(self) -> None:
         with self._connect() as connection:
             connection.execute(
@@ -314,6 +335,21 @@ class EventClusterRepository:
             )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_event_clusters_type ON event_clusters(cluster_type)"
+            )
+            self._ensure_column(connection, "event_clusters", "entity_set_hash", "TEXT")
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS cluster_entity_map (
+                    entity_id TEXT NOT NULL,
+                    cluster_id TEXT NOT NULL,
+                    cluster_type TEXT NOT NULL,
+                    entity_set_hash TEXT NOT NULL,
+                    PRIMARY KEY (entity_id, cluster_id)
+                )
+                """
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_cluster_entity_map_lookup ON cluster_entity_map(cluster_type, entity_set_hash, cluster_id)"
             )
             connection.commit()
 
@@ -375,6 +411,7 @@ class EventClusterRepository:
                 cluster.conflict_status,
                 cluster.updated_at.isoformat(),
                 json.dumps(cluster.model_dump(mode="json"), ensure_ascii=False),
+                _hash_entity_ids(sorted(cluster.entity_ids)),
             )
             for cluster in clusters
         ]
@@ -383,19 +420,38 @@ class EventClusterRepository:
                 """
                 INSERT INTO event_clusters (
                     cluster_id, cluster_type, primary_entity_id, time_anchor,
-                    conflict_status, updated_at, payload
+                    conflict_status, updated_at, payload, entity_set_hash
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(cluster_id) DO UPDATE SET
                     cluster_type = excluded.cluster_type,
                     primary_entity_id = excluded.primary_entity_id,
                     time_anchor = excluded.time_anchor,
                     conflict_status = excluded.conflict_status,
                     updated_at = excluded.updated_at,
-                    payload = excluded.payload
+                    payload = excluded.payload,
+                    entity_set_hash = excluded.entity_set_hash
                 """,
                 rows,
             )
+            # Maintain cluster_entity_map index table
+            cluster_ids = [c.cluster_id for c in clusters]
+            placeholders = ", ".join("?" for _ in cluster_ids)
+            connection.execute(
+                f"DELETE FROM cluster_entity_map WHERE cluster_id IN ({placeholders})",
+                cluster_ids,
+            )
+            map_rows: list[tuple[str, str, str, str]] = []
+            for cluster in clusters:
+                sorted_ids = sorted(cluster.entity_ids)
+                entity_hash = _hash_entity_ids(sorted_ids)
+                for eid in sorted_ids:
+                    map_rows.append((eid, cluster.cluster_id, cluster.cluster_type, entity_hash))
+            if map_rows:
+                connection.executemany(
+                    "INSERT OR IGNORE INTO cluster_entity_map (entity_id, cluster_id, cluster_type, entity_set_hash) VALUES (?, ?, ?, ?)",
+                    map_rows,
+                )
             connection.commit()
         return len(clusters)
 
@@ -416,6 +472,29 @@ class EventClusterRepository:
                 list(cluster_ids),
             ).fetchall()
         return self._load_clusters_from_rows(rows)
+
+    def _find_matching_clusters(
+        self,
+        entity_ids: list[str],
+        cluster_type: str,
+    ) -> list[EventCluster]:
+        """Find clusters with exactly matching entity set and type, using hash index."""
+        if not entity_ids:
+            return []
+        sorted_ids = sorted(entity_ids)
+        entity_hash = _hash_entity_ids(sorted_ids)
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT DISTINCT ec.payload FROM event_clusters ec
+                JOIN cluster_entity_map cem ON ec.cluster_id = cem.cluster_id
+                WHERE cem.cluster_type = ? AND cem.entity_set_hash = ?
+                """,
+                (cluster_type, entity_hash),
+            ).fetchall()
+        clusters = self._load_clusters_from_rows(rows)
+        # Verify exact entity set match (hash collision protection)
+        return [c for c in clusters if sorted(c.entity_ids) == sorted_ids]
 
     def find_related(
         self,
@@ -541,11 +620,22 @@ class EventClusterer:
         unit_anchor = _anchor_date(unit)
         normalized_summary = _normalize_summary(unit.summary)
 
+        # Use hash-based SQL lookup instead of iterating all clusters
+        candidates = self.repository._find_matching_clusters(
+            unit_entity_ids, unit.unit_type,
+        )
+
+        # Also check in-memory clusters not yet persisted to DB
         for cluster in clusters:
             if cluster.cluster_type != unit.unit_type:
                 continue
             if sorted(cluster.entity_ids) != unit_entity_ids:
                 continue
+            if not any(c.cluster_id == cluster.cluster_id for c in candidates):
+                candidates.append(cluster)
+
+        for cluster in candidates:
+            # Entity set already verified by _find_matching_clusters or inline check
             cluster_bounds = _cluster_date_bounds(cluster)
             if cluster_bounds is None:
                 continue

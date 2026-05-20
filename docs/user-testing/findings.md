@@ -1482,3 +1482,292 @@ PYTHONIOENCODING=utf-8 uv run knowledge-cli search --entities "宁德时代" "�
 
 ### Impact
 MEDIUM。对比 F20260509-010（宁德时代:比亚迪 = 20:0），当前 15:5 是显著改善。coverage_bonus 策略生效。但 0 条 KU 同时提及两个实体意味着系统无法找到两者的直接关联信息，对比分析仍然只是"并列展示"而非"对比分析"。
+
+## F20260516-001
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-16 |
+| **Session** | ut-developer-20260516-103000 |
+| **Persona** | developer |
+| **Scenario** | S011 |
+| **Severity** | MEDIUM |
+| **Category** | schema |
+| **Status** | OPEN |
+| **Related Defect** | - |
+
+### Summary
+top-k=0 返回不一致结果：total_count=60 但 knowledge_units=[]，同时 entities 仍被返回（1个）。程序化调用者无法区分"top-k=0故不返回KU"和"确实无结果"。
+
+### Reproduction
+```
+uv run knowledge-cli search --entities "小米集团" --top-k 0
+```
+返回: total_count=60, knowledge_units=[], entities=[1个], errors=[], warnings=[]
+
+### Expected Behavior
+top-k=0 应该被验证为无效输入并返回明确的错误/警告（如 "INVALID_TOP_K: top-k must be >= 1"），或返回 total_count=0。不应返回 total_count=60 但 KU 为空的不一致状态。
+
+### Impact
+作为 Agent 开发者，我依赖 total_count 判断是否有数据。top-k=0 时 total_count=60 会让我误以为有数据可获取，导致逻辑错误。
+
+---
+
+## F20260516-002
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-16 |
+| **Session** | ut-developer-20260516-103000 |
+| **Persona** | developer |
+| **Scenario** | S011 |
+| **Severity** | MEDIUM |
+| **Category** | error-handling |
+| **Status** | OPEN |
+| **Related Defect** | - |
+
+### Summary
+负数 top-k（如 -1）被静默接受并等同于"无限制"——返回全部 59 条 KU。无任何输入验证或警告。
+
+### Reproduction
+```
+uv run knowledge-cli search --entities "小米集团" --top-k -1
+```
+返回: total_count=60, knowledge_units=[59条], errors=[], warnings=[]
+
+### Expected Behavior
+负数 top-k 应触发输入验证错误（如 "INVALID_TOP_K: top-k must be >= 1"），或至少在 warnings 中提示。不应静默忽略并返回全部结果。
+
+### Impact
+API 集成中如果 top-k 参数计算错误为负数，系统会返回大量非预期结果，消耗不必要的带宽和计算资源。
+
+---
+
+## F20260516-003
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-16 |
+| **Session** | ut-developer-20260516-103000 |
+| **Persona** | developer |
+| **Scenario** | S011 |
+| **Severity** | HIGH |
+| **Category** | error-handling |
+| **Status** | OPEN |
+| **Related Defect** | #12 |
+
+### Summary
+--hops 5 导致命令无限挂起（>4分钟无响应），必须手动终止。无超时保护。
+
+### Reproduction
+```
+uv run knowledge-cli search --entities "小米集团" --hops 5
+```
+命令运行 >4 分钟无输出，必须 kill 进程。
+
+### Expected Behavior
+系统应对 hops 值有上限约束（如 max 3），或对图遍历设置全局超时（如 30 秒）。极高的 hops 值不应导致无限遍历。
+
+### Impact
+Agent 集成中如果自动设置了高 hops 值，会导致请求永久挂起，阻塞调用链。无超时保护意味着无法恢复。
+
+---
+
+## F20260516-004
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-16 |
+| **Session** | ut-developer-20260516-103000 |
+| **Persona** | developer |
+| **Scenario** | S011 |
+| **Severity** | LOW |
+| **Category** | ux |
+| **Status** | OPEN |
+| **Related Defect** | - |
+
+### Summary
+不带 --entities 参数调用 search 返回空结果且无任何警告/错误提示，而 --entities "" 有 ENTITY_NOT_FOUND 和 NO_RESULTS 警告。行为不一致。
+
+### Reproduction
+```
+uv run knowledge-cli search          # entities=[], warnings=[], errors=[]
+uv run knowledge-cli search --entities ""  # entities=[""], warnings=[ENTITY_NOT_FOUND, NO_RESULTS]
+```
+
+### Expected Behavior
+两者都应给出一致的提示。不带 --entities 参数时应有 "NO_ENTITIES_PROVIDED" 警告。
+
+### Impact
+开发者可能不带 entities 参数调用并困惑于无结果且无提示。
+
+---
+
+## F20260516-005
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-16 |
+| **Session** | ut-developer-20260516-103000 |
+| **Persona** | developer |
+| **Scenario** | S012 |
+| **Severity** | CRITICAL |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #2 |
+
+### Summary
+event_types 过滤完全无效。请求 debt_default 过滤返回 20 条 KU 中仅 1 条匹配；请求"债务违约"返回 20 条 KU 中 0 条匹配。过滤值被记录在 applied_filters 中但实际未生效。
+
+### Reproduction
+```
+uv run knowledge-cli search --entities "恒大集团" --event-types "debt_default"
+```
+返回 total_count=61, KU=20, 其中仅 1 条 unit_type="debt_default"（1/20=5%）
+
+```
+uv run knowledge-cli search --entities "恒大集团" --event-types "债务违约"
+```
+返回 total_count=60, KU=20, 其中 0 条 unit_type 含"违约"（0/20=0%）
+
+### Expected Behavior
+event_types 过滤应只返回 unit_type 匹配的 KU。debt_default 过滤应全部返回 debt_default 类型。
+
+### Impact
+分析师依赖事件类型过滤缩小范围，但结果完全不受过滤影响，等同于无过滤。Agent 集成中带 event_types 参数的调用全部无效。确认 Defect #2 仍然存在。
+
+---
+
+## F20260516-006
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-16 |
+| **Session** | ut-developer-20260516-103000 |
+| **Persona** | developer |
+| **Scenario** | S012 (ad-hoc) |
+| **Severity** | CRITICAL |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #5 |
+
+### Summary
+time_range 过滤完全无效。查询 2025 年和 2026 年 4 月的小米集团数据返回完全相同的结果集（相同 KU ID、相同排序、相同日期）。
+
+### Reproduction
+```
+uv run knowledge-cli search --entities "小米集团" --time-range "2026-04-01:2026-04-30"
+```
+返回 total_count=60, KU=20
+
+```
+uv run knowledge-cli search --entities "小米集团" --time-range "2025-01-01:2025-12-31"
+```
+返回 total_count=60, KU=20 — **与 2026-04 完全相同**，包括同一 KU ID 和排序。
+
+Top 3 KU 两组完全一致:
+1. ku_f5868c0f8b8f257f: event_time=2026-04-09 (2026年数据出现在2025年查询中)
+2. ku_363e499517c66118: event_time=None
+3. ku_e6fd9ace2076c7d6: event_time=2026-04-13
+
+### Expected Behavior
+time_range 应过滤掉不在指定时间范围内的 KU。2025 年查询不应返回 2026 年的数据。
+
+### Impact
+时间线查询和时间范围过滤完全不可用。分析师无法按时间缩小范围，Agent 无法实现时间维度的数据切片。与 F20260510-004 和 F20260511-003 一致，持续未修复。
+
+---
+
+## F20260516-007
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-16 |
+| **Session** | ut-developer-20260516-103000 |
+| **Persona** | developer |
+| **Scenario** | S012 |
+| **Severity** | HIGH |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #1, #3 |
+
+### Summary
+搜索完全虚构的实体"不存在公司XYZ123"，BM25 回退返回 118 条结果（top 20 中全是无关内容），且无任何警告提示"实体未找到"。对比 --entities "" 会给出 ENTITY_NOT_FOUND 警告。
+
+### Reproduction
+```
+uv run knowledge-cli search --entities "不存在公司XYZ123"
+```
+返回 total_count=118, KU=20, matched_entity_ids=[], warnings=[], errors=[]
+
+Top 3 KU 完全无关:
+1. ku_ae64c071e007526d: 公司关于股东实际控制人... (璟鸿科技)
+2. ku_41d291baecea2ae7: *ST黑猫股票... (ST黑猫)
+3. ku_49e13a929ec0d362: 苏州新海宜... (新海宜)
+
+### Expected Behavior
+当实体未找到且 BM25 回退结果明显不相关时，应有警告 "ENTITY_NOT_FOUND" 和/或 "LOW_RELEVANCE_RESULTS"。total_count=118 给人虚假的"找到很多结果"印象。
+
+### Impact
+Agent 集成中如果依赖 total_count > 0 判断查询成功，会被 118 条完全无关的结果误导。与 --entities "" 的行为（有警告）不一致。
+
+---
+
+## F20260516-008
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-16 |
+| **Session** | ut-developer-20260516-103000 |
+| **Persona** | developer |
+| **Scenario** | S011, S012 |
+| **Severity** | MEDIUM |
+| **Category** | error-handling |
+| **Status** | OPEN |
+| **Related Defect** | #12 |
+
+### Summary
+Neo4j 在每次查询中发出警告：property `primary_entity_id` does not exist in database。这是代码中使用的属性名与 Neo4j 数据库 schema 不匹配。
+
+### Reproduction
+每次带图谱的查询都会在 stderr 输出:
+```
+warn: property key does not exist. The property `primary_entity_id` does not exist in database `neo4j`.
+```
+对应 Cypher 查询中的 `cluster.primary_entity_id AS cluster_primary_entity_id`。
+
+### Expected Behavior
+Neo4j schema 应与代码预期一致，或代码应处理属性不存在的情况。
+
+### Impact
+(1) stderr 被大量重复警告污染，影响日志监控。(2) 图谱查询中 primary_entity_id 始终为 null，可能影响 cluster 补全逻辑。(3) 代码与 schema 不同步表明图谱功能有遗留问题。
+
+---
+
+## F20260516-009
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-16 |
+| **Session** | ut-developer-20260516-103000 |
+| **Persona** | developer |
+| **Scenario** | S011, S012 |
+| **Severity** | MEDIUM |
+| **Category** | output-quality |
+| **Status** | OPEN |
+| **Related Defect** | - |
+
+### Summary
+jieba 分词器初始化日志输出到 stdout（而非 stderr），污染 JSON 输出。输出中混合了 "Building prefix dict..."、"Loading model..."、"Prefix dict has been built successfully." 等消息。
+
+### Reproduction
+```
+uv run knowledge-cli search --entities "不存在公司XYZ123" 2>/dev/null
+```
+输出前 4 行为 jieba 日志，后跟 JSON。
+
+### Expected Behavior
+库加载日志应输出到 stderr，或完全抑制（使用 logging 模块而非 print）。stdout 应仅包含 JSON 结果。
+
+### Impact
+Agent 集成中 pipe stdout 到 JSON parser 会因混合内容而解析失败。必须额外的文本过滤步骤才能正确解析输出。

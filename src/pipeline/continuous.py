@@ -97,7 +97,13 @@ class ContinuousPipeline:
         )
         self.log_repo = KnowledgeProcessingLogRepository(db_path)
         self.extractor = extractor or KnowledgeExtractor()
-        self.entity_resolver = EntityResolver(self.entity_repo)
+        self._embedding_provider = self._try_create_embedding_provider()
+        self._description_generator = self._try_create_description_generator()
+        self.entity_resolver = EntityResolver(
+            self.entity_repo,
+            embedding_provider=self._embedding_provider,
+            description_generator=self._description_generator,
+        )
         self.clusterer = EventClusterer(
             self.cluster_repo,
             knowledge_units=self.knowledge_units,
@@ -107,6 +113,26 @@ class ContinuousPipeline:
             self.knowledge_units,
         )
         logger.info(f"ContinuousPipeline initialized (batch_size={batch_size}, graph_enabled={graph_enabled}, incremental={incremental})")
+
+    @staticmethod
+    def _try_create_embedding_provider():
+        """Attempt to create an embedding provider. Returns None on failure."""
+        try:
+            from src.retrieval.embedding import OpenAICompatEmbedding
+            return OpenAICompatEmbedding()
+        except Exception:
+            logger.info("Entity disambiguation disabled (no embedding config)")
+            return None
+
+    @staticmethod
+    def _try_create_description_generator():
+        """Attempt to create an entity description generator. Returns None on failure."""
+        try:
+            from src.entity_description import EntityDescriptionGenerator
+            return EntityDescriptionGenerator(enable=True)
+        except Exception:
+            logger.info("Entity description generation disabled")
+            return None
 
     def run(
         self,
@@ -130,14 +156,12 @@ class ContinuousPipeline:
             batch_count += 1
             logger.debug(f"Processing batch {batch_count} with {len(batch)} documents")
 
-            # Batch 初始化：加载全量缓存
+            # Batch 初始化：加载全量实体缓存（resolve_units 需要）
             context = BatchProcessingContext(
                 entities_cache={
                     entity.entity_id: entity for entity in self.entity_repo.get_all()
                 },
-                clusters_cache={
-                    cluster.cluster_id: cluster for cluster in self.cluster_repo.get_all()
-                },
+                clusters_cache={},  # _find_cluster 改为查 DB，无需预加载
             )
 
             # 文档级独立处理

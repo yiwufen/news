@@ -252,6 +252,11 @@ class KnowledgeExtractor:
                     self._normalize_unit_payload_time(unit, context)
                     for unit in units_payload
                 ]
+                # Normalize unit_type to canonical vocabulary
+                from src.schemas.enums import normalize_unit_type
+                for unit in normalized_units_payload:
+                    if isinstance(unit, dict) and "unit_type" in unit:
+                        unit["unit_type"] = normalize_unit_type(unit["unit_type"]).value
                 return [
                     KnowledgeUnit.model_validate(unit)
                     for unit in normalized_units_payload
