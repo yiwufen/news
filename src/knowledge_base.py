@@ -89,8 +89,18 @@ class EvidenceSpan(BaseModel):
         return text
 
 
-# Time resolution types for event_time standardization
-TimeResolutionType = Literal["absolute", "relative", "fuzzy", "unresolved"]
+# Time resolution types for event_time
+TimeResolutionType = Literal["explicit", "contextual", "unresolved"]
+TimeGrain = Literal["day", "month", "quarter", "year"]
+
+_VALID_RESOLUTIONS: frozenset[str] = frozenset(TimeResolutionType.__args__)
+
+# Legacy-to-new resolution type mapping
+_LEGACY_RESOLUTION_MAP: dict[str, TimeResolutionType] = {
+    "absolute": "explicit",
+    "relative": "contextual",
+    "fuzzy": "contextual",
+}
 
 
 class TimeRef(BaseModel):
@@ -99,9 +109,17 @@ class TimeRef(BaseModel):
     event_time: datetime | None = None
     published_at: datetime
     extracted_at: datetime
-    # Time normalization metadata
     event_time_resolution: TimeResolutionType | None = None
-    raw_event_time_expression: str | None = None
+    time_grain: TimeGrain = "day"
+
+    @field_validator("event_time_resolution", mode="before")
+    @classmethod
+    def _normalize_resolution(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        if v in _VALID_RESOLUTIONS:
+            return v
+        return _LEGACY_RESOLUTION_MAP.get(v, "unresolved")
 
 
 class RelationHint(BaseModel):

@@ -350,7 +350,6 @@ uv run pyright .        # Type check (0 errors)
 
 ## Documentation
 
-- [PROGRESS.md](PROGRESS.md) — Development progress & migration history
 - [docs/SHARED_RULES.md](docs/SHARED_RULES.md) — Project authority & guardrails
 - [CLAUDE.md](CLAUDE.md) — Claude Code entry point
 

@@ -110,3 +110,18 @@
 
 ### Summary
 以 Agent 开发者视角执行了 S011（边界输入）、S012（已知缺陷验证）、S015（一致性测试）和 ad-hoc 时间范围验证。核心发现：(1) **event_type 过滤完全无效**——debt_default 仅 1/20 匹配，债务违约 0/20 匹配（CRITICAL，Defect #2 仍存在）；(2) **time_range 过滤完全无效**——2025 年和 2026 年 4 月返回完全相同的结果集（CRITICAL，Defect #5 仍存在）；(3) **负数和零 top-k 无验证**——top-k=-1 返回全部结果，top-k=0 返回 total_count=60 但 KU=0 的不一致状态（MEDIUM）；(4) **hops=5 导致无限挂起**——无超时保护（HIGH）；(5) **非存在实体 BM25 回退返回 118 条无关结果无警告**（HIGH）。积极发现：S015 一致性测试通过（完全确定性结果）；Defect #1（实体硬门）已修复（BM25 回退生效）；Defect #9（非主实体 Cluster）已修复。
+
+## Session: ut-casual-20260520-143848
+
+| Field | Value |
+|-------|-------|
+| **Started** | 2026-05-20 14:38:48 |
+| **Ended** | 2026-05-20 14:54:15 |
+| **Persona** | casual |
+| **Scenarios Claimed** | S001, S004, S006, S007, S013 |
+| **Scenarios Completed** | S001, S004, S006, S007, S013 |
+| **Findings Filed** | F20260520-001 ~ F20260520-005 (5 findings) |
+| **Status** | COMPLETED |
+
+### Summary
+以 casual 商务读者（P3）视角执行 5 个场景测试，同时进行 ad-hoc 话题探索。核心发现：(1) **Defect #5（时间过滤）已修复**——不同时间范围正确返回不同结果子集，之前完全无效的时间范围现在精确生效（CRITICAL→FIXED）；(2) **BYD 英文别名已修复**——从 0 条改善到 64 条高相关结果；(3) **BM25 回退对话题搜索显著改善**——"量化交易"、"供应链金融"、"芯片制裁"、"光刻"均从 0 条变为有结果；(4) **"海思"短 token 碰撞问题未改善**——仍 0/20 条华为海思相关。6 条评分记录：整体平均 3.1 分（Relevance 3.3, Info Density 2.8, Redundancy 3.5, Temporal 2.8），比历史平均 2.1 有明显提升。

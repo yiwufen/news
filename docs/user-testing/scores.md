@@ -8,6 +8,178 @@
 
 <!-- 在此行下方追加新评分记录 -->
 
+## Q20260520-001
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-20 |
+| **Session** | ut-casual-20260520-143848 |
+| **Scenario** | S001 |
+| **Query** | `knowledge-cli search --entities "小米集团"` |
+| **Intent** | ENTITY_OVERVIEW |
+| **Result Count** | 60 |
+| **Relevance** | 4 |
+| **Info Density** | 3 |
+| **Redundancy** | 4 |
+| **Temporal** | 3 |
+| **Overall** | 3.5 |
+
+### Scoring Rationale
+- **Relevance**: 4 — 多数结果与小米集团高度相关（股价、法务、产品、辟谣等），KU16 "小雨智造" 与小米无关但不严重
+- **Info Density**: 3 — KU 包含实体、金额、时间等要素，但部分 KU 过于简略（如"小米米粉俱乐部是面向用户建立的组织"信息量低）
+- **Redundancy**: 4 — 20 个唯一 cluster/20 条 KU，无重复事件占满 top-K 问题
+- **Temporal**: 3 — event_time 缺失率 25%（5/20），比之前 54% 显著改善但仍有缺失
+
+### Top 3 Results Summary
+1. ku_f5868c0f8b8f257f: 小米集团股价下跌超过3% (event_time: 2026-04-09)
+2. ku_363e499517c66118: 小米集团涨1.44% (event_time: None)
+3. ku_e6fd9ace2076c7d6: 雷军介绍小米业务布局 (event_time: 2026-04-13)
+
+---
+
+## Q20260520-002
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-20 |
+| **Session** | ut-casual-20260520-143848 |
+| **Scenario** | S006 |
+| **Query** | `knowledge-cli search --entities "BYD" --intent ENTITY_OVERVIEW` |
+| **Intent** | ENTITY_OVERVIEW |
+| **Result Count** | 64 |
+| **Relevance** | 5 |
+| **Info Density** | 3 |
+| **Redundancy** | 4 |
+| **Temporal** | 3 |
+| **Overall** | 3.8 |
+
+### Scoring Rationale
+- **Relevance**: 5 — 英文别名 BYD 正确解析到比亚迪，Top 3 全部与比亚迪高度相关（神州租车合作、肯德基合作、商标注册）
+- **Info Density**: 3 — 信息密度一般，缺少具体金额和时间细节
+- **Redundancy**: 4 — 结果覆盖多个维度（战略合作、商标、产品），无明显重复
+- **Temporal**: 3 — 部分缺失 event_time，但比之前测试改善
+
+### Top 3 Results Summary
+1. KU1: 比亚迪与神州租车在深圳签署闪充中国战略合作暨10万台采购框架协议
+2. KU2: 比亚迪与肯德基在深圳签署战略合作协议
+3. KU3: 比亚迪成功注册'比亚迪闪充'商标
+
+---
+
+## Q20260520-003
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-20 |
+| **Session** | ut-casual-20260520-143848 |
+| **Scenario** | S013 |
+| **Query** | `knowledge-cli search --entities "光刻" --intent TOPIC_RESEARCH` |
+| **Intent** | TOPIC_RESEARCH |
+| **Result Count** | 60 |
+| **Relevance** | 4 |
+| **Info Density** | 3 |
+| **Redundancy** | 4 |
+| **Temporal** | 2 |
+| **Overall** | 3.3 |
+
+### Scoring Rationale
+- **Relevance**: 4 — Top 2 高度相关（光刻机概念股、光刻胶制备），KU3 优刻得与光刻无关但总体好
+- **Info Density**: 3 — 结果包含股票名、技术突破等要素，但部分缺少时间
+- **Redundancy**: 4 — 不同角度覆盖，无明显重复
+- **Temporal**: 2 — 时间信息不够丰富，event_time 缺失
+
+### Top 3 Results Summary
+1. KU1: 光刻机概念股盘中异动，海立股份涨停，波长光电等冲高
+2. KU2: 上海AI实验室攻克芯片核心材料光刻胶稳定制备难题
+3. KU3: 优刻得通过工信部审核（无关）
+
+---
+
+## Q20260520-004
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-20 |
+| **Session** | ut-casual-20260520-143848 |
+| **Scenario** | S013 |
+| **Query** | `knowledge-cli search --entities "量化交易" --intent TOPIC_RESEARCH` |
+| **Intent** | TOPIC_RESEARCH |
+| **Result Count** | 60 |
+| **Relevance** | 2 |
+| **Info Density** | 2 |
+| **Redundancy** | 3 |
+| **Temporal** | 2 |
+| **Overall** | 2.3 |
+
+### Scoring Rationale
+- **Relevance**: 2 — 仅 4/20 (20%) 真正与量化交易相关，多数结果匹配"交易"token（沃什交易、关联交易、期货交易等），严重偏题
+- **Info Density**: 2 — 相关结果（如韩国熔断程序化交易）信息密度尚可，但 80% 无关结果稀释价值
+- **Redundancy**: 3 — 无明显重复事件，但大量不相关结果间也无法判断冗余
+- **Temporal**: 2 — 时间信息不够丰富，部分缺失
+
+### Top 3 Results Summary
+1. KU1: 油价推升通胀风险，'沃什交易'在美债市场退潮 (无关)
+2. KU2: 东睦股份购买土地使用权项目不构成关联交易 (无关)
+3. KU3: 韩国KOSPI 200指数期货上涨5%，触发熔断机制，程序化交易暂停5分钟 (相关)
+
+---
+
+## Q20260520-005
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-20 |
+| **Session** | ut-casual-20260520-143848 |
+| **Scenario** | S007 |
+| **Query** | `knowledge-cli search --entities "小米集团" --time-range "2026-04-01:2026-04-30"` |
+| **Intent** | ENTITY_OVERVIEW |
+| **Result Count** | 47 |
+| **Relevance** | 4 |
+| **Info Density** | 3 |
+| **Redundancy** | 4 |
+| **Temporal** | 5 |
+| **Overall** | 4.0 |
+
+### Scoring Rationale
+- **Relevance**: 4 — 时间过滤生效后结果更加聚焦，多数与小米相关
+- **Info Density**: 3 — 与无范围搜索相同的信息密度特征
+- **Redundancy**: 4 — 多样性良好
+- **Temporal**: 5 — 时间范围过滤精确生效，所有 13 条有日期的 KU 均在 2026-04 范围内，无越界
+
+### Top 3 Results Summary
+1. ku_f5868c0f8b8f257f: 小米集团股价下跌超过3% (2026-04-09, in range ✅)
+2. ku_363e499517c66118: 小米集团涨1.44% (None)
+3. ku_e6fd9ace2076c7d6: 雷军介绍小米业务布局 (2026-04-13, in range ✅)
+
+---
+
+## Q20260520-006
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-20 |
+| **Session** | ut-casual-20260520-143848 |
+| **Scenario** | S013 (ad-hoc) |
+| **Query** | `knowledge-cli search --entities "海思" --intent ENTITY_OVERVIEW` |
+| **Intent** | ENTITY_OVERVIEW |
+| **Result Count** | 60 |
+| **Relevance** | 1 |
+| **Info Density** | 2 |
+| **Redundancy** | 2 |
+| **Temporal** | 2 |
+| **Overall** | 1.8 |
+
+### Scoring Rationale
+- **Relevance**: 1 — 0/20 条与华为海思半导体真正相关，全部为 BM25 短 token 碰撞噪声（海思科药企、海信等）
+- **Info Density**: 2 — 海思科相关 KU 有完整信息，但与用户意图完全不符
+- **Redundancy**: 2 — 海思科多条重复出现
+- **Temporal**: 2 — 时间信息一般
+
+### Top 3 Results Summary
+1. KU1: 高新兴车载前装车规模组产品与海思合作 (可能相关但不确定)
+2. KU2: 海思科连发三份重磅公告 (海思科药企, 无关)
+3. KU3: 海思科一季度净利润超过去年全年 (海思科药企, 无关)
+
 ## Q20260510-001
 
 | Field | Value |

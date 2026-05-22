@@ -6,8 +6,7 @@
 ## Claude Code 使用顺序
 
 1. 先读 `docs/SHARED_RULES.md`
-2. 再读 `PROGRESS.md`
-3. 按需加载 `.claude/rules/` 下的规则文件
+2. 按需加载 `.claude/rules/` 下的规则文件
 
 ## Claude 专属规则入口
 

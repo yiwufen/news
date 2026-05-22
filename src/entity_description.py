@@ -15,8 +15,6 @@ logger = logging.getLogger(__name__)
 _DESCRIPTION_SYSTEM_PROMPT = """你是一名金融实体描述生成器。
 给定实体名称、类型、标识符和来源摘要，生成一句简洁的实体描述（50字以内）。
 描述应区分同名但不同领域的实体。
-
-输出 JSON 格式: {"description": "生成的描述"}
 """
 
 _DESCRIPTION_TOOL_SCHEMA: dict[str, Any] = {

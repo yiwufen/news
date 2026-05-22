@@ -1771,3 +1771,198 @@ uv run knowledge-cli search --entities "不存在公司XYZ123" 2>/dev/null
 
 ### Impact
 Agent 集成中 pipe stdout 到 JSON parser 会因混合内容而解析失败。必须额外的文本过滤步骤才能正确解析输出。
+
+---
+
+## F20260520-001
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-20 |
+| **Session** | ut-casual-20260520-143848 |
+| **Persona** | casual |
+| **Scenario** | S007 |
+| **Severity** | CRITICAL |
+| **Category** | retrieval-accuracy |
+| **Status** | FIXED |
+| **Related Defect** | #5 |
+
+### Summary
+时间范围过滤已修复——之前所有时间范围返回完全相同的结果（F20260516-006, F20260510-002），现在不同时间范围正确返回不同结果子集。
+
+### Reproduction
+```
+# 无范围
+uv run knowledge-cli search --entities "小米集团"
+# → total=60, ku=20
+
+# 2026-04 窄范围
+uv run knowledge-cli search --entities "小米集团" --time-range "2026-04-01:2026-04-30"
+# → total=47, ku=20, 所有13条有日期的KU均在2026-04 ✅
+
+# 2025全年
+uv run knowledge-cli search --entities "小米集团" --time-range "2025-01-01:2025-12-31"
+# → total=1, ku=1 ✅ (之前返回 total=60 完全相同)
+
+# 2026-01 窄范围
+uv run knowledge-cli search --entities "小米集团" --time-range "2026-01-01:2026-01-31"
+# → total=3, ku=3 ✅
+
+# 反向范围
+uv run knowledge-cli search --entities "小米集团" --time-range "2026-04-13:2025-01-01"
+# → total=0, ku=0, warnings=[NO_RESULTS] ✅
+```
+
+### Expected Behavior
+时间范围过滤应正确过滤结果。已修复，行为正确。
+
+### Impact
+Defect #5 已修复。分析师和商务用户现在可以按时间缩小搜索范围，时间线查询变得可用。反向范围有 NO_RESULTS 警告，零长度范围不崩溃。
+
+---
+
+## F20260520-002
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-20 |
+| **Session** | ut-casual-20260520-143848 |
+| **Persona** | casual |
+| **Scenario** | S006 |
+| **Severity** | HIGH |
+| **Category** | retrieval-accuracy |
+| **Status** | FIXED |
+| **Related Defect** | #1, #16 |
+
+### Summary
+BYD 英文别名搜索已修复——之前返回 0 条（F20260509-015），现在返回 64 条且内容全部关于比亚迪。中文简称全部正常工作。
+
+### Reproduction
+```
+# 英文别名 BYD → 之前 0 条，现在 64 条
+uv run knowledge-cli search --entities "BYD" --intent ENTITY_OVERVIEW
+# → total=64, ku=20, bm25=64
+# KU1: "比亚迪与神州租车在深圳签署闪充中国战略合作暨10万台采购框架协议"
+# KU2: "比亚迪与肯德基在深圳签署战略合作协议"
+# KU3: "比亚迪成功注册'比亚迪闪充'商标"
+
+# 中文简称对比
+# "小米集团" → total=60
+# "小米" → total=62 (差异 3.3%)
+# "腾讯" → total=66
+# "字节跳动" → total=60
+# "恒大" → total=60 (之前仅 1 条!)
+```
+
+### Expected Behavior
+英文别名和中文简称应正确解析到目标实体。已修复，所有简称均正常工作。
+
+### Impact
+显著改善。casual 商务用户可以用简称或英文名搜索公司，不再需要记忆精确全名。BYD 修复确认实体解析改善；"恒大"从 1 条增加到 60 条说明数据覆盖也有扩展。
+
+---
+
+## F20260520-003
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-20 |
+| **Session** | ut-casual-20260520-143848 |
+| **Persona** | casual |
+| **Scenario** | S013 |
+| **Severity** | HIGH |
+| **Category** | retrieval-accuracy |
+| **Status** | IMPROVED |
+| **Related Defect** | #1, #3, #16 |
+
+### Summary
+BM25 回退对话题搜索显著改善——之前"量化交易"(0条)、"供应链金融"(0条)、"芯片制裁"(0条)、"光刻"(0条) 全部返回空结果（F20260509-016, F20260510-005），现在均返回结果。但精确度仍然受限（Defect #3 FTS5 中文分词）。
+
+### Reproduction
+```
+# 之前 0 条 → 现在有结果
+# 量化交易: total=60, ku=20 (4/20=20% 真正相关)
+# 供应链金融: total=60, ku=20 (相关性较好)
+# 芯片制裁: total=91, ku=20 (主要匹配"芯片"token, 非精准"芯片制裁")
+# 光刻: total=60, ku=20 (结果高相关: 光刻机概念股, 光刻胶制备)
+
+# 已知有实体的话题也改善
+# 半导体: 19→45 条
+# 大模型: 16→20 条
+# 新能源汽车: 40 条
+```
+
+"量化交易"精确度分析：20 条中仅 4 条真正相关（"程序化交易暂停"、"量化策略"等）。其余为"沃什交易"、"关联交易"等包含"交易"token 的无关结果。
+
+### Expected Behavior
+话题搜索应返回高度相关的结果。当前 BM25 回退能找到候选，但 token 级匹配导致精确度低。理想情况下应实现语义匹配或中文分词。
+
+### Impact
+IMPROVED。从"完全无结果"到"有结果但需筛选"，对 casual 用户是重大改善。至少用户可以看到一些相关内容，而不会面临令人沮丧的 0 结果页面。Defect #3（FTS5 中文分词）仍是精确度瓶颈。
+
+---
+
+## F20260520-004
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-20 |
+| **Session** | ut-casual-20260520-143848 |
+| **Persona** | casual |
+| **Scenario** | S013 (ad-hoc) |
+| **Severity** | MEDIUM |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #3 |
+
+### Summary
+"海思"搜索仍返回 0/20 条华为海思相关结果（与 F20260510-001 一致）。BM25 将"海思"token 匹配到海思科（药企）、海信等不相关公司。60 条结果中可能 1 条提及海思合作，但整体仍然被噪声占满。
+
+### Reproduction
+```
+uv run knowledge-cli search --entities "海思" --intent ENTITY_OVERVIEW
+# → total=60, ku=20
+# KU1: "高新兴车载前装车规模组产品与海思合作" (可能相关)
+# KU2: "海思科连发三份重磅公告" (海思科药企, 无关)
+# KU3: "海思科一季度净利润超过去年全年" (海思科药企, 无关)
+```
+
+### Expected Behavior
+"海思"应解析到华为海思半导体（HiSilicon），至少应将华为芯片相关的 KU 排在前面。当前 BM25 短 token 碰撞问题未解决。
+
+### Impact
+MEDIUM。确认 F20260510-001 仍然存在。对芯片行业分析师和商务用户，搜索"海思"得不到正确结果。2 字短实体名的 BM25 碰撞问题持续影响检索质量。
+
+---
+
+## F20260520-005
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-20 |
+| **Session** | ut-casual-20260520-143848 |
+| **Persona** | casual |
+| **Scenario** | S004 |
+| **Severity** | HIGH |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #1, #16 |
+
+### Summary
+搜索完全不存在的实体"完全不存在的公司名称XYZ"仍返回 117 条结果（与 F20260516-007 一致），0/20 条提及 XYZ，无任何警告。BM25 将"公司"、"名称"等常见 token 匹配到大量无关内容。
+
+### Reproduction
+```
+uv run knowledge-cli search --entities "完全不存在的公司名称XYZ"
+# → total=117, ku=20, errors=[], warnings=[]
+# matched_entity_ids: [] (空)
+# KU1: "公司、控股股东不存在应披露而未披露的重大事项" (匹配"公司")
+# KU2: "北京贾国龙空气馍餐饮管理公司更名" (匹配"公司")
+# 0/20 KUs mention "XYZ"
+```
+
+### Expected Behavior
+当实体未找到且 BM25 结果明显不相关时，应提供警告（如"ENTITY_NOT_FOUND"、"LOW_RELEVANCE"）。total_count=117 给用户虚假的"找到很多"印象。
+
+### Impact
+HIGH。确认 F20260516-007 未改善。casual 用户看到 117 条结果会以为找到了信息，实际全部无关。对 AI 应用集成更严重——依赖 total_count>0 判断成功的逻辑会被误导。

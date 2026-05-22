@@ -5,8 +5,7 @@
 ## 进入仓库后先看什么
 
 1. 先读 `docs/SHARED_RULES.md`
-2. 再看 `PROGRESS.md` 了解当前完成度与待办
-3. 涉及 Claude 目录规则时，再看 `.claude/rules/`
+2. 涉及 Claude 目录规则时，再看 `.claude/rules/`
 
 ## 必须遵守的项目约定
 
@@ -15,7 +14,6 @@
 - 涉及项目规则、数据契约、流程约束时，以共享规范为准
 - 迁移阶段默认把 `IntelligenceParticle`、`RiskReport` 与旧风险图逻辑视为 `legacy`，新实现不得继续围绕它们扩展
 - 如必须复用旧实现，只能通过显式适配层接入，不要让新核心模型直接依赖旧模型
-- 完成功能后更新 `PROGRESS.md`
 - 提交前至少运行：
 
 ```bash

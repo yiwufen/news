@@ -1,7 +1,7 @@
 # Current Status Overview
 
 This document summarizes the actual supported mainline in the repo today.
-If any document disagrees, follow [docs/SHARED_RULES.md](docs/SHARED_RULES.md) first and [PROGRESS.md](../PROGRESS.md) second.
+If any document disagrees, follow [docs/SHARED_RULES.md](SHARED_RULES.md).
 
 ## Mainline
 
@@ -89,7 +89,7 @@ Migration cleanup is complete. The next work is product-facing, not legacy-facin
 
 ## Verification
 
-See [PROGRESS.md](../PROGRESS.md) for the latest validation snapshot, including:
+Run locally:
 
 - `uv run pytest`
 - `uv run pyright .`

@@ -133,11 +133,10 @@ def test_knowledge_extractor_normalizes_relative_event_time_before_validation() 
     extractor = KnowledgeExtractor(enable_llm=True)
     extractor_any = cast(Any, extractor)
     extractor_any._time_normalizer = SimpleNamespace(
-        normalize_event_time=lambda raw_time, context: TimeNormalizationResult(
+        normalize_event_time=lambda raw_time, context, **kw: TimeNormalizationResult(
             normalized_time=datetime(2026, 4, 4, 0, 0, tzinfo=UTC),
-            original_expression=str(raw_time),
-            resolution_type="relative",
-            confidence=0.9,
+            resolution_type="contextual",
+            time_grain="day",
         )
     )
     extractor_any.client = SimpleNamespace(
@@ -161,9 +160,11 @@ def test_knowledge_extractor_normalizes_relative_event_time_before_validation() 
                                     },
                                     "evidence": [{"text": "Xiaomi will launch the product tomorrow."}],
                                     "time": {
-                                        "event_time": "relative_time_token",
+                                        "event_time": "2026-04-04T00:00:00Z",
                                         "published_at": "2026-04-05T09:00:00+00:00",
                                         "extracted_at": "2026-04-05T09:05:00+00:00",
+                                        "event_time_resolution": "contextual",
+                                        "time_grain": "day",
                                     },
                                     "confidence": 0.8,
                                 }
@@ -189,8 +190,8 @@ def test_knowledge_extractor_normalizes_relative_event_time_before_validation() 
 
     assert len(units) == 1
     assert units[0].time.event_time == datetime(2026, 4, 4, 0, 0, tzinfo=UTC)
-    assert units[0].time.event_time_resolution == "relative"
-    assert units[0].time.raw_event_time_expression == "relative_time_token"
+    assert units[0].time.event_time_resolution == "contextual"
+    assert units[0].time.time_grain == "day"
 
 
 def test_entity_resolver_matches_stable_identifier_and_keeps_uncertain_separate(tmp_path) -> None:
@@ -1407,6 +1408,4 @@ def test_cross_lingual_alias_byd_resolves(tmp_path) -> None:
 
     assert result.total_count >= 1
     assert result.retrieval_path == "entity_id_lookup"
-
-
 

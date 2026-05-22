@@ -1,0 +1,1097 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>金融知识检索底座 — 设计文档</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #222636;
+    --surface3: #2a2f42;
+    --border: #2e3348;
+    --border-active: #4a5580;
+    --text: #e0e4f0;
+    --text-dim: #8890a8;
+    --accent: #6c8cff;
+    --accent2: #4fd1c5;
+    --accent3: #f6ad55;
+    --accent4: #fc8181;
+    --accent5: #b794f4;
+    --accent6: #68d391;
+    --green: #48bb78;
+    --yellow: #ecc94b;
+    --red: #fc8181;
+    --radius: 8px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+    background: var(--bg); color: var(--text);
+    line-height: 1.6; font-size: 14px;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 48px 28px 120px; }
+  h1 {
+    font-size: 26px; font-weight: 700; margin-bottom: 6px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .subtitle { color: var(--text-dim); font-size: 14px; margin-bottom: 48px; }
+  h2 {
+    font-size: 16px; font-weight: 600; color: var(--accent);
+    margin: 56px 0 20px; padding-bottom: 8px; border-bottom: 1px solid var(--border);
+    letter-spacing: .5px; display: flex; align-items: center; gap: 8px;
+  }
+  h2 .tag {
+    font-size: 10px; padding: 2px 8px; border-radius: 10px;
+    font-weight: 600; background: rgba(108,140,255,.12); color: var(--accent);
+  }
+
+  /* ---- expandable cards ---- */
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); margin: 10px 0;
+    overflow: hidden; transition: border-color .2s;
+  }
+  .card:hover { border-color: var(--border-active); }
+  .card-header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 20px; cursor: pointer; user-select: none;
+  }
+  .card-header:hover { background: var(--surface2); }
+  .card-chevron {
+    width: 18px; height: 18px; flex-shrink: 0;
+    transition: transform .2s; color: var(--text-dim);
+  }
+  .card.open .card-chevron { transform: rotate(90deg); }
+  .card-title { font-weight: 600; font-size: 13px; flex: 1; }
+  .card-badge {
+    font-size: 10px; padding: 2px 8px; border-radius: 10px;
+    font-weight: 600; flex-shrink: 0;
+  }
+  .badge-core { background: rgba(108,140,255,.12); color: var(--accent); }
+  .badge-p0 { background: rgba(252,129,129,.15); color: var(--accent4); }
+  .badge-p1 { background: rgba(236,201,75,.15); color: var(--yellow); }
+  .badge-done { background: rgba(72,187,120,.15); color: var(--green); }
+  .card-body {
+    max-height: 0; overflow: hidden; transition: max-height .35s ease;
+  }
+  .card.open .card-body { max-height: 3000px; }
+  .card-inner { padding: 4px 20px 20px; }
+
+  /* shared content styles */
+  p { color: var(--text-dim); font-size: 12.5px; line-height: 1.7; margin-bottom: 12px; }
+  strong { color: var(--text); }
+  .field-table {
+    width: 100%; border-collapse: collapse; margin: 8px 0 14px; font-size: 12px;
+  }
+  .field-table th {
+    text-align: left; padding: 7px 10px; background: var(--surface2);
+    color: var(--accent); font-weight: 600; border-bottom: 1px solid var(--border);
+  }
+  .field-table td {
+    padding: 5px 10px; border-bottom: 1px solid var(--border); color: var(--text-dim);
+  }
+  .field-table td:first-child { color: var(--text); font-weight: 500; white-space: nowrap; }
+  code {
+    font-family: inherit; background: var(--surface2); padding: 1px 5px;
+    border-radius: 3px; font-size: 11px; color: var(--accent2);
+  }
+  .rule-list { list-style: none; margin: 8px 0 14px; }
+  .rule-list li {
+    position: relative; padding: 5px 0 5px 20px; font-size: 12px; color: var(--text-dim);
+  }
+  .rule-list li::before {
+    content: ''; position: absolute; left: 4px; top: 11px;
+    width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+  }
+  .rule-list.warn li::before { background: var(--accent3); }
+  .rule-list.green li::before { background: var(--green); }
+  .rule-list.red li::before { background: var(--accent4); }
+  .block {
+    background: var(--surface2); border-radius: 6px; padding: 12px 16px;
+    margin: 8px 0 14px; font-size: 12px;
+  }
+  .block-title { font-weight: 600; color: var(--accent); margin-bottom: 6px; font-size: 12px; }
+  .metric-row {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 10px; margin: 10px 0 14px;
+  }
+  .metric {
+    background: var(--surface2); border-radius: 6px; padding: 12px; text-align: center;
+  }
+  .metric .val { font-size: 22px; font-weight: 700; color: var(--accent2); }
+  .metric .lbl { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+
+  /* flow */
+  .flow { display: flex; align-items: center; gap: 0; overflow-x: auto; padding: 12px 0; margin: 12px 0; }
+  .flow-node {
+    flex-shrink: 0; padding: 14px 18px; border-radius: 8px; text-align: center;
+    min-width: 120px; border: 1px solid var(--border); transition: all .15s;
+  }
+  .flow-node:hover { transform: translateY(-2px); box-shadow: 0 4px 16px rgba(108,140,255,.12); }
+  .flow-node .fn { font-weight: 600; font-size: 12px; }
+  .flow-node .fd { font-size: 10px; color: var(--text-dim); margin-top: 3px; }
+  .flow-arrow { flex-shrink: 0; color: var(--accent); font-size: 18px; padding: 0 4px; opacity: .5; }
+
+  .fn-raw { background: linear-gradient(135deg,#2d3748,#1a202c); border-color: #4a5568; }
+  .fn-ku  { background: linear-gradient(135deg,#1a2332,#1a2a3a); border-color: var(--accent); }
+  .fn-ent { background: linear-gradient(135deg,#1a3232,#1a3a2a); border-color: var(--accent2); }
+  .fn-clu { background: linear-gradient(135deg,#32281a,#3a2a1a); border-color: var(--accent3); }
+  .fn-grp { background: linear-gradient(135deg,#2a1a32,#321a3a); border-color: var(--accent5); }
+  .fn-ret { background: linear-gradient(135deg,#1a322a,#1a3a2a); border-color: var(--accent6); }
+
+  /* comparison table */
+  .cmp-table {
+    width: 100%; border-collapse: collapse; margin: 8px 0 14px; font-size: 12px;
+  }
+  .cmp-table th {
+    text-align: left; padding: 7px 10px; background: var(--surface2);
+    color: var(--accent); font-weight: 600; border-bottom: 1px solid var(--border);
+  }
+  .cmp-table td {
+    padding: 6px 10px; border-bottom: 1px solid var(--border); color: var(--text-dim);
+  }
+  .cmp-table tr:hover td { background: var(--surface2); }
+
+  /* decision cards */
+  .decision {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 18px 20px; margin: 10px 0;
+  }
+  .decision .d-title { font-weight: 600; font-size: 13px; color: var(--accent); }
+  .decision .d-why { font-size: 12px; color: var(--text-dim); margin-top: 6px; }
+  .decision .d-tradeoff {
+    margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border);
+    font-size: 11px; color: var(--accent3);
+  }
+
+  @media (max-width:768px) {
+    .wrap { padding: 24px 12px; }
+    .flow { flex-wrap: wrap; gap: 6px; }
+    .flow-arrow { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>金融知识检索底座</h1>
+<p class="subtitle">设计文档 &middot; 可点击展开查看每项设计的详细决策与约束 &middot; 2026-05 (v2)</p>
+
+<!-- ======================================================= -->
+<h2>一、项目定位 <span class="tag">WHY</span></h2>
+
+<div class="card open" onclick="toggle(this)">
+  <div class="card-header">
+    <svg class="card-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+    <span class="card-title">定位声明与边界</span>
+  </div>
+  <div class="card-body"><div class="card-inner">
+    <p>面向金融场景的<strong>知识检索 CLI 工具</strong>。将原始新闻消息加工为可检索、可溯源、可组合的知识层，供 Claude Code 等 agent 以 <code>knowledge-cli</code> 调用。</p>
+    <div class="block">
+      <div class="block-title">属于本项目（检索底座）</div>
+      <ul class="rule-list green">
+        <li>原始消息标准化</li>
+        <li>通用知识单元抽取（LLM tool-use）</li>
+        <li>实体归一化 + 事件归并</li>
+        <li>图谱构建与 GraphRAG 检索</li>
+        <li>多索引建库（FTS5 / FAISS / Neo4j）</li>
+        <li>面向 agent 的 CLI 检索接口，结构化参数入 JSON 出</li>
+      </ul>
+    </div>
+    <div class="block">
+      <div class="block-title">不属于本项目（调用方负责）</div>
+      <ul class="rule-list red">
+        <li>LLM 意图解析（调用方直接传入 StructuredQuery）</li>
+        <li>风险分析、时间线分析、主题研究等上层能力</li>
+        <li>自然语言交互 / API 服务层</li>
+        <li>报告生成、可视化</li>
+      </ul>
+    </div>
+  </div></div>
+</div>
+
+<!-- ======================================================= -->
+<h2>二、核心数据流 <span class="tag">FLOW</span></h2>
+
+<div class="flow">
+  <div class="flow-node fn-raw">
+    <div class="fn">RawDocument</div>
+    <div class="fd">原始新闻 / 公告</div>
+    <div class="fd">SQLite 存储</div>
+  </div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-node fn-ku">
+    <div class="fn">KnowledgeUnit</div>
+    <div class="fd">statement-level 证据</div>
+    <div class="fd">LLM 结构化抽取</div>
+  </div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-node fn-ent">
+    <div class="fn">Entity</div>
+    <div class="fd">保守实体归一</div>
+  </div>
+  <div class="flow-arrow">+</div>
+  <div class="flow-node fn-clu">
+    <div class="fn">EventCluster</div>
+    <div class="fd">保守事件归并</div>
+  </div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-node fn-grp">
+    <div class="fn">Graph</div>
+    <div class="fd">Neo4j 图谱</div>
+  </div>
+  <div class="flow-arrow">+</div>
+  <div class="flow-node fn-ret">
+    <div class="fn">检索服务</div>
+    <div class="fd">BM25 + GraphRAG</div>
+  </div>
+</div>
+
+<div class="card" onclick="toggle(this)">
+  <div class="card-header">
+    <svg class="card-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+    <span class="card-title">离线知识化流程详细说明</span>
+    <span class="card-badge badge-core">9 步</span>
+  </div>
+  <div class="card-body"><div class="card-inner">
+    <p><code>run_continuous()</code> 负责把原始文档推进到可检索状态，以下为标准流程：</p>
+    <table class="cmp-table">
+      <tr><th>步骤</th><th>职责</th><th>设计约束</th></tr>
+      <tr><td>1. 接入</td><td>原始消息接入</td><td>增量批处理，按 doc_id 去重</td></tr>
+      <tr><td>2. 标准化</td><td>文档标准化为 RawDocument</td><td>content 必须保留完整正文，不能只是摘要</td></tr>
+      <tr><td>3. 抽取</td><td>LLM tool-use 抽取 KnowledgeUnit</td><td>fail-fast：未配置或调用失败直接报错，禁止静默回退</td></tr>
+      <tr><td>4. 实体归一</td><td>实体标准化与保守归一</td><td>稳定标识优先；不确定时暂不合并</td></tr>
+      <tr><td>5. 时间验证</td><td>验证 LLM 输出的 event_time 格式和合理性</td><td>LLM 原生解析 ISO 8601，后端只做格式/合理性验证</td></tr>
+      <tr><td>6. 去重 + 冲突</td><td>保留冲突信息</td><td>发现矛盾时必须保留，不得静默覆盖</td></tr>
+      <tr><td>7. 事件归并</td><td>保守规则生成 EventCluster</td><td>宁可多簇，不误合并</td></tr>
+      <tr><td>8. 图谱更新</td><td>同步 Entity + EventCluster 到 Neo4j</td><td>所有节点/边必须可溯源到底层 KU</td></tr>
+      <tr><td>9. 索引构建</td><td>FTS5 + FAISS 索引</td><td>增量更新，处理失败不影响已持久化的 KU</td></tr>
+    </table>
+  </div></div>
+</div>
+
+<div class="card" onclick="toggle(this)">
+  <div class="card-header">
+    <svg class="card-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+    <span class="card-title">在线检索流程详细说明</span>
+    <span class="card-badge badge-core">5 步</span>
+  </div>
+  <div class="card-body"><div class="card-inner">
+    <p><code>run_pipeline(structured_query=..., graph_enabled=True)</code> 统一检索入口。调用方传入 StructuredQuery，不再内嵌 LLM 意图解析。</p>
+    <table class="cmp-table">
+      <tr><th>步骤</th><th>职责</th><th>输出</th></tr>
+      <tr><td>1. 实体解析</td><td>查询 entity 名称 → 标准 entity_id</td><td>entity_ids 列表</td></tr>
+      <tr><td>2. 多路径召回</td><td>Entity-ID / Dense / BM25 三路召回</td><td>候选 KU 池</td></tr>
+      <tr><td>3. Intent 感知评分</td><td>分层加权 + ScoringProfile</td><td>排序列表</td></tr>
+      <tr><td>4. 图谱增强</td><td>Neo4j related-event + co-involvement</td><td>扩展 entity / cluster</td></tr>
+      <tr><td>5. PipelineResult</td><td>类型化 JSON 输出</td><td>knowledge_units + entities + event_clusters + graph</td></tr>
+    </table>
+  </div></div>
+</div>
+
+<!-- ======================================================= -->
+<h2>三、核心数据契约 <span class="tag">CONTRACT</span></h2>
+
+<div class="card" onclick="toggle(this)">
+  <div class="card-header">
+    <svg class="card-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+    <span class="card-title">RawDocument — 原始输入文档</span>
+    <span class="card-badge badge-done">Stable</span>
+  </div>
+  <div class="card-body"><div class="card-inner">
+    <p>尚未知识化的输入文档。content <strong>必须保留完整正文</strong>（用于后续证据切片），不能只保留摘要。</p>
+    <table class="field-table">
+      <tr><th>字段</th><th>类型</th><th>必填</th><th>说明</th></tr>
+      <tr><td>doc_id</td><td>str</td><td>Y</td><td>原始文档主键</td></tr>
+      <tr><td>source_type</td><td>str</td><td>Y</td><td>news / announcement / filing / research / brief</td></tr>
+      <tr><td>title</td><td>str</td><td>Y</td><td>文档标题</td></tr>
+      <tr><td>content</td><td>str</td><td>Y</td><td>清洗后完整正文</td></tr>
+      <tr><td>source_name</td><td>str</td><td>Y</td><td>来源名称</td></tr>
+      <tr><td>published_at</td><td>datetime</td><td>Y</td><td>发布时间（与 ingested_at 分离）</td></tr>
+      <tr><td>url</td><td>str | None</td><td>N</td><td>原始链接</td></tr>
+      <tr><td>language</td><td>str</td><td>Y</td><td>语言代码，默认 zh</td></tr>
+      <tr><td>market</td><td>str | None</td><td>N</td><td>市场 CN / HK / US</td></tr>
+      <tr><td>tickers</td><td>list[str]</td><td>N</td><td>显式提及的证券代码</td></tr>
+      <tr><td>ingested_at</td><td>datetime</td><td>Y</td><td>系统接收时间</td></tr>
+    </table>
+    <div class="block">
+      <div class="block-title">设计约束</div>
+      <ul class="rule-list warn">
+        <li>published_at 与 ingested_at 必须分离记录</li>
+        <li>raw_metadata 允许保留原始元数据，但不得替代标准字段</li>
+      </ul>
+    </div>
+  </div></div>
+</div>
+
+<div class="card" onclick="toggle(this)">
+  <div class="card-header">
+    <svg class="card-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+    <span class="card-title">KnowledgeUnit — 最小可检索证据单元</span>
+    <span class="card-badge badge-p0">Core</span>
+  </div>
+  <div class="card-body"><div class="card-inner">
+    <p>主键语义：<strong>来源中的一次陈述</strong>，不是"事实/事件本体"。必须可溯源、保留冲突。每条 KU 对应原始文档中的一段独立陈述。</p>
+    <table class="field-table">
+      <tr><th>字段</th><th>类型</th><th>说明</th></tr>
+      <tr><td>ku_id</td><td>str</td><td>statement-level 主键</td></tr>
+      <tr><td>unit_kind</td><td>"event" | "fact"</td><td>单元大类</td></tr>
+      <tr><td>unit_type</td><td>str (enum 28种)</td><td>标准化类型：earnings_release / executive_change / ...</td></tr>
+      <tr><td>summary</td><td>str</td><td>标准化、可检索摘要</td></tr>
+      <tr><td>entities</td><td>list[EntityRef]</td><td>涉及实体：mention + entity_id + role</td></tr>
+      <tr><td>source</td><td>SourceRef</td><td>来源定位：doc_id + source_name + url</td></tr>
+      <tr><td>evidence</td><td>list[EvidenceSpan]</td><td>原文证据片段（至少 1 条，禁止只有抽象总结）</td></tr>
+      <tr><td>time</td><td>TimeRef</td><td>event_time / published_at / extracted_at</td></tr>
+      <tr><td>confidence</td><td>float 0-1</td><td>抽取置信度</td></tr>
+      <tr><td>relation_hints</td><td>list[RelationHint]</td><td>潜在关系线索：subject / object / relation_type</td></tr>
+      <tr><td>cluster_id</td><td>str | None</td><td>归并后的事件簇 ID</td></tr>
+      <tr><td>conflict_status</td><td>"none" | "possible" | "confirmed"</td><td>冲突标记</td></tr>
+      <tr><td>status</td><td>"active" | "superseded"</td><td>证据生命周期状态</td></tr>
+    </table>
+    <div class="block">
+      <div class="block-title">设计理念</div>
+      <ul class="rule-list">
+        <li><strong>statement-level 入库</strong>：一条 KU = 一次来源陈述，不是一篇文章</li>
+        <li><strong>证据优先，结论后置</strong>：任意结论都必须可回溯到 KU</li>
+        <li><strong>必须保留冲突</strong>：发现矛盾信息时不得静默覆盖</li>
+        <li><strong>不过早归并</strong>：抽取阶段不做别名归并（单篇新闻没有全局视角）</li>
+        <li><strong>event_time ≠ published_at</strong>：事件发生时间 vs 报道发布时间必须分离</li>
+      </ul>
+    </div>
+    <div class="block">
+      <div class="block-title">子结构说明</div>
+      <table class="field-table">
+        <tr><th>子结构</th><th>关键字段</th><th>用途</th></tr>
+        <tr><td>EntityRef</td><td>entity_id | None, mention, entity_type | None, role | None</td><td>第一版允许 entity_id 为空，但必须保留原始 mention</td></tr>
+        <tr><td>SourceRef</td><td>doc_id, source_name, url | None</td><td>溯源到原始文档</td></tr>
+        <tr><td>EvidenceSpan</td><td>text, start_offset | None, end_offset | None</td><td>至少 1 条可读证据片段</td></tr>
+        <tr><td>TimeRef</td><td>event_time | None, published_at, extracted_at, event_time_resolution ("explicit"|"contextual"|"unresolved"), time_grain ("day"|"month"|"quarter"|"year")</td><td>LLM 原生解析绝对时间；resolution 标记解析来源；grain 标记时间粒度</td></tr>
+        <tr><td>RelationHint</td><td>relation_type, subject/object mention + entity_id</td><td>潜在关系线索，待后处理验证</td></tr>
+      </table>
+    </div>
+  </div></div>
+</div>
+
+<div class="card" onclick="toggle(this)">
+  <div class="card-header">
+    <svg class="card-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+    <span class="card-title">Entity — 标准实体对象</span>
+    <span class="card-badge badge-p0">Core</span>
+  </div>
+  <div class="card-body"><div class="card-inner">
+    <p>图谱与检索的标准实体。第一版仅支持 5 种主实体类型：Company / Organization / Person / Product / Asset。行业、主题、地区、概念板块先作为标签或属性。</p>
+    <table class="field-table">
+      <tr><th>字段</th><th>类型</th><th>说明</th></tr>
+      <tr><td>entity_id</td><td>str</td><td>标准实体主键</td></tr>
+      <tr><td>entity_type</td><td>"Company"|"Organization"|"Person"|"Product"|"Asset"</td><td>实体类型（仅 5 种枚举）</td></tr>
+      <tr><td>canonical_name</td><td>str</td><td>标准名称</td></tr>
+      <tr><td>aliases</td><td>list[str]</td><td>别名、简称、外文名</td></tr>
+      <tr><td>identifiers</td><td>dict[str, str]</td><td>稳定标识（证券代码、注册号等）</td></tr>
+      <tr><td>description</td><td>str | None</td><td>实体简述</td></tr>
+      <tr><td>tags</td><td>list[str]</td><td>行业/主题/地区标签</td></tr>
+      <tr><td>source_ku_ids</td><td>list[str]</td><td>支撑该实体建档的知识单元</td></tr>
+    </table>
+    <div class="block">
+      <div class="block-title">实体对齐策略（保守）</div>
+      <ul class="rule-list green">
+        <li><strong>优先级 1</strong>：稳定标识一致（证券代码、工商注册号）→ 直接归一</li>
+        <li><strong>优先级 2</strong>：无稳定标识时，canonical_name + alias + context 保守匹配</li>
+        <li><strong>优先级 3</strong>：匹配不确定 → 暂不合并，不生成高风险误归一</li>
+      </ul>
+    </div>
+    <div class="block">
+      <div class="block-title">归一化覆盖场景</div>
+      <table class="cmp-table">
+        <tr><th>场景类型</th><th>示例</th><th>期望结果</th></tr>
+        <tr><td>跨语言别名</td><td>BYD → 比亚迪</td><td>合并</td></tr>
+        <tr><td>跨语言别名</td><td>IMF → 国际货币基金组织</td><td>合并</td></tr>
+        <tr><td>类型不一致</td><td>腾讯(Person) → 腾讯控股(Company)</td><td>合并</td></tr>
+        <tr><td>复合后缀</td><td>阿里巴巴集团控股有限公司 → 阿里巴巴</td><td>合并</td></tr>
+        <tr><td>人名尊称</td><td>马化腾先生 → 马化腾</td><td>合并</td></tr>
+        <tr><td>相似但不同</td><td>美的集团 ≠ 美的置业</td><td><strong>不合并</strong></td></tr>
+        <tr><td>相似但不同</td><td>中信证券 ≠ 中信建投</td><td><strong>不合并</strong></td></tr>
+        <tr><td>子公司</td><td>蔚来 ≠ 蔚来汽车 ≠ 蔚来能源</td><td><strong>不合并</strong></td></tr>
+      </table>
+    </div>
+  </div></div>
+</div>
+
+<div class="card" onclick="toggle(this)">
+  <div class="card-header">
+    <svg class="card-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+    <span class="card-title">EventCluster — 保守归并的事件视图</span>
+    <span class="card-badge badge-p0">Core</span>
+  </div>
+  <div class="card-body"><div class="card-inner">
+    <p>多个 KnowledgeUnit 在保守规则下归并后的事件视图。为图谱和检索提供更稳定的<strong>事件级节点</strong>。</p>
+    <table class="field-table">
+      <tr><th>字段</th><th>类型</th><th>说明</th></tr>
+      <tr><td>cluster_id</td><td>str</td><td>事件簇主键</td></tr>
+      <tr><td>cluster_type</td><td>str</td><td>标准化事件类型</td></tr>
+      <tr><td>title / summary</td><td>str</td><td>事件簇标题与摘要</td></tr>
+      <tr><td>entity_ids</td><td>list[str]</td><td>关联实体 ID 列表</td></tr>
+      <tr><td>primary_entity_id</td><td>str | None</td><td>主实体</td></tr>
+      <tr><td>time_anchor / time_range</td><td>datetime | dict</td><td>主时间锚点 + 起止范围</td></tr>
+      <tr><td>member_ku_ids</td><td>list[str]</td><td>成员 KnowledgeUnit 列表</td></tr>
+      <tr><td>source_doc_ids</td><td>list[str]</td><td>派生来源文档</td></tr>
+      <tr><td>conflict_status</td><td>"none"|"possible"|"confirmed"</td><td>簇层冲突状态</td></tr>
+      <tr><td>cluster_confidence</td><td>float 0-1</td><td>归并置信度</td></tr>
+    </table>
+    <div class="block">
+      <div class="block-title">归并条件（必须同时满足）</div>
+      <ul class="rule-list green">
+        <li>主实体集合高度重合或可明确映射</li>
+        <li>unit_type 一致</li>
+        <li>时间窗口足够接近</li>
+        <li>summary 语义相似度超过阈值</li>
+        <li>不存在明显互斥陈述</li>
+      </ul>
+    </div>
+    <div class="block">
+      <div class="block-title">默认不自动合并的情况</div>
+      <ul class="rule-list red">
+        <li>同一主体但不同事件阶段（如"宣布收购"和"收购完成"）</li>
+        <li>同一主题下的连续多次公告</li>
+        <li>信息互相矛盾但尚未判明来源优先级</li>
+        <li>仅依赖模糊名称匹配得出的疑似同事件</li>
+      </ul>
+    </div>
+  </div></div>
+</div>
+
+<!-- ======================================================= -->
+<h2>四、知识抽取设计 <span class="tag">EXTRACT</span></h2>
+
+<div class="card" onclick="toggle(this)">
+  <div class="card-header">
+    <svg class="card-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+    <span class="card-title">LLM 抽取模式 — Tool-Use (Function Calling)</span>
+    <span class="card-badge badge-p0">P0</span>
+  </div>
+  <div class="card-body"><div class="card-inner">
+    <p>使用 Claude 的 tool-use 模式进行结构化抽取，输出为 JSON schema 约束的结构化数据，不是纯文本补全。</p>
+    <div class="block">
+      <div class="block-title">7 项 Prompt 设计原则</div>
+      <table class="cmp-table">
+        <tr><th>#</th><th>原则</th><th>要点</th></tr>
+        <tr><td>1</td><td>Schema 优先于 prompt 文本</td><td>能用 JSON schema 的 enum/description/pattern 约束的，不要只在 prompt 里描述。当前 <code>unit_type</code>、<code>entity_type</code>、<code>relation_type</code>、<code>event_time_resolution</code>、<code>time_grain</code> 均已注入 schema enum 约束。Schema 是硬约束，prompt 是软引导。</td></tr>
+        <tr><td>2</td><td>正反例优先于抽象规则</td><td>每个边界 case 给 1 正 + 1 反例。当前已为时间解析（6 正例 + 4 反例）、relation_hints（2 正例 + 1 反例）、unit_type（4 正例）补充了具体示例。</td></tr>
+        <tr><td>3</td><td>显式优先级声明</td><td>规则冲突时必须写明谁优先。当前优先级：准确性 > 召回率（宁缺毋滥）> 具体具名实体 > 抽象概念 > 有时间锚点的动态陈述 > 静态背景描述。</td></tr>
+        <tr><td>4</td><td>输入首尾效应</td><td>Prompt 结构重排为：published_at 锚点（顶部）→ 正文（核心输入）→ 文档元信息（底部）。正文不再被元信息夹在中间。</td></tr>
+        <tr><td>5</td><td>可验证的自洽检查</td><td>输出前必须验证：① relation_hint 的 subject/object_mention 在 entities 列表中精确出现 ② evidence.text 是正文原文片段（逐字匹配）③ unit_type 是枚举值之一。不使用主观判断。</td></tr>
+        <tr><td>6</td><td>Prompt 只做感知</td><td>抽取只负责识别提取；消歧/归并/冲突裁决交给后处理。不在抽取阶段要求模型做别名归并。</td></tr>
+        <tr><td>7</td><td>不用 XML 标签</td><td>tool-use 模式下结构化输出已天然隔离，XML 标签是冗余的。需要推理时用 Claude extended thinking。</td></tr>
+      </table>
+    </div>
+    <div class="block">
+      <div class="block-title">Schema 驱动的硬约束（v2 新增）</div>
+      <p>提取工具的 JSON schema 通过 <code>_build_extraction_tool_schema()</code> 动态构建，注入以下 enum 约束：</p>
+      <table class="cmp-table">
+        <tr><th>字段</th><th>Schema 约束</th><th>效果</th></tr>
+        <tr><td>unit_type</td><td>enum: 28 种 UnitType 枚举值</td><td>LLM 只能输出合法类型，不再自由发挥</td></tr>
+        <tr><td>entity_type</td><td>enum: Company / Organization / Person / Product</td><td>限制实体类型范围</td></tr>
+        <tr><td>relation_type</td><td>enum: 合作/投资/并购/竞争 等 20 种</td><td>关系类型标准化</td></tr>
+        <tr><td>event_time_resolution</td><td>enum: explicit / contextual / unresolved</td><td>标记时间解析来源</td></tr>
+        <tr><td>time_grain</td><td>enum: day / month / quarter / year</td><td>标记时间粒度</td></tr>
+      </table>
+    </div>
+    <div class="block">
+      <div class="block-title">stock_price_change 抽取约束（v2 新增）</div>
+      <ul class="rule-list warn">
+        <li>纯粹的股价涨跌数字不单独提取为 KU（如"比亚迪涨了3%"、"收盘跌2.1%"）</li>
+        <li>只有当陈述包含<strong>因果归因</strong>时才提取（如"因...""受...影响""得益于""推动""带动"）</li>
+        <li>正例："比亚迪涨停，因Q3净利超预期" → stock_price_change</li>
+        <li>反例："比亚迪涨了3%" → 不提取</li>
+      </ul>
+    </div>
+    <div class="block">
+      <div class="block-title">Fail-Fast 策略</div>
+      <ul class="rule-list red">
+        <li>LLM 未配置 → 直接报错</li>
+        <li>LLM 调用失败 → 直接报错，不静默回退启发式</li>
+        <li>返回不满足契约 → 报错并记录处理失败</li>
+        <li>开发阶段禁止"未配置/失败后自动回退"这类静默降级</li>
+      </ul>
+    </div>
+  </div></div>
+</div>
+
+<div class="card" onclick="toggle(this)">
+  <div class="card-header">
+    <svg class="card-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+    <span class="card-title">实体上下文注入 — 辅助 LLM 标准化命名</span>
+    <span class="card-badge badge-p1">Enhancement</span>
+  </div>
+  <div class="card-body"><div class="card-inner">
+    <p>问题：同一实体在不同文档中被 LLM 用不同名称识别（如"小米集团"/"小米"/"小米科技"），增加消歧负担。</p>
+    <p>方案：抽取时注入与当前文档相关的已知实体列表，帮助 LLM 使用标准名称。</p>
+    <div class="block">
+      <div class="block-title">匹配评分规则</div>
+      <table class="cmp-table">
+        <tr><th>匹配类型</th><th>分数</th><th>示例</th></tr>
+        <tr><td>canonical name 精确匹配</td><td>10.0</td><td>"小米集团" 出现在正文中</td></tr>
+        <tr><td>identifier 匹配（如 ticker）</td><td>8.0 / 个</td><td>"1810.HK" 出现在正文中</td></tr>
+        <tr><td>alias 匹配</td><td>5.0 / 个</td><td>"小米" 别名命中</td></tr>
+      </table>
+    </div>
+    <div class="block">
+      <div class="block-title">设计约束</div>
+      <ul class="rule-list">
+        <li>Token 预算控制：最多 50 个实体，约 2000 tokens</li>
+        <li>注入的实体列表是辅助信号，不强制 LLM 使用标准名称</li>
+        <li>不在 prompt 中要求模型"将别名统一归并为主称"——这和后处理消歧逻辑冲突</li>
+      </ul>
+    </div>
+  </div></div>
+</div>
+
+<div class="card" onclick="toggle(this)">
+  <div class="card-header">
+    <svg class="card-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+    <span class="card-title">时间解析 — LLM 原生解析 + 后验证（v2 重大变更）</span>
+    <span class="card-badge badge-p0">Redesign</span>
+  </div>
+  <div class="card-body"><div class="card-inner">
+    <p><strong>v1 → v2 核心变更</strong>：时间解析从"Python 后处理解析中文表达式"改为"LLM 在抽取阶段直接输出 ISO 8601 绝对时间"。TimeNormalizer 从解析器降级为<strong>验证器</strong>，只检查格式、合理性和时区。</p>
+    <div class="block">
+      <div class="block-title">LLM 时间解析规范（写入了 SYSTEM_PROMPT）</div>
+      <table class="cmp-table">
+        <tr><th>优先级</th><th>原文类型</th><th>解析规则</th><th>resolution</th><th>grain</th></tr>
+        <tr><td>1</td><td>明确日期（"4月3日"、"2025年Q1"）</td><td>直接转为 ISO 8601</td><td><code>explicit</code></td><td>day / quarter</td></tr>
+        <tr><td>2</td><td>相对时间（"昨天"、"上周五"、"3天前"）</td><td>基于 published_at 推算绝对日期</td><td><code>contextual</code></td><td>day</td></tr>
+        <tr><td>3</td><td>模糊时间（"近期"、"本月初"、"Q1"）</td><td>基于 published_at 取最合理估计</td><td><code>contextual</code></td><td>day / month / quarter / year</td></tr>
+        <tr><td>4</td><td>无时间表达</td><td>event_time = published_at（报道行为即事件）</td><td><code>contextual</code></td><td>day</td></tr>
+      </table>
+    </div>
+    <div class="block">
+      <div class="block-title">正例 / 反例（写入 Prompt）</div>
+      <table class="cmp-table">
+        <tr><th>原文 + published_at</th><th>期望 event_time</th><th>resolution</th><th>grain</th></tr>
+        <tr style="color:var(--green)"><td>"宁德时代4月3日发布财报" + 2026-04-05</td><td>2026-04-03T00:00:00Z</td><td>explicit</td><td>day</td></tr>
+        <tr style="color:var(--green)"><td>"昨日涨停" + 2026-04-05</td><td>2026-04-04T00:00:00Z</td><td>contextual</td><td>day</td></tr>
+        <tr style="color:var(--green)"><td>"今年Q1营收同比增长15%" + 2026-04-05</td><td>2026-01-01T00:00:00Z</td><td>explicit</td><td>quarter</td></tr>
+        <tr style="color:var(--accent4)"><td>"昨日涨停" + 2026-04-05 → "昨天" ✗</td><td colspan="3">必须解析为绝对日期，不能照抄原文</td></tr>
+        <tr style="color:var(--accent4)"><td>"近期签署协议" + 2026-04-05 → null ✗</td><td colspan="3">模糊时间也应给出最佳估计，不是 null</td></tr>
+        <tr style="color:var(--accent4)"><td>"Q1业绩超预期" → grain="day" ✗</td><td colspan="3">季度表达式应标记 grain = quarter</td></tr>
+      </table>
+    </div>
+    <div class="block">
+      <div class="block-title">TimeRef 模型变更</div>
+      <table class="cmp-table">
+        <tr><th>变更</th><th>v1</th><th>v2</th></tr>
+        <tr><td>event_time_resolution</td><td>"absolute" / "relative" / "fuzzy" / "unresolved"</td><td>"explicit" / "contextual" / "unresolved"</td></tr>
+        <tr><td>time_grain（新增）</td><td>—</td><td>"day" / "month" / "quarter" / "year"（默认 day）</td></tr>
+        <tr><td>raw_event_time_expression（删除）</td><td>保留原始表达式</td><td>已移除（LLM 直接输出绝对时间）</td></tr>
+        <tr><td>向后兼容</td><td>—</td><td>legacy 值自动映射：absolute→explicit, relative→contextual, fuzzy→contextual</td></tr>
+      </table>
+    </div>
+    <div class="block">
+      <div class="block-title">TimeNormalizer 职责变更</div>
+      <ul class="rule-list">
+        <li><strong>v1</strong>：解析中文时间表达式（昨天、上周三、近日...）→ 绝对时间。380+ 行正则匹配代码。</li>
+        <li><strong>v2</strong>：只验证 LLM 输出。检查 ISO 8601 格式、日期合理性（不超过 published_at 未来 1 天）、时区。~100 行代码。</li>
+        <li><strong>收益</strong>：LLM 拥有完整上下文（全文 + published_at），解析质量高于 post-hoc 正则。消除了 v1 中 ~380 行的维护负担。</li>
+      </ul>
+    </div>
+    <div class="block">
+      <div class="block-title">时间解析质量监控</div>
+      <p>每次抽取后自动记录统计：resolved 比例、resolution 分布。resolved < 50% 时发出 WARNING。</p>
+      <p>用户测试数据（2026-05-20）：event_time 缺失率从 54% 降至 25%。</p>
+    </div>
+  </div></div>
+</div>
+
+<div class="card" onclick="toggle(this)">
+  <div class="card-header">
+    <svg class="card-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+    <span class="card-title">冲突检测 — 多源冲突保留</span>
+  </div>
+  <div class="card-body"><div class="card-inner">
+    <p>多来源报道同一事件时，可能存在时间、金额、参与者方面的冲突。系统必须检测并保留这些冲突信息，不得静默覆盖。</p>
+    <table class="cmp-table">
+      <tr><th>冲突类型</th><th>检测逻辑</th><th>标记</th></tr>
+      <tr><td>TIME_MISMATCH</td><td>不同来源对同一事件的 event_time 不一致</td><td>仅比较显式 event_time，不比较 published_at</td></tr>
+      <tr><td>AMOUNT_MISMATCH</td><td>金额数值不一致（支持"亿元""万美元""港元"）</td><td>从中文文本提取金额后比较</td></tr>
+      <tr><td>PARTICIPANT_MISMATCH</td><td>参与者信息矛盾</td><td>补充性提及不视为冲突；只有矛盾信息才标记</td></tr>
+    </table>
+    <div class="block">
+      <div class="block-title">设计约束</div>
+      <ul class="rule-list warn">
+        <li>仅比较显式 event_time——differing published_at without explicit event dates 不产生冲突</li>
+        <li>补充性参与者提及（additive）不视为冲突，只有矛盾性差异才标记</li>
+        <li>adjacent-day explicit event-date disagreements 标记为 possible，不静默 flatten</li>
+        <li>LLM 原生解析后 event_time 为绝对时间，冲突检测直接比较 datetime 值，不再需要处理中文表达式</li>
+      </ul>
+    </div>
+  </div></div>
+</div>
+
+<!-- ======================================================= -->
+<h2>五、检索系统设计 <span class="tag">RETRIEVAL</span></h2>
+
+<div class="card" onclick="toggle(this)">
+  <div class="card-header">
+    <svg class="card-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+    <span class="card-title">多路径召回 — 三路检索策略</span>
+    <span class="card-badge badge-p0">P0</span>
+  </div>
+  <div class="card-body"><div class="card-inner">
+    <table class="cmp-table">
+      <tr><th>路径</th><th>适用场景</th><th>核心机制</th><th>优先级</th></tr>
+      <tr>
+        <td style="color:var(--accent6)">Path A: Entity-ID</td>
+        <td>实体查询（明确 entity name）</td>
+        <td>按 entity_ids JSON 列直接查询，通过 canonical_name + aliases + identifiers 匹配</td>
+        <td>Primary</td>
+      </tr>
+      <tr>
+        <td style="color:var(--accent)">Path B: Dense</td>
+        <td>中文/主题查询</td>
+        <td>FAISS embedding 向量检索。LLM 归一化已在索引阶段桥接词汇差异，query-time 语义匹配作为补充。</td>
+        <td>Secondary</td>
+      </tr>
+      <tr>
+        <td style="color:var(--accent3)">Path C: BM25/FTS5</td>
+        <td>Entity-ID 失败时的兜底</td>
+        <td>FTS5 全文检索 + jieba 中文分词。构建更广的 BM25 query 作为 fallback。</td>
+        <td>Fallback</td>
+      </tr>
+    </table>
+    <div class="block">
+      <div class="block-title">为何保留 Dense 检索</div>
+      <p>分析曾发现 BM25 + 结构化打分已覆盖绝大多数场景（fusion score ~0.016 被 entity bonus 0.2 + event_type bonus 0.1 淹没），但 Vector Index 仍作为辅助路径保留，用于 broad_topic 和 entity_only 等文本匹配困难的 query type。</p>
+    </div>
+  </div></div>
+</div>
+
+<div class="card" onclick="toggle(this)">
+  <div class="card-header">
+    <svg class="card-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+    <span class="card-title">分层打分 — Intent 感知评分体系</span>
+  </div>
+  <div class="card-body"><div class="card-inner">
+    <p>不同 IntentType 有独立的 ScoringProfile（INTENT_PROFILES），控制各打分维度的权重。</p>
+    <div class="block">
+      <div class="block-title">基础打分层级</div>
+      <table class="cmp-table">
+        <tr><th>维度</th><th>基础权重</th><th>说明</th></tr>
+        <tr><td style="color:var(--accent2)">Entity 匹配</td><td>5.0</td><td>候选 KU 的 entity_ids 与查询实体匹配时获得最高权重</td></tr>
+        <tr><td style="color:var(--accent3)">Event Type 匹配</td><td>2.0</td><td>unit_type 与查询 event_types 匹配</td></tr>
+        <tr><td style="color:var(--accent)">BM25 文本分</td><td>1.0</td><td>FTS5 原始文本相关性</td></tr>
+        <tr><td style="color:var(--text-dim)">时效性</td><td>tiebreak</td><td>同等得分时，更新时间优先</td></tr>
+      </table>
+    </div>
+    <div class="block">
+      <div class="block-title">特殊 Intent 策略</div>
+      <ul class="rule-list">
+        <li><strong>COMPARATIVE_ANALYSIS</strong>：召回阶段用并集（而非交集），重排阶段加共现 bonus = 3.0 × (匹配实体数 - 1)。单条 KU 很少同时提及多实体，交集策略会导致 0 结果。</li>
+        <li><strong>BROAD_TOPIC</strong>：降低 entity 权重，提升 BM25 文本权重，因为 topic 查询可能没有明确实体。</li>
+      </ul>
+    </div>
+  </div></div>
+</div>
+
+<div class="card" onclick="toggle(this)">
+  <div class="card-header">
+    <svg class="card-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+    <span class="card-title">检索评估基线与薄弱环节</span>
+    <span class="card-badge badge-done">Metrics</span>
+  </div>
+  <div class="card-body"><div class="card-inner">
+    <div class="metric-row">
+      <div class="metric"><div class="val">71.7%</div><div class="lbl">Recall@5</div></div>
+      <div class="metric"><div class="val">89.3%</div><div class="lbl">Recall@20</div></div>
+      <div class="metric"><div class="val">0.535</div><div class="lbl">MRR</div></div>
+      <div class="metric"><div class="val">0.667</div><div class="lbl">NDCG@10</div></div>
+    </div>
+    <div class="block">
+      <div class="block-title">按 Query Type 分布（300 queries）</div>
+      <table class="cmp-table">
+        <tr><th>Query Type</th><th>数量</th><th>Recall@5</th><th>MRR</th><th>NDCG@10</th><th>瓶颈分析</th></tr>
+        <tr><td>multi_entity</td><td>56</td><td style="color:var(--green)">92.9%</td><td>0.791</td><td>0.877</td><td>—</td></tr>
+        <tr><td>entity_event_type</td><td>51</td><td style="color:var(--green)">92.2%</td><td>0.700</td><td>0.778</td><td>—</td></tr>
+        <tr><td>entity_time</td><td>41</td><td>70.7%</td><td>0.545</td><td>0.683</td><td>时间过滤精度</td></tr>
+        <tr><td style="color:var(--accent4)">broad_topic</td><td>72</td><td style="color:var(--accent4)">55.6%</td><td>0.383</td><td>0.532</td><td><strong>最大瓶颈</strong>：无明确实体，BM25 召回弱</td></tr>
+        <tr><td style="color:var(--accent4)">entity_only</td><td>80</td><td style="color:var(--accent4)">58.8%</td><td>0.383</td><td>0.531</td><td>实体解析覆盖率</td></tr>
+      </table>
+    </div>
+  </div></div>
+</div>
+
+<!-- ======================================================= -->
+<h2>六、用户测试最新发现 <span class="tag">TESTING</span></h2>
+
+<div class="card" onclick="toggle(this)">
+  <div class="card-header">
+    <svg class="card-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+    <span class="card-title">2026-05-20 测试会话 — 5 项发现 + 6 项质量评分</span>
+  </div>
+  <div class="card-body"><div class="card-inner">
+    <table class="cmp-table">
+      <tr><th>ID</th><th>严重度</th><th>摘要</th><th>状态</th></tr>
+      <tr>
+        <td>F20260520-001</td>
+        <td style="color:var(--accent4)">CRITICAL</td>
+        <td>时间范围过滤已修复。之前所有时间范围返回完全相同结果，现在不同范围正确返回不同子集。</td>
+        <td><span class="card-badge badge-done">FIXED</span></td>
+      </tr>
+      <tr>
+        <td>F20260520-002</td>
+        <td style="color:var(--accent4)">HIGH</td>
+        <td>BYD 英文别名搜索已修复。之前 0 条，现在 64 条且全部关于比亚迪。中文简称全部正常。</td>
+        <td><span class="card-badge badge-done">FIXED</span></td>
+      </tr>
+      <tr>
+        <td>F20260520-003</td>
+        <td style="color:var(--accent3)">HIGH</td>
+        <td>BM25 回退对话题搜索显著改善。"量化交易""芯片制裁""光刻"等从 0 条变为有结果，但精确度仍受 FTS5 分词限制。</td>
+        <td><span class="card-badge badge-p1">IMPROVED</span></td>
+      </tr>
+      <tr>
+        <td>F20260520-004</td>
+        <td style="color:var(--accent3)">MEDIUM</td>
+        <td>"海思"搜索仍返回 0/20 条华为海思相关结果。BM25 短 token 碰撞问题未解决。</td>
+        <td><span class="card-badge badge-p0">OPEN</span></td>
+      </tr>
+      <tr>
+        <td>F20260520-005</td>
+        <td style="color:var(--accent4)">HIGH</td>
+        <td>搜索不存在的实体仍返回 117 条结果且无警告。BM25 匹配常见 token（"公司""名称"）导致虚假命中。</td>
+        <td><span class="card-badge badge-p0">OPEN</span></td>
+      </tr>
+    </table>
+    <div class="block">
+      <div class="block-title">质量评分（Overall / 5 分制）</div>
+      <table class="cmp-table">
+        <tr><th>查询</th><th>Relevance</th><th>Info Density</th><th>Redundancy</th><th>Temporal</th><th>Overall</th></tr>
+        <tr><td>小米集团（无范围）</td><td>4</td><td>3</td><td>4</td><td>3</td><td>3.5</td></tr>
+        <tr><td>BYD（英文别名）</td><td>5</td><td>3</td><td>4</td><td>3</td><td>3.8</td></tr>
+        <tr><td>光刻（话题搜索）</td><td>4</td><td>3</td><td>4</td><td>2</td><td>3.3</td></tr>
+        <tr><td>量化交易（话题搜索）</td><td>2</td><td>2</td><td>3</td><td>2</td><td>2.3</td></tr>
+        <tr><td>小米集团 + 2026-04 时间范围</td><td>4</td><td>3</td><td>4</td><td>5</td><td>4.0</td></tr>
+        <tr><td>海思（短实体名）</td><td>1</td><td>2</td><td>2</td><td>2</td><td>1.8</td></tr>
+      </table>
+    </div>
+    <div class="block">
+      <div class="block-title">关键趋势</div>
+      <ul class="rule-list green">
+        <li><strong>时间范围过滤</strong>：从完全失效 → 精确生效，时间线查询可用（Temporal 评分 3 → 5）</li>
+        <li><strong>实体解析覆盖</strong>：BYD（0→64条）、恒大（1→60条），英文别名和中文简称修复</li>
+        <li><strong>话题搜索</strong>：从 0 结果 → 有结果但需筛选，FTS5 中文分词仍是精确度瓶颈</li>
+      </ul>
+      <ul class="rule-list red">
+        <li><strong>短实体名碰撞</strong>："海思" → 海思科（药企）噪声。2 字短名 BM25 碰撞问题持续存在</li>
+        <li><strong>不存在实体无警告</strong>：117 条无关结果 + 0 警告，会误导依赖 total_count>0 判断成功的 AI 集成</li>
+        <li><strong>event_time 缺失率</strong>：25%（比之前 54% 显著改善但仍有缺失）</li>
+      </ul>
+    </div>
+  </div></div>
+</div>
+
+<!-- ======================================================= -->
+<h2>七、图谱设计 <span class="tag">GRAPH</span></h2>
+
+<div class="card" onclick="toggle(this)">
+  <div class="card-header">
+    <svg class="card-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+    <span class="card-title">双核心建模 — Entity + EventCluster</span>
+    <span class="card-badge badge-p0">P0</span>
+  </div>
+  <div class="card-body"><div class="card-inner">
+    <p>图谱是 P0 正式产物，不是后续可选增强项。采用双核心建模：</p>
+    <div class="block">
+      <div class="block-title">节点类型</div>
+      <table class="cmp-table">
+        <tr><th>节点</th><th>职责</th><th>图谱角色</th></tr>
+        <tr><td style="color:var(--accent2)">Entity</td><td>承载稳定对象（公司、人物等）</td><td>第一版主检索节点</td></tr>
+        <tr><td style="color:var(--accent3)">EventCluster</td><td>承载聚合后的事件视图</td><td>连接实体的中间节点</td></tr>
+      </table>
+      <p style="margin-top:8px">KnowledgeUnit 作为证据层存在，<strong>不作为第一版主图检索节点</strong>。图谱负责结构和连接，不替代证据层。</p>
+    </div>
+    <div class="block">
+      <div class="block-title">边语义</div>
+      <table class="cmp-table">
+        <tr><th>方向</th><th>语义</th><th>示例</th></tr>
+        <tr><td>Entity → EventCluster</td><td>参与、触发、涉及</td><td>"小米集团" → [Q1 财报发布]</td></tr>
+        <tr><td>EventCluster → Entity</td><td>影响、作用于</td><td>[Q1 财报发布] → "小米集团"</td></tr>
+        <tr><td>Entity → Entity</td><td>控制、持股、供应、合作</td><td>"腾讯" → "京东" (持股)</td></tr>
+        <tr><td>EventCluster → EventCluster</td><td>时间先后、因果、演进</td><td>[宣布收购] → [收购完成]</td></tr>
+      </table>
+    </div>
+    <div class="block">
+      <div class="block-title">溯源约束</div>
+      <ul class="rule-list">
+        <li>所有图节点和边都必须可回溯到底层 KnowledgeUnit</li>
+        <li>GraphRAG 检索必须建立在证据层可验证前提下</li>
+        <li>图谱更新保留溯源信息（source_ku_ids / provenance）</li>
+      </ul>
+    </div>
+  </div></div>
+</div>
+
+<div class="card" onclick="toggle(this)">
+  <div class="card-header">
+    <svg class="card-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+    <span class="card-title">GraphRAG — 图增强检索</span>
+    <span class="card-badge badge-p0">P0</span>
+  </div>
+  <div class="card-body"><div class="card-inner">
+    <p>图谱增强作为检索管线的第 4 步，在 BM25 主检索之后执行。</p>
+    <table class="cmp-table">
+      <tr><th>Graph Action</th><th>路径</th><th>用途</th></tr>
+      <tr><td>Related-Event 检索</td><td>Entity → EventCluster</td><td>查找与某实体相关的所有事件簇</td></tr>
+      <tr><td>Co-involvement 扩展</td><td>Entity → EventCluster → Entity</td><td>通过共同参与的事件发现关联实体</td></tr>
+    </table>
+    <div class="block">
+      <div class="block-title">Fail-Open 设计</div>
+      <ul class="rule-list green">
+        <li>Neo4j 不可用/查询失败 → 不阻断主检索路径</li>
+        <li>检索继续返回 BM25 知识结果</li>
+        <li>图谱错误记录在 errors 字段中</li>
+        <li>API 返回 ok=true（非阻断错误不影响成功判定）</li>
+      </ul>
+    </div>
+    <div class="block">
+      <div class="block-title">PipelineResult 图谱输出契约</div>
+      <ul class="rule-list">
+        <li><code>graph.graph_enabled</code> — 是否启用图谱</li>
+        <li><code>graph.graph_used</code> — 图谱是否实际参与</li>
+        <li><code>graph.nodes / edges / paths</code> — 形式化图结果集</li>
+        <li><code>graph.candidate_count / expanded_cluster_count / expanded_entity_count</code> — 扩展统计</li>
+        <li><code>graph.hit_reasons</code> — 每个结果被图谱命中的原因</li>
+      </ul>
+    </div>
+  </div></div>
+</div>
+
+<!-- ======================================================= -->
+<h2>八、存储架构设计 <span class="tag">STORAGE</span></h2>
+
+<div class="card" onclick="toggle(this)">
+  <div class="card-header">
+    <svg class="card-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+    <span class="card-title">三层存储设计</span>
+  </div>
+  <div class="card-body"><div class="card-inner">
+    <table class="cmp-table">
+      <tr><th>存储层</th><th>技术</th><th>职责</th><th>设计要点</th></tr>
+      <tr>
+        <td style="color:var(--accent)">主存储</td>
+        <td>SQLite</td>
+        <td>所有核心数据的持久化</td>
+        <td>
+          news_articles — 原始文档<br>
+          knowledge_units — KU + FTS5 全文索引<br>
+          entities — 标准实体 + 归一索引<br>
+          event_clusters — 事件簇 + 聚合视图<br>
+          knowledge_processing_log — 处理状态追踪
+        </td>
+      </tr>
+      <tr>
+        <td style="color:var(--accent5)">图谱</td>
+        <td>Neo4j</td>
+        <td>关系存储与 GraphRAG</td>
+        <td>
+          Entity 节点 + EventCluster 节点 + INVOLVED_IN 边<br>
+          读路径不执行 schema writes<br>
+          所有节点/边保留 provenance
+        </td>
+      </tr>
+      <tr>
+        <td style="color:var(--accent2)">向量索引</td>
+        <td>FAISS</td>
+        <td>语义检索</td>
+        <td>
+          KU 语义向量索引（Path B）<br>
+          支持增量更新<br>
+          与 BM25 互为补充
+        </td>
+      </tr>
+    </table>
+    <div class="block">
+      <div class="block-title">自修复机制</div>
+      <ul class="rule-list">
+        <li>旧 SQLite 行缺失 entity_ids → 从 payload 反填</li>
+        <li>旧 SQLite 行缺失 FTS 行 → 重建</li>
+        <li>旧 cluster payload 缺失聚合字段 → 从成员 KU 重建并回写</li>
+      </ul>
+    </div>
+  </div></div>
+</div>
+
+<!-- ======================================================= -->
+<h2>九、关键设计决策 <span class="tag">DECISIONS</span></h2>
+
+<div class="decision">
+  <div class="d-title">保守归并 > 激进归并</div>
+  <div class="d-why">实体归一化和事件归并都偏保守。宁可多簇/多实体，不误合并。稳定标识（证券代码、注册号）优先直接归一；名称模糊匹配仅作辅助；不确定时暂不合并。</div>
+  <div class="d-tradeoff">Tradeoff: 召回率可能略低（同一实体的不同表述可能被拆分），但 Precision 得到严格保障。当前实体解析 P=1.0。</div>
+</div>
+
+<div class="decision">
+  <div class="d-title">Fail-Fast 抽取 > 静默降级</div>
+  <div class="d-why">KnowledgeUnit 抽取默认 fail-fast。LLM 未配置、调用失败或返回不满足契约时直接报错，不静默回退到启发式。开发阶段禁止"未配置/失败后自动回退"。</div>
+  <div class="d-tradeoff">Tradeoff: 系统在没有 LLM 时完全不可用（不能 fallback），但这避免了"静默降级导致数据质量不可控"的更大风险。</div>
+</div>
+
+<div class="decision">
+  <div class="d-title">LLM 原生时间解析 > Python 后处理（v2 变更）</div>
+  <div class="d-why">v1 使用 TimeNormalizer（380+ 行正则匹配）在抽取后解析中文时间表达式。v2 改为让 LLM 在抽取时直接输出 ISO 8601 绝对时间，TimeNormalizer 降级为验证器（~100 行）。LLM 拥有完整上下文（全文 + published_at），解析质量高于 post-hoc 正则。</div>
+  <div class="d-tradeoff">Tradeoff: 如果 LLM 输出的时间格式不正确，后验证器会标记 validation_error 但不尝试重新解析。依赖 LLM 遵循时间解析规范。新增 time_grain 字段（day/month/quarter/year）记录时间粒度。向后兼容通过 _LEGACY_RESOLUTION_MAP 映射旧 resolution 值。</div>
+</div>
+
+<div class="decision">
+  <div class="d-title">Schema 硬约束 > Prompt 软引导（v2 强化）</div>
+  <div class="d-why">v2 将 unit_type、entity_type、relation_type、event_time_resolution、time_grain 全部注入 JSON schema enum。LLM 填参数时优先参考 schema 定义（硬约束），prompt 文本（软引导）只用于传达判断逻辑。消除了"prompt 里写只能从列表选择但 schema type:string 无约束"的反模式。</div>
+  <div class="d-tradeoff">Tradeoff: enum 变更需要同时更新 UnitType 枚举和 schema 构建逻辑。但消除了 LLM 输出不在枚举范围内的后处理 normalization 负担。</div>
+</div>
+
+<div class="decision">
+  <div class="d-title">Prompt 只做感知，不做认知</div>
+  <div class="d-why">LLM 抽取 prompt 只负责识别和提取（感知）。实体消歧、冲突裁决、事件归并等认知任务交给后处理模块。抽取阶段没有全局视角，强行做认知任务会引入不可调试的冲突。</div>
+  <div class="d-tradeoff">Tradeoff: 单篇抽取可能产出不一致的实体命名，但通过实体上下文注入 + 后处理消歧可以修正。代价是后处理链路较长。</div>
+</div>
+
+<div class="decision">
+  <div class="d-title">图谱默认开启 + Fail-Open 读</div>
+  <div class="d-why">图谱是 P0 正式产物，主线默认开启。读路径（GraphRAG）fail-open：Neo4j 不可用时不阻断主检索。写路径（图谱同步）失败可重试。graph_enabled=False 仅用于测试/调试。</div>
+  <div class="d-tradeoff">Tradeoff: 生产环境需要 Neo4j 可用，但检索不依赖图谱——BM25 结果仍然有效。图谱增强是增量价值，不是基础前提。</div>
+</div>
+
+<div class="decision">
+  <div class="d-title">LLM 意图解析已外移</div>
+  <div class="d-why">LLM 意图解析从检索服务中分离。调用方（agent）直接传入 StructuredQuery 参数。检索服务不再内部调用 LLM，减少延迟和成本。</div>
+  <div class="d-tradeoff">Tradeoff: 调用方需要自行构造结构化查询，但获得了更大的灵活性。IntentType 枚举保留供检索侧路由和评分使用。</div>
+</div>
+
+<div class="decision">
+  <div class="d-title">Statement-Level 入库（非文档级）</div>
+  <div class="d-why">一条 KnowledgeUnit = 来源中的一次陈述，不是一篇文章。粒度细化到陈述级，使得证据可精确溯源、冲突可精确标记、归并可精确匹配。</div>
+  <div class="d-tradeoff">Tradeoff: KU 数量远多于文档数（80 文档 → 528 KU），存储和检索成本更高，但换来了精确的证据粒度。</div>
+</div>
+
+<div class="decision">
+  <div class="d-title">Legacy 隔离 — 不回头</div>
+  <div class="d-why">IntelligenceParticle、RiskReport、旧风险图查询语义已全部弃用。Skill/API/Session 模块已删除。新功能不得以旧风险模型为核心扩展。不再为旧消费链路维持兼容。</div>
+  <div class="d-tradeoff">Tradeoff: 完全不向后兼容，但消除了技术债的持续积累。迁移后的代码库更清晰、可维护性更强。</div>
+</div>
+
+<!-- ======================================================= -->
+<h2>十、接口契约 <span class="tag">API</span></h2>
+
+<div class="card" onclick="toggle(this)">
+  <div class="card-header">
+    <svg class="card-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+    <span class="card-title">CLI 接口（面向 agent）</span>
+  </div>
+  <div class="card-body"><div class="card-inner">
+    <table class="cmp-table">
+      <tr><th>命令</th><th>职责</th><th>输入</th><th>输出</th></tr>
+      <tr>
+        <td><code>knowledge-cli search</code></td>
+        <td>结构化参数检索</td>
+        <td>--entities, --time-range, --intent, --event-types, --top-k</td>
+        <td>JSON: PipelineResult</td>
+      </tr>
+      <tr>
+        <td><code>knowledge-cli ingest</code></td>
+        <td>离线知识化建库</td>
+        <td>[--dry-run]</td>
+        <td>JSON: 处理统计</td>
+      </tr>
+      <tr>
+        <td><code>knowledge-cli start</code></td>
+        <td>启动后台爬取+处理</td>
+        <td>[--graph-enabled]</td>
+        <td>进程 PID</td>
+      </tr>
+      <tr>
+        <td><code>knowledge-cli stop</code></td>
+        <td>停止后台进程</td>
+        <td>—</td>
+        <td>确认</td>
+      </tr>
+      <tr>
+        <td><code>knowledge-cli status</code></td>
+        <td>查看运行状态</td>
+        <td>—</td>
+        <td>进程状态 JSON</td>
+      </tr>
+    </table>
+  </div></div>
+</div>
+
+<div class="card" onclick="toggle(this)">
+  <div class="card-header">
+    <svg class="card-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+    <span class="card-title">PipelineResult 输出契约</span>
+  </div>
+  <div class="card-body"><div class="card-inner">
+    <p>run_pipeline() 返回的类型化输出，JSON 序列化供 agent 消费。</p>
+    <table class="field-table">
+      <tr><th>字段</th><th>类型</th><th>说明</th></tr>
+      <tr><td>request_id</td><td>str</td><td>请求唯一标识</td></tr>
+      <tr><td>query</td><td>StructuredQuery</td><td>原始查询参数（回显）</td></tr>
+      <tr><td>source</td><td>"knowledge_base" | "direct_articles"</td><td>数据来源</td></tr>
+      <tr><td>knowledge_units</td><td>list[dict]</td><td>命中的知识单元</td></tr>
+      <tr><td>entities</td><td>list[dict]</td><td>关联实体</td></tr>
+      <tr><td>event_clusters</td><td>list[dict]</td><td>关联事件簇</td></tr>
+      <tr><td>total_count</td><td>int</td><td>总结果数</td></tr>
+      <tr><td>retrieval</td><td>RetrievalMeta</td><td>retrieval_mode / bm25_count / applied_filters / hit_scores</td></tr>
+      <tr><td>graph</td><td>GraphMeta</td><td>graph_enabled / used / candidate_count / expanded counts / hit_reasons / hops</td></tr>
+      <tr><td>graph_data</td><td>dict</td><td>形式化图结果集（nodes / edges / paths）</td></tr>
+      <tr><td>errors</td><td>list[str]</td><td>非阻断错误（如图谱 fail-open）</td></tr>
+    </table>
+  </div></div>
+</div>
+
+<div class="card" onclick="toggle(this)">
+  <div class="card-header">
+    <svg class="card-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
+    <span class="card-title">StructuredQuery 查询模型</span>
+  </div>
+  <div class="card-body"><div class="card-inner">
+    <p>调用方构造的结构化查询参数。不再支持自然语言输入。</p>
+    <table class="field-table">
+      <tr><th>字段</th><th>类型</th><th>说明</th></tr>
+      <tr><td>original_query</td><td>str | None</td><td>原始查询文本（可选，仅用于 BM25 兜底）</td></tr>
+      <tr><td>intent</td><td>IntentType</td><td>9 种意图枚举（ENTITY_OVERVIEW / ENTITY_TIMELINE / COMPARATIVE_ANALYSIS / ...）</td></tr>
+      <tr><td>entities</td><td>list[str]</td><td>实体名称列表</td></tr>
+      <tr><td>time_range</td><td>TimeRange | None</td><td>start / end 日期范围（已修复：v2 正确过滤结果）</td></tr>
+      <tr><td>filters</td><td>QueryFilters</td><td>event_types / sources / min_credibility / categories</td></tr>
+      <tr><td>top_k</td><td>int</td><td>返回结果数量（默认 20）</td></tr>
+    </table>
+    <div class="block">
+      <div class="block-title">IntentType 枚举</div>
+      <p>ENTITY_TIMELINE / ENTITY_OVERVIEW / RELATIONSHIP_QUERY / COMPARATIVE_ANALYSIS / EVENT_ANALYSIS / RISK_ASSESSMENT / GUARANTEE_ANALYSIS / TOPIC_RESEARCH / EVENT_IMPACT_ANALYSIS</p>
+      <p style="margin-top:6px">IntentType 用于路由到不同的检索策略和 ScoringProfile，不是 LLM 意图识别结果。调用方根据业务场景自行选择。</p>
+    </div>
+  </div></div>
+</div>
+
+<!-- ======================================================= -->
+<h2>十一、文档优先级 <span class="tag">AUTHORITY</span></h2>
+
+<div style="font-size:12.5px;line-height:2.2">
+  <span style="color:var(--accent);font-weight:600">1.</span>
+  <code>docs/SHARED_RULES.md</code> — 项目唯一真源，所有数据契约和 guardrails 的权威定义<br>
+  <span style="color:var(--accent);font-weight:600">2.</span>
+  <code style="color:var(--text-dim)">代码中的真实实现</code> — 当文档与代码不一致时，以代码为准<br>
+  <span style="color:var(--text-dim)">3.</span>
+  <code>README.md</code> — 外部入口与高层说明<br>
+  <span style="color:var(--text-dim)">4.</span>
+  <code>CLAUDE.md / AGENTS.md</code> — Agent 入口说明
+</div>
+
+</div>
+
+<script>
+function toggle(card) {
+  card.classList.toggle('open');
+}
+</script>
+</body>
+</html>

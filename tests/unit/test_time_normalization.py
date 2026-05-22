@@ -28,7 +28,7 @@ def context() -> TimeNormalizationContext:
 
 
 class TestNormalizeIsoDatetime:
-    """Tests for ISO datetime normalization."""
+    """Tests for ISO datetime validation."""
 
     def test_normalize_iso_datetime_with_z_suffix(
         self, normalizer: TimeNormalizer, context: TimeNormalizationContext
@@ -39,8 +39,8 @@ class TestNormalizeIsoDatetime:
         assert result.normalized_time.year == 2026
         assert result.normalized_time.month == 4
         assert result.normalized_time.day == 3
-        assert result.resolution_type == "absolute"
-        assert result.confidence == 0.95
+        assert result.resolution_type == "explicit"
+        assert result.validation_error is None
 
     def test_normalize_iso_datetime_with_timezone(
         self, normalizer: TimeNormalizer, context: TimeNormalizationContext
@@ -48,7 +48,7 @@ class TestNormalizeIsoDatetime:
         result = normalizer.normalize_event_time("2026-04-03T14:30:00+08:00", context)
 
         assert result.normalized_time is not None
-        assert result.resolution_type == "absolute"
+        assert result.resolution_type == "explicit"
 
     def test_normalize_iso_date_only(
         self, normalizer: TimeNormalizer, context: TimeNormalizationContext
@@ -57,142 +57,76 @@ class TestNormalizeIsoDatetime:
 
         assert result.normalized_time is not None
         assert result.normalized_time.date() == date(2026, 4, 3)
-        assert result.resolution_type == "absolute"
+        assert result.resolution_type == "explicit"
 
 
-class TestNormalizeRelativeTime:
-    """Tests for relative time normalization."""
+class TestTimeValidation:
+    """Tests for LLM-produced time validation."""
 
-    def test_normalize_yesterday(
+    def test_future_time_flagged(
+        self, normalizer: TimeNormalizer, context: TimeNormalizationContext
+    ) -> None:
+        result = normalizer.normalize_event_time("2030-01-01T00:00:00Z", context)
+
+        assert result.normalized_time is not None
+        assert result.normalized_time.year == 2030
+        assert result.validation_error == "event_time is in the future"
+
+    def test_implausibly_old_time_flagged(
+        self, normalizer: TimeNormalizer, context: TimeNormalizationContext
+    ) -> None:
+        # context.published_at is 2026-04-05, 3+ years before is before 2023-04-05
+        result = normalizer.normalize_event_time("2020-01-01T00:00:00Z", context)
+
+        assert result.normalized_time is not None
+        assert result.validation_error is not None
+        assert "before published_at" in result.validation_error
+
+    def test_non_iso_string_returns_unresolved(
         self, normalizer: TimeNormalizer, context: TimeNormalizationContext
     ) -> None:
         result = normalizer.normalize_event_time("昨天", context)
 
-        assert result.normalized_time is not None
-        assert result.normalized_time.date() == date(2026, 4, 4)
-        assert result.resolution_type == "relative"
-        assert result.original_expression == "昨天"
-        assert result.confidence >= 0.85
+        assert result.normalized_time is None
+        assert result.resolution_type == "unresolved"
+        assert result.validation_error is not None
+        assert "non-ISO" in result.validation_error
 
-    def test_normalize_today(
+    def test_resolution_type_preserved(
         self, normalizer: TimeNormalizer, context: TimeNormalizationContext
     ) -> None:
-        result = normalizer.normalize_event_time("今天", context)
+        result = normalizer.normalize_event_time(
+            "2026-04-03T00:00:00Z", context, resolution_type="contextual"
+        )
 
         assert result.normalized_time is not None
-        assert result.normalized_time.date() == date(2026, 4, 5)
-        assert result.resolution_type == "relative"
+        assert result.resolution_type == "contextual"
 
-    def test_normalize_two_days_ago(
+    def test_time_grain_preserved(
         self, normalizer: TimeNormalizer, context: TimeNormalizationContext
     ) -> None:
-        result = normalizer.normalize_event_time("2天前", context)
+        result = normalizer.normalize_event_time(
+            "2026-01-01T00:00:00Z", context, time_grain="quarter"
+        )
 
         assert result.normalized_time is not None
-        assert result.normalized_time.date() == date(2026, 4, 3)
+        assert result.time_grain == "quarter"
 
-    def test_normalize_three_days_ago(
+    def test_empty_string_returns_unresolved(
         self, normalizer: TimeNormalizer, context: TimeNormalizationContext
     ) -> None:
-        result = normalizer.normalize_event_time("3天前", context)
+        result = normalizer.normalize_event_time("", context)
 
-        assert result.normalized_time is not None
-        assert result.normalized_time.date() == date(2026, 4, 2)
+        assert result.normalized_time is None
+        assert result.resolution_type == "unresolved"
 
-    def test_normalize_last_week_monday(
+    def test_whitespace_string_returns_unresolved(
         self, normalizer: TimeNormalizer, context: TimeNormalizationContext
     ) -> None:
-        # 2026-04-05 is Saturday
-        # This week: 2026-03-30 (Mon) to 2026-04-05 (Sun)
-        # Last week: 2026-03-23 (Mon) to 2026-03-29 (Sun)
-        result = normalizer.normalize_event_time("上周一", context)
+        result = normalizer.normalize_event_time("  ", context)
 
-        assert result.normalized_time is not None
-        # Last Monday is 2026-03-23
-        assert result.normalized_time.date() == date(2026, 3, 23)
-
-    def test_normalize_last_week_friday(
-        self, normalizer: TimeNormalizer, context: TimeNormalizationContext
-    ) -> None:
-        # 2026-04-05 is Saturday
-        result = normalizer.normalize_event_time("上周五", context)
-
-        assert result.normalized_time is not None
-        # Last Friday before 2026-04-05 is 2026-03-27 (not 2026-04-03, which is this week)
-        assert result.normalized_time.date() == date(2026, 3, 27)
-
-    def test_normalize_this_week_monday(
-        self, normalizer: TimeNormalizer, context: TimeNormalizationContext
-    ) -> None:
-        # 2026-04-05 is Saturday
-        result = normalizer.normalize_event_time("本周一", context)
-
-        assert result.normalized_time is not None
-        # Monday of the week containing 2026-04-05 is 2026-03-30
-        assert result.normalized_time.date() == date(2026, 3, 30)
-
-    def test_normalize_last_month(
-        self, normalizer: TimeNormalizer, context: TimeNormalizationContext
-    ) -> None:
-        result = normalizer.normalize_event_time("上个月", context)
-
-        assert result.normalized_time is not None
-        # One month before April 2026 is March 2026
-        assert result.normalized_time.month == 3
-
-    def test_normalize_last_year(
-        self, normalizer: TimeNormalizer, context: TimeNormalizationContext
-    ) -> None:
-        result = normalizer.normalize_event_time("去年", context)
-
-        assert result.normalized_time is not None
-        assert result.normalized_time.year == 2025
-
-    def test_normalize_past_one_week(
-        self, normalizer: TimeNormalizer, context: TimeNormalizationContext
-    ) -> None:
-        result = normalizer.normalize_event_time("过去一周", context)
-
-        assert result.normalized_time is not None
-        expected_date = date(2026, 3, 29)  # 7 days before 2026-04-05
-        assert result.normalized_time.date() == expected_date
-
-
-class TestNormalizeFuzzyTime:
-    """Tests for fuzzy time normalization."""
-
-    def test_normalize_recent_days(
-        self, normalizer: TimeNormalizer, context: TimeNormalizationContext
-    ) -> None:
-        result = normalizer.normalize_event_time("近日", context)
-
-        assert result.normalized_time is not None
-        assert result.resolution_type == "fuzzy"
-        assert result.confidence == 0.6
-        assert result.time_range_hint is not None
-        # Should return a range around the published date
-        start, end = result.time_range_hint
-        assert end == date(2026, 4, 5)
-        assert start == date(2026, 3, 29)  # 7 days before
-
-    def test_normalize_recent_week(
-        self, normalizer: TimeNormalizer, context: TimeNormalizationContext
-    ) -> None:
-        result = normalizer.normalize_event_time("近期", context)
-
-        assert result.normalized_time is not None
-        assert result.resolution_type == "fuzzy"
-        assert result.time_range_hint is not None
-
-    def test_normalize_year_start(
-        self, normalizer: TimeNormalizer, context: TimeNormalizationContext
-    ) -> None:
-        result = normalizer.normalize_event_time("今年初", context)
-
-        assert result.normalized_time is not None
-        assert result.resolution_type == "fuzzy"
-        assert result.normalized_time.month == 1
-        assert result.normalized_time.day == 1
+        assert result.normalized_time is None
+        assert result.resolution_type == "unresolved"
 
 
 class TestUnresolvedTime:
@@ -205,27 +139,58 @@ class TestUnresolvedTime:
 
         assert result.normalized_time is None
         assert result.resolution_type == "unresolved"
-        assert result.confidence == 0.0
+        assert result.validation_error is None
 
-    def test_normalize_unrecognized_returns_unresolved(
+    def test_unrecognized_string_returns_unresolved(
         self, normalizer: TimeNormalizer, context: TimeNormalizationContext
     ) -> None:
         result = normalizer.normalize_event_time("某个时间", context)
 
         assert result.normalized_time is None
         assert result.resolution_type == "unresolved"
-        assert result.confidence == 0.0
+        assert result.validation_error is not None
 
 
 class TestAlreadyDatetime:
     """Tests for already-normalized datetime values."""
 
-    def test_normalize_datetime_returns_absolute(
+    def test_normalize_datetime_returns_explicit(
         self, normalizer: TimeNormalizer, context: TimeNormalizationContext
     ) -> None:
         dt = datetime(2026, 3, 15, 10, 0, 0, tzinfo=UTC)
         result = normalizer.normalize_event_time(dt, context)
 
         assert result.normalized_time == dt
-        assert result.resolution_type == "absolute"
-        assert result.confidence == 1.0
+        assert result.resolution_type == "explicit"
+        assert result.validation_error is None
+
+    def test_naive_datetime_gets_utc(
+        self, normalizer: TimeNormalizer, context: TimeNormalizationContext
+    ) -> None:
+        dt = datetime(2026, 3, 15, 10, 0, 0)
+        result = normalizer.normalize_event_time(dt, context)
+
+        assert result.normalized_time is not None
+        assert result.normalized_time.tzinfo == UTC
+
+
+class TestLegacyResolutionTypeCompat:
+    """Tests that old TimeResolutionType values map correctly."""
+
+    @pytest.mark.parametrize("legacy,expected", [
+        ("absolute", "explicit"),
+        ("relative", "contextual"),
+        ("fuzzy", "contextual"),
+        ("explicit", "explicit"),
+        ("contextual", "contextual"),
+        ("unresolved", "unresolved"),
+    ])
+    def test_legacy_resolution_mapped(self, legacy: str, expected: str) -> None:
+        from src.knowledge_base import TimeRef
+
+        tr = TimeRef.model_validate({
+            "published_at": "2026-04-05T00:00:00Z",
+            "extracted_at": "2026-04-05T00:00:00Z",
+            "event_time_resolution": legacy,
+        })
+        assert tr.event_time_resolution == expected

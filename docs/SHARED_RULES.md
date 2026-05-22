@@ -371,18 +371,9 @@ uv run pyright .
 - 图谱更新结果可回溯到底层 `KnowledgeUnit`
 - 文档引用统一指向本文件，不再把旧风险导向描述当项目真源
 
-## 9. 进度维护
-
-完成任何功能开发后，必须同步更新 `PROGRESS.md`：
-
-- 更新对应模块的完成状态
-- 补充新增能力或约束
-- 若新增的是项目级规则，也要同时回写到本文件
-
-## 10. 文档分层
+## 9. 文档分层
 
 - `docs/SHARED_RULES.md`：项目级唯一真源
-- `PROGRESS.md`：当前状态、迁移进度与待办
 - `README.md`：外部入口与高层说明
 - `AGENTS.md`：Codex 入口
 - `CLAUDE.md`：Claude Code 入口
@@ -392,6 +383,5 @@ uv run pyright .
 
 1. `docs/SHARED_RULES.md`
 2. 代码中的真实实现
-3. `PROGRESS.md`
-4. `README.md`
-5. `AGENTS.md` / `CLAUDE.md` / `.claude/rules/`
+3. `README.md`
+4. `AGENTS.md` / `CLAUDE.md` / `.claude/rules/`
