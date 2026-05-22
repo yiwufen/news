@@ -451,6 +451,16 @@
       </ul>
     </div>
     <div class="block">
+      <div class="block-title">冲突检测（双层）</div>
+      <p>归并时自动执行双层冲突检测：</p>
+      <ul class="rule-list">
+        <li><strong>规则层</strong>：TIME_MISMATCH / AMOUNT_MISMATCH / PARTICIPANT_MISMATCH（结构化字段比较）</li>
+        <li><strong>LLM 语义层</strong>（v2 新增）：factual / numerical / temporal / sentiment 语义矛盾检测，仅对多源 cluster 执行</li>
+        <li>任一层检测到 high severity → conflict_status = "confirmed"</li>
+        <li>LLM 调用失败时 fail-open，不影响 cluster 构建</li>
+      </ul>
+    </div>
+    <div class="block">
       <div class="block-title">默认不自动合并的情况</div>
       <ul class="rule-list red">
         <li>同一主体但不同事件阶段（如"宣布收购"和"收购完成"）</li>
@@ -572,7 +582,7 @@
         <tr><th>原文 + published_at</th><th>期望 event_time</th><th>resolution</th><th>grain</th></tr>
         <tr style="color:var(--green)"><td>"宁德时代4月3日发布财报" + 2026-04-05</td><td>2026-04-03T00:00:00Z</td><td>explicit</td><td>day</td></tr>
         <tr style="color:var(--green)"><td>"昨日涨停" + 2026-04-05</td><td>2026-04-04T00:00:00Z</td><td>contextual</td><td>day</td></tr>
-        <tr style="color:var(--green)"><td>"今年Q1营收同比增长15%" + 2026-04-05</td><td>2026-01-01T00:00:00Z</td><td>explicit</td><td>quarter</td></tr>
+        <tr style="color:var(--green)"><td>"今年Q1营收同比增长15%" + 2026-04-05</td><td>2026-01-01T00:00:00Z</td><td>contextual</td><td>quarter</td></tr>
         <tr style="color:var(--accent4)"><td>"昨日涨停" + 2026-04-05 → "昨天" ✗</td><td colspan="3">必须解析为绝对日期，不能照抄原文</td></tr>
         <tr style="color:var(--accent4)"><td>"近期签署协议" + 2026-04-05 → null ✗</td><td colspan="3">模糊时间也应给出最佳估计，不是 null</td></tr>
         <tr style="color:var(--accent4)"><td>"Q1业绩超预期" → grain="day" ✗</td><td colspan="3">季度表达式应标记 grain = quarter</td></tr>
@@ -607,23 +617,58 @@
 <div class="card" onclick="toggle(this)">
   <div class="card-header">
     <svg class="card-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
-    <span class="card-title">冲突检测 — 多源冲突保留</span>
+    <span class="card-title">冲突检测 — 双层检测：规则 + LLM 语义</span>
+    <span class="card-badge badge-p0">P0</span>
   </div>
   <div class="card-body"><div class="card-inner">
-    <p>多来源报道同一事件时，可能存在时间、金额、参与者方面的冲突。系统必须检测并保留这些冲突信息，不得静默覆盖。</p>
-    <table class="cmp-table">
-      <tr><th>冲突类型</th><th>检测逻辑</th><th>标记</th></tr>
-      <tr><td>TIME_MISMATCH</td><td>不同来源对同一事件的 event_time 不一致</td><td>仅比较显式 event_time，不比较 published_at</td></tr>
-      <tr><td>AMOUNT_MISMATCH</td><td>金额数值不一致（支持"亿元""万美元""港元"）</td><td>从中文文本提取金额后比较</td></tr>
-      <tr><td>PARTICIPANT_MISMATCH</td><td>参与者信息矛盾</td><td>补充性提及不视为冲突；只有矛盾信息才标记</td></tr>
-    </table>
+    <p>多来源报道同一事件时可能存在事实矛盾。系统采用双层检测架构：<strong>第一层</strong>规则引擎检测结构化冲突，<strong>第二层</strong> LLM 检测语义矛盾。</p>
+    <div class="block">
+      <div class="block-title">第一层：规则引擎（ConflictDetector）</div>
+      <table class="cmp-table">
+        <tr><th>冲突类型</th><th>检测逻辑</th><th>标记规则</th></tr>
+        <tr><td>TIME_MISMATCH</td><td>不同来源对同一事件的 event_time 不一致</td><td>仅比较显式 event_time，不比较 published_at</td></tr>
+        <tr><td>AMOUNT_MISMATCH</td><td>金额数值不一致（支持"亿元""万美元""港元"）</td><td>从中文文本提取金额后比较</td></tr>
+        <tr><td>PARTICIPANT_MISMATCH</td><td>参与者信息矛盾</td><td>补充性提及不视为冲突；只有矛盾信息才标记</td></tr>
+      </table>
+    </div>
+    <div class="block">
+      <div class="block-title">第二层：LLM 语义检测（LLMConflictDetector）— v2 新增</div>
+      <p>规则引擎只能检测结构化字段冲突。LLM 语义检测可发现更深层的语义矛盾，如立场对立、方向相反、同一交易不同金额等。</p>
+      <table class="cmp-table">
+        <tr><th>冲突类型</th><th>说明</th><th>示例</th></tr>
+        <tr><td style="color:var(--accent4)">factual</td><td>事实矛盾：方向相反、主体错位</td><td>A: "腾讯收购搜狗" vs B: "搜狗收购腾讯"</td></tr>
+        <tr><td style="color:var(--accent3)">numerical</td><td>数值矛盾：同一事实不同数据</td><td>A: "交易金额425亿元" vs B: "交易金额382亿元"</td></tr>
+        <tr><td style="color:var(--accent2)">temporal</td><td>时间矛盾</td><td>同一事件不同时间描述</td></tr>
+        <tr><td style="color:var(--accent5)">sentiment</td><td>立场矛盾</td><td>A: "利好科技板块" vs B: "对科技板块构成利空"</td></tr>
+      </table>
+    </div>
+    <div class="block">
+      <div class="block-title">LLM 冲突检测 Prompt 设计</div>
+      <ul class="rule-list">
+        <li><strong>准确性优先：宁漏勿误报</strong>——仅当两条描述对同一事实给出不可调和的矛盾陈述时才标记</li>
+        <li>明确列出"不是矛盾"的情况：补充性信息、不同指标、不同时间节点的数据、单方面增补</li>
+        <li>给出正例（矛盾）+ 解释：方向相反、立场相反、数值不同</li>
+        <li>使用 tool-use 模式 + schema enum 约束 conflict_type 和 severity</li>
+        <li>输入结构：参考描述（代表来源）+ 待比较描述列表</li>
+      </ul>
+    </div>
+    <div class="block">
+      <div class="block-title">集成到事件归并</div>
+      <ul class="rule-list">
+        <li>LLM 语义检测仅对<strong>多源 cluster</strong>执行（≥2 个不同 source_doc_ids）</li>
+        <li>检测结果加入 conflict_reasons：格式 <code>semantic:{type}</code>（如 semantic:factual）</li>
+        <li><strong>影响冲突等级</strong>：semantic severity=high → conflict_status 升至 "confirmed"</li>
+        <li><strong>Fail-Open</strong>：LLM 调用失败时静默跳过，cluster 正常构建，不影响主流程</li>
+        <li>结果序列化到 conflict_details，与规则检测结果共存</li>
+      </ul>
+    </div>
     <div class="block">
       <div class="block-title">设计约束</div>
       <ul class="rule-list warn">
         <li>仅比较显式 event_time——differing published_at without explicit event dates 不产生冲突</li>
         <li>补充性参与者提及（additive）不视为冲突，只有矛盾性差异才标记</li>
-        <li>adjacent-day explicit event-date disagreements 标记为 possible，不静默 flatten</li>
-        <li>LLM 原生解析后 event_time 为绝对时间，冲突检测直接比较 datetime 值，不再需要处理中文表达式</li>
+        <li>LLM 原生解析后 event_time 为绝对时间，冲突检测直接比较 datetime 值</li>
+        <li>LLM 检测错误不阻塞 cluster 构建——cluster 仍以规则检测结果为准</li>
       </ul>
     </div>
   </div></div>
@@ -935,6 +980,12 @@
   <div class="d-title">Fail-Fast 抽取 > 静默降级</div>
   <div class="d-why">KnowledgeUnit 抽取默认 fail-fast。LLM 未配置、调用失败或返回不满足契约时直接报错，不静默回退到启发式。开发阶段禁止"未配置/失败后自动回退"。</div>
   <div class="d-tradeoff">Tradeoff: 系统在没有 LLM 时完全不可用（不能 fallback），但这避免了"静默降级导致数据质量不可控"的更大风险。</div>
+</div>
+
+<div class="decision">
+  <div class="d-title">双层冲突检测：规则 + LLM 语义（v2 新增）</div>
+  <div class="d-why">规则引擎只能检测结构化字段差异（时间、金额、参与者），无法发现语义层面的矛盾（方向相反、立场对立）。新增 LLMConflictDetector 用 LLM tool-use 检测深层矛盾，补充规则引擎的盲区。</div>
+  <div class="d-tradeoff">Tradeoff: LLM 调用增加 cluster 构建延迟（每批 cluster 一次 LLM 调用）。设计为 fail-open：LLM 失败时不阻塞 cluster 构建，仅用规则检测结果。仅对多源 cluster 执行，避免单源场景的无效调用。LLM 冲突检测的 "宁漏勿误报" 原则与整体保守归并策略一致。</div>
 </div>
 
 <div class="decision">

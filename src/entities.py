@@ -311,7 +311,7 @@ class Entity(BaseModel):
     """Normalized entity."""
 
     entity_id: str = Field(default_factory=lambda: f"ent_{uuid4().hex[:12]}")
-    entity_type: EntityKind
+    entity_type: EntityKind | None = None
     canonical_name: str
     aliases: list[str] = Field(default_factory=list)
     identifiers: dict[str, str] = Field(default_factory=dict)
@@ -354,11 +354,10 @@ def _infer_entity_type(name: str) -> EntityKind:
     return "Company"
 
 
-def _resolve_entity_type(entity_type: str | None, mention: str) -> EntityKind:
-    candidate = entity_type or _infer_entity_type(mention)
-    if candidate in ENTITY_KINDS:
-        return cast(EntityKind, candidate)
-    return _infer_entity_type(mention)
+def _resolve_entity_type(entity_type: str | None, mention: str) -> EntityKind | None:
+    if entity_type and entity_type in ENTITY_KINDS:
+        return cast(EntityKind, entity_type)
+    return None
 
 
 class EntityRepository:
@@ -448,7 +447,7 @@ class EntityRepository:
                 CREATE TABLE IF NOT EXISTS entities (
                     entity_id TEXT PRIMARY KEY,
                     canonical_name TEXT NOT NULL,
-                    entity_type TEXT NOT NULL,
+                    entity_type TEXT NOT NULL DEFAULT '',
                     primary_identifier TEXT,
                     updated_at TEXT NOT NULL,
                     payload TEXT NOT NULL
@@ -496,7 +495,7 @@ class EntityRepository:
             (
                 entity.entity_id,
                 entity.canonical_name,
-                entity.entity_type,
+                entity.entity_type or "",
                 next(iter(entity.identifiers.values()), None),
                 entity.updated_at.isoformat(),
                 json.dumps(entity.model_dump(mode="json"), ensure_ascii=False),
@@ -863,7 +862,7 @@ class EntityResolver:
                         try:
                             desc = self._description_generator.generate(
                                 matched.canonical_name,
-                                matched.entity_type,
+                                matched.entity_type or "",
                                 matched.identifiers,
                                 [unit.summary],
                             )
@@ -1045,14 +1044,13 @@ class EntityResolver:
             if eid not in candidates:
                 candidates[eid] = entities_cache[eid]
 
-        # Layer 4: SequenceMatcher fuzzy match (type constraint preserved)
-        inferred_type = _infer_entity_type(mention)
+        # Layer 4: SequenceMatcher fuzzy match (no type constraint — type may be None)
         for entity in entities_cache.values():
             if entity.entity_id in candidates:
                 continue
             norm_name = norm_cache[entity.entity_id]
             similarity = SequenceMatcher(None, normalized, norm_name).ratio()
-            if similarity >= 0.95 and entity.entity_type == inferred_type:
+            if similarity >= 0.95:
                 candidates[entity.entity_id] = entity
 
         return list(candidates.values())

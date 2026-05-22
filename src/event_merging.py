@@ -6,26 +6,54 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import math
 import re
 import sqlite3
 from datetime import UTC, date, datetime
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Callable, Iterable, Literal, Sequence
+from typing import Any, Callable, Iterable, Literal, Protocol, Sequence, runtime_checkable
 from uuid import uuid4
-
 from pydantic import BaseModel, Field
 
-from src.conflict_detection import ConflictDetector
+from src.conflict_detection import ConflictDetector, LLMConflictDetector
 from src.knowledge_base import KnowledgeUnit, KnowledgeUnitRepository
 
+logger = logging.getLogger(__name__)
 
 ConflictStatus = Literal["none", "possible", "confirmed"]
 _SAME_DAY_SIMILARITY_THRESHOLD = 0.85
 _ADJACENT_DAY_SIMILARITY_THRESHOLD = 0.93
+_EMBEDDING_SIMILARITY_THRESHOLD = 0.82
 
-# Module-level singleton for conflict detection
+# Module-level singletons for conflict detection
 _CONFLICT_DETECTOR = ConflictDetector()
+_LLM_DETECTOR = LLMConflictDetector()
+
+
+@runtime_checkable
+class _ClusteringEmbeddingProvider(Protocol):
+    """Minimal embedding interface needed by clustering."""
+
+    def embed(self, texts: list[str]) -> list[list[float]]: ...
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Cosine similarity with explicit L2 normalization."""
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+def _text_similarity(unit: KnowledgeUnit, cluster: EventCluster) -> float:
+    """SequenceMatcher text similarity, normalized to [0, 1] range."""
+    return SequenceMatcher(
+        None, _normalize_summary(unit.summary), _normalize_summary(cluster.summary),
+    ).ratio()
 
 
 class AggregationVariant(BaseModel):
@@ -240,11 +268,32 @@ def build_event_cluster_snapshot(
         if reason not in conflict_reasons:
             conflict_reasons.append(reason)
 
+    # LLM semantic conflict detection (multi-source clusters only)
+    source_doc_ids = {u.source.doc_id for u in deduped_units}
+    llm_details: list[dict[str, Any]] = []
+    if len(source_doc_ids) >= 2:
+        try:
+            llm_details = _LLM_DETECTOR.detect_semantic_conflicts(
+                representative, deduped_units,
+            )
+        except Exception:
+            logger.debug("LLM conflict detection failed", exc_info=True)
+            llm_details = []
+        for detail in llm_details:
+            conflict_type = detail.get("type", "semantic_unknown")
+            reason = f"semantic:{conflict_type.removeprefix('semantic_')}"
+            if reason not in conflict_reasons:
+                conflict_reasons.append(reason)
+
     # Determine conflict status
+    has_semantic_conflict = len(llm_details) > 0
+    semantic_severity = (
+        max(d["severity"] for d in llm_details) if llm_details else "low"
+    )
     conflict_status = explicit_conflict
-    if conflict_status == "none" and conflict_report.has_conflicts:
+    if conflict_status == "none" and (conflict_report.has_conflicts or has_semantic_conflict):
         conflict_status = "possible"
-    if conflict_report.overall_severity == "high":
+    if conflict_report.overall_severity == "high" or semantic_severity == "high":
         conflict_status = "confirmed"
 
     # Serialize conflict details for storage
@@ -259,6 +308,7 @@ def build_event_cluster_snapshot(
         }
         for detail in conflict_report.conflict_details
     ]
+    conflict_details.extend(llm_details)
 
     return EventCluster(
         cluster_id=cluster_id or f"clu_{uuid4().hex[:12]}",
@@ -496,6 +546,26 @@ class EventClusterRepository:
         # Verify exact entity set match (hash collision protection)
         return [c for c in clusters if sorted(c.entity_ids) == sorted_ids]
 
+    def _find_candidates_by_entity_overlap(
+        self,
+        entity_ids: list[str],
+        cluster_type: str,
+    ) -> list[EventCluster]:
+        """Find clusters sharing at least one entity_id, same cluster_type."""
+        if not entity_ids:
+            return []
+        placeholders = ", ".join("?" for _ in entity_ids)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT DISTINCT ec.payload FROM event_clusters ec
+                JOIN cluster_entity_map cem ON ec.cluster_id = cem.cluster_id
+                WHERE cem.cluster_type = ? AND cem.entity_id IN ({placeholders})
+                """,
+                [cluster_type, *entity_ids],
+            ).fetchall()
+        return self._load_clusters_from_rows(rows)
+
     def find_related(
         self,
         *,
@@ -550,16 +620,21 @@ class EventClusterRepository:
         return cluster_start <= requested_end and requested_start <= cluster_end
 
 
-class EventClusterer:
+class EventMerger:
     """按保守规则归并 EventCluster。"""
 
     def __init__(
         self,
         repository: EventClusterRepository,
         knowledge_units: KnowledgeUnitRepository | None = None,
+        embedding_provider: _ClusteringEmbeddingProvider | None = None,
+        vector_index: Any | None = None,
     ):
         self.repository = repository
         self.knowledge_units = knowledge_units or repository.knowledge_units
+        self._embedding_provider = embedding_provider
+        self._vector_index = vector_index
+        self._embedding_cache: dict[str, list[float]] = {}
 
     def assign_clusters(
         self,
@@ -591,6 +666,8 @@ class EventClusterer:
             if matched is None:
                 matched_members = [unit]
                 updated_cluster = build_event_cluster_snapshot(matched_members)
+                # Pre-compute embedding so future comparisons within this batch can use it
+                self._embed_unit(unit)
             else:
                 matched_members = self._load_cluster_members(
                     matched,
@@ -618,10 +695,9 @@ class EventClusterer:
     ) -> EventCluster | None:
         unit_entity_ids = sorted(entity.entity_id for entity in unit.entities if entity.entity_id)
         unit_anchor = _anchor_date(unit)
-        normalized_summary = _normalize_summary(unit.summary)
 
-        # Use hash-based SQL lookup instead of iterating all clusters
-        candidates = self.repository._find_matching_clusters(
+        # Find candidates sharing at least one entity_id
+        candidates = self.repository._find_candidates_by_entity_overlap(
             unit_entity_ids, unit.unit_type,
         )
 
@@ -629,13 +705,14 @@ class EventClusterer:
         for cluster in clusters:
             if cluster.cluster_type != unit.unit_type:
                 continue
-            if sorted(cluster.entity_ids) != unit_entity_ids:
+            if not any(eid in cluster.entity_ids for eid in unit_entity_ids):
                 continue
             if not any(c.cluster_id == cluster.cluster_id for c in candidates):
                 candidates.append(cluster)
 
+        # Filter by temporal proximity
+        time_filtered: list[tuple[int, EventCluster]] = []
         for cluster in candidates:
-            # Entity set already verified by _find_matching_clusters or inline check
             cluster_bounds = _cluster_date_bounds(cluster)
             if cluster_bounds is None:
                 continue
@@ -646,15 +723,142 @@ class EventClusterer:
                 day_distance = (cluster_start - unit_anchor).days
             else:
                 day_distance = (unit_anchor - cluster_end).days
-            if day_distance > 1:
+            if day_distance > 3:
                 continue
-            similarity = SequenceMatcher(None, normalized_summary, _normalize_summary(cluster.summary)).ratio()
-            if day_distance == 0 and similarity < _SAME_DAY_SIMILARITY_THRESHOLD:
-                continue
-            if day_distance == 1 and similarity < _ADJACENT_DAY_SIMILARITY_THRESHOLD:
-                continue
-            return cluster
+            time_filtered.append((day_distance, cluster))
+
+        if not time_filtered:
+            return None
+
+        # Use embedding similarity if provider available, else fall back to SequenceMatcher
+        if self._embedding_provider is not None:
+            return self._find_best_embedding_match(unit, time_filtered)
+
+        return self._find_best_text_match(unit, time_filtered)
+
+    def _find_best_embedding_match(
+        self,
+        unit: KnowledgeUnit,
+        candidates: list[tuple[int, EventCluster]],
+    ) -> EventCluster | None:
+        """Rank candidates by embedding similarity, with per-candidate text fallback."""
+        unit_vec = self._embed_unit(unit)
+        if unit_vec is None:
+            return self._find_best_text_match(unit, candidates)
+
+        best_match: EventCluster | None = None
+        best_score = 0.0
+        text_match: EventCluster | None = None
+        text_score = 0.0
+
+        for day_distance, cluster in candidates:
+            rep_vec = self._get_representative_embedding(cluster)
+            if rep_vec is not None:
+                score = _cosine_similarity(unit_vec, rep_vec)
+                if score > best_score:
+                    best_score = score
+                    best_match = cluster
+            else:
+                # Independent text fallback for this candidate
+                score = _text_similarity(unit, cluster)
+                threshold = (
+                    _SAME_DAY_SIMILARITY_THRESHOLD
+                    if day_distance == 0
+                    else _ADJACENT_DAY_SIMILARITY_THRESHOLD
+                )
+                if score >= threshold and score > text_score:
+                    text_score = score
+                    text_match = cluster
+
+        if best_match is not None and best_score >= _EMBEDDING_SIMILARITY_THRESHOLD:
+            return best_match
+        if text_match is not None:
+            return text_match
         return None
+
+    def _find_best_text_match(
+        self,
+        unit: KnowledgeUnit,
+        candidates: list[tuple[int, EventCluster]],
+    ) -> EventCluster | None:
+        """Fallback: rank candidates by SequenceMatcher text similarity."""
+        normalized_summary = _normalize_summary(unit.summary)
+
+        best_match: EventCluster | None = None
+        best_score = 0.0
+
+        for day_distance, cluster in candidates:
+            similarity = SequenceMatcher(
+                None, normalized_summary, _normalize_summary(cluster.summary),
+            ).ratio()
+            threshold = (
+                _SAME_DAY_SIMILARITY_THRESHOLD
+                if day_distance == 0
+                else _ADJACENT_DAY_SIMILARITY_THRESHOLD
+            )
+            if similarity < threshold:
+                continue
+            if similarity > best_score:
+                best_score = similarity
+                best_match = cluster
+
+        return best_match
+
+    def _embed_unit(self, unit: KnowledgeUnit) -> list[float] | None:
+        """Compute embedding for a KU, with batch-local cache."""
+        if unit.ku_id in self._embedding_cache:
+            return self._embedding_cache[unit.ku_id]
+        if self._embedding_provider is None:
+            return None
+        try:
+            from src.retrieval.vector_index import build_embedding_text
+            text = build_embedding_text(unit)
+            vectors = self._embedding_provider.embed([text])
+            if vectors:
+                self._embedding_cache[unit.ku_id] = vectors[0]
+                return vectors[0]
+        except Exception:
+            logger.warning("Failed to embed KU %s", unit.ku_id, exc_info=True)
+        return None
+
+    def _get_representative_embedding(self, cluster: EventCluster) -> list[float] | None:
+        """Get embedding for cluster's representative KU."""
+        rep_ku_id = cluster.representative_ku_id
+        if not rep_ku_id:
+            return None
+        if rep_ku_id in self._embedding_cache:
+            return self._embedding_cache[rep_ku_id]
+
+        # Try FAISS index lookup
+        if self._vector_index is not None:
+            try:
+                vec = self._lookup_vector(rep_ku_id)
+                if vec is not None:
+                    self._embedding_cache[rep_ku_id] = vec
+                    return vec
+            except Exception:
+                pass
+
+        # Compute on-the-fly from representative summary
+        if self.knowledge_units is not None:
+            rep_units = self.knowledge_units.get_by_ids([rep_ku_id])
+            if rep_units:
+                return self._embed_unit(rep_units[0])
+        return None
+
+    def _lookup_vector(self, ku_id: str) -> list[float] | None:
+        """Look up a KU's embedding from the FAISS vector index."""
+        if self._vector_index is None:
+            return None
+        try:
+            idx = self._vector_index._reverse_map.get(ku_id)
+            if idx is None:
+                return None
+            import faiss
+            vecs = self._vector_index._index.reconstruct(int(idx))
+            return vecs.tolist()
+        except Exception:
+            return None
 
     def _load_cluster_members(
         self,

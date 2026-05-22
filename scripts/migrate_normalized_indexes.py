@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.entities import Entity, EntityRepository, normalize_entity_name
-from src.event_clustering import EventCluster, EventClusterRepository, _hash_entity_ids
+from src.event_merging import EventCluster, EventClusterRepository, _hash_entity_ids
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:

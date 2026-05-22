@@ -13,7 +13,7 @@ from src.entities import (
     EntityResolver,
     normalize_entity_name,
 )
-from src.event_clustering import (
+from src.event_merging import (
     EventCluster,
     EventClusterRepository,
     _hash_entity_ids,

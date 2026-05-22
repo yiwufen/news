@@ -11,7 +11,7 @@ from typing import Any, cast
 
 from collectors.database import Database
 from src.entities import Entity, EntityRepository
-from src.event_clustering import EventCluster
+from src.event_merging import EventCluster
 from src.schemas.query import IntentType, QueryFilters, StructuredQuery
 from src.knowledge_base import (
     EntityRef,
@@ -206,7 +206,7 @@ def test_run_pipeline_queries_new_knowledge_store(tmp_path, monkeypatch) -> None
         def __init__(self, *args, **kwargs) -> None:
             pass
 
-        def search(self, structured_query, *, start_entities):
+        def search(self, structured_query, *, start_entities, **kwargs):
             from src.graph.knowledge_retrieval import GraphRetrievalResult
 
             return GraphRetrievalResult.empty(start_entities=start_entities)
@@ -552,7 +552,7 @@ def test_run_pipeline_repairs_legacy_event_cluster_payloads(tmp_path, monkeypatc
         def __init__(self, *args, **kwargs) -> None:
             pass
 
-        def search(self, structured_query, *, start_entities):
+        def search(self, structured_query, *, start_entities, **kwargs):
             from src.graph.knowledge_retrieval import GraphRetrievalResult
 
             return GraphRetrievalResult.empty(start_entities=start_entities)
@@ -604,7 +604,7 @@ def test_run_pipeline_relationship_query_returns_formal_graph_results(tmp_path, 
         def __init__(self, *args, **kwargs) -> None:
             pass
 
-        def search(self, structured_query, *, start_entities):
+        def search(self, structured_query, *, start_entities, **kwargs):
             from src.graph.knowledge_retrieval import GraphRetrievalResult
 
             start_entity = start_entities[0]

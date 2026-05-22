@@ -26,7 +26,7 @@ from anthropic.types import Message, ToolUseBlock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.entities import Entity, EntityRepository
-from src.event_clustering import EventClusterRepository
+from src.event_merging import EventClusterRepository
 from src.knowledge_base import KnowledgeUnit, KnowledgeUnitRepository
 from src.llm import create_offline_llm_client, get_offline_max_tokens
 from src.orchestration import run_pipeline

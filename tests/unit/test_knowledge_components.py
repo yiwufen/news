@@ -14,10 +14,10 @@ import pytest
 from anthropic.types import ToolUseBlock
 
 from src.entities import Entity, EntityRepository, EntityResolver
-from src.event_clustering import (
+from src.event_merging import (
     EventCluster,
     EventClusterRepository,
-    EventClusterer,
+    EventMerger,
     build_event_cluster_snapshot,
 )
 from src.graph.knowledge_retrieval import KnowledgeGraphRetriever
@@ -229,7 +229,7 @@ def test_entity_resolver_matches_stable_identifier_and_keeps_uncertain_separate(
 def test_event_clusterer_merges_only_when_all_conditions_match(tmp_path) -> None:
     db_path = tmp_path / "clusters.db"
     repo = EventClusterRepository(str(db_path))
-    clusterer = EventClusterer(repo)
+    clusterer = EventMerger(repo)
 
     unit_a = build_unit(summary="Xiaomi Group announced an investment update")
     unit_a.entities[0].entity_id = "ent_xiaomi"
@@ -265,7 +265,7 @@ def test_event_clusterer_merges_only_when_all_conditions_match(tmp_path) -> None
 def test_event_clusterer_prefers_majority_summary_variant_for_representative(tmp_path) -> None:
     db_path = tmp_path / "clusters.db"
     repo = EventClusterRepository(str(db_path))
-    clusterer = EventClusterer(repo)
+    clusterer = EventMerger(repo)
 
     unit_a = build_unit(
         summary="Xiaomi Group announced an investment plan",
@@ -306,7 +306,7 @@ def test_event_clusterer_prefers_majority_summary_variant_for_representative(tmp
 def test_event_clusterer_marks_adjacent_event_dates_as_possible_conflict(tmp_path) -> None:
     db_path = tmp_path / "clusters.db"
     repo = EventClusterRepository(str(db_path))
-    clusterer = EventClusterer(repo)
+    clusterer = EventMerger(repo)
 
     unit_a = build_unit(
         summary="Xiaomi Group announced a product launch schedule",
@@ -394,7 +394,7 @@ def test_event_cluster_snapshot_ignores_additive_participant_mentions() -> None:
 def test_event_clusterer_merges_adjacent_high_similarity_but_keeps_distant_events_separate(tmp_path) -> None:
     db_path = tmp_path / "clusters.db"
     repo = EventClusterRepository(str(db_path))
-    clusterer = EventClusterer(repo)
+    clusterer = EventMerger(repo)
 
     unit_a = build_unit(
         summary="Xiaomi Group announced a chip investment plan",
@@ -409,7 +409,7 @@ def test_event_clusterer_merges_adjacent_high_similarity_but_keeps_distant_event
     unit_c = build_unit(
         summary="Xiaomi Group announced a chip investment plan",
         doc_id="doc-3",
-        published_at=datetime(2026, 4, 5, 10, 0, tzinfo=UTC),
+        published_at=datetime(2026, 4, 8, 10, 0, tzinfo=UTC),
     )
     for unit in (unit_a, unit_b, unit_c):
         unit.entities[0].entity_id = "ent_xiaomi"
@@ -425,7 +425,7 @@ def test_event_clusterer_merges_adjacent_high_similarity_but_keeps_distant_event
 def test_event_clusterer_merges_across_a_contiguous_adjacent_day_window(tmp_path) -> None:
     db_path = tmp_path / "clusters.db"
     repo = EventClusterRepository(str(db_path))
-    clusterer = EventClusterer(repo)
+    clusterer = EventMerger(repo)
 
     units = [
         build_unit(
@@ -463,7 +463,7 @@ def test_event_cluster_repository_repairs_legacy_payload_with_aggregated_fields(
     db_path = tmp_path / "news.db"
     knowledge_repo = KnowledgeUnitRepository(str(db_path))
     cluster_repo = EventClusterRepository(str(db_path), knowledge_units=knowledge_repo)
-    clusterer = EventClusterer(cluster_repo, knowledge_units=knowledge_repo)
+    clusterer = EventMerger(cluster_repo, knowledge_units=knowledge_repo)
 
     unit_a = build_unit(summary="Xiaomi Group announced an investment update", doc_id="doc-1")
     unit_b = build_unit(summary="Xiaomi Group announced an investment update", doc_id="doc-2")
@@ -525,7 +525,7 @@ def test_event_cluster_repository_filters_by_time_range_overlap(tmp_path) -> Non
     db_path = tmp_path / "news.db"
     knowledge_repo = KnowledgeUnitRepository(str(db_path))
     cluster_repo = EventClusterRepository(str(db_path), knowledge_units=knowledge_repo)
-    clusterer = EventClusterer(cluster_repo, knowledge_units=knowledge_repo)
+    clusterer = EventMerger(cluster_repo, knowledge_units=knowledge_repo)
 
     unit_a = build_unit(
         summary="Xiaomi Group announced a product launch schedule",
@@ -1408,4 +1408,293 @@ def test_cross_lingual_alias_byd_resolves(tmp_path) -> None:
 
     assert result.total_count >= 1
     assert result.retrieval_path == "entity_id_lookup"
+
+
+# ---------------------------------------------------------------------------
+# LLMConflictDetector tests
+# ---------------------------------------------------------------------------
+
+
+def _make_llm_response(contradictions: list[dict[str, Any]]) -> SimpleNamespace:
+    tool_input: dict[str, Any] = {"contradictions": contradictions}
+    return SimpleNamespace(
+        content=[
+            ToolUseBlock(
+                type="tool_use",
+                id="test_tool_id",
+                name="flag_contradictions",
+                input=tool_input,
+            )
+        ]
+    )
+
+
+def test_llm_conflict_detector_detects_factual_contradiction() -> None:
+    from src.conflict_detection import LLMConflictDetector
+
+    detector = LLMConflictDetector()
+    llm_response = _make_llm_response([
+        {
+            "conflict_type": "factual",
+            "severity": "high",
+            "description": "A称'腾讯收购搜狗'，B称'搜狗收购腾讯'",
+        }
+    ])
+    detector._client = SimpleNamespace(messages=SimpleNamespace(create=lambda **kwargs: llm_response))
+    detector._model = "test-model"
+
+    unit_a = build_unit(summary="腾讯以425亿元收购搜狗", doc_id="doc-1")
+    unit_b = build_unit(summary="搜狗以425亿元收购腾讯", doc_id="doc-2")
+
+    results = detector.detect_semantic_conflicts(unit_a, [unit_a, unit_b])
+    assert len(results) == 1
+    assert results[0]["type"] == "semantic_factual"
+    assert results[0]["severity"] == "high"
+
+
+def test_llm_conflict_detector_returns_empty_on_no_conflict() -> None:
+    from src.conflict_detection import LLMConflictDetector
+
+    detector = LLMConflictDetector()
+    llm_response = _make_llm_response([])
+    detector._client = SimpleNamespace(messages=SimpleNamespace(create=lambda **kwargs: llm_response))
+    detector._model = "test-model"
+
+    unit_a = build_unit(summary="苹果公司发布iPhone 16", doc_id="doc-1")
+    unit_b = build_unit(summary="苹果公司发布iPhone 16，配备AI芯片", doc_id="doc-2")
+
+    results = detector.detect_semantic_conflicts(unit_a, [unit_a, unit_b])
+    assert results == []
+
+
+def test_llm_conflict_detector_falls_back_on_error() -> None:
+    """LLM errors propagate to caller; caller is responsible for fallback."""
+    from src.conflict_detection import LLMConflictDetector
+
+    def raise_error(**kwargs: Any) -> None:
+        raise RuntimeError("LLM service unavailable")
+
+    detector = LLMConflictDetector()
+    detector._client = SimpleNamespace(messages=SimpleNamespace(create=raise_error))
+    detector._model = "test-model"
+
+    unit_a = build_unit(doc_id="doc-1")
+    unit_b = build_unit(doc_id="doc-2")
+
+    with pytest.raises(RuntimeError, match="LLM service unavailable"):
+        detector.detect_semantic_conflicts(unit_a, [unit_a, unit_b])
+
+
+def test_build_event_cluster_snapshot_handles_llm_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Cluster building should not crash when LLM detection fails."""
+    from src.conflict_detection import LLMConflictDetector
+
+    def raise_error(**kwargs: Any) -> None:
+        raise RuntimeError("LLM service unavailable")
+
+    mock_llm = LLMConflictDetector()
+    mock_llm._client = SimpleNamespace(messages=SimpleNamespace(create=raise_error))
+    mock_llm._model = "test-model"
+    monkeypatch.setattr("src.event_merging._LLM_DETECTOR", mock_llm)
+
+    unit_a = build_unit(
+        summary="苹果公司发布新产品",
+        doc_id="doc-1",
+        published_at=datetime(2026, 4, 1, 10, 0, tzinfo=UTC),
+    )
+    unit_a.entities[0].entity_id = "ent_apple"
+    unit_a.time.event_time = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
+
+    unit_b = build_unit(
+        summary="苹果公司发布新产品，市场反应热烈",
+        doc_id="doc-2",
+        published_at=datetime(2026, 4, 1, 10, 0, tzinfo=UTC),
+    )
+    unit_b.entities[0].entity_id = "ent_apple"
+    unit_b.time.event_time = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
+
+    cluster = build_event_cluster_snapshot([unit_a, unit_b])
+    assert cluster.conflict_status == "none"
+    assert cluster.conflict_details == []
+
+
+def test_build_event_cluster_snapshot_integrates_llm_detection(monkeypatch: pytest.MonkeyPatch) -> None:
+    from src.conflict_detection import LLMConflictDetector
+
+    mock_llm = LLMConflictDetector()
+    llm_response = _make_llm_response([
+        {
+            "conflict_type": "sentiment",
+            "severity": "medium",
+            "description": "A称'利好科技板块'，B称'对科技板块构成利空'",
+        }
+    ])
+    mock_llm._client = SimpleNamespace(messages=SimpleNamespace(create=lambda **kwargs: llm_response))
+    mock_llm._model = "test-model"
+    monkeypatch.setattr("src.event_merging._LLM_DETECTOR", mock_llm)
+
+    unit_a = build_unit(
+        summary="该政策利好科技板块",
+        doc_id="doc-1",
+        published_at=datetime(2026, 4, 1, 10, 0, tzinfo=UTC),
+    )
+    unit_a.entities[0].entity_id = "ent_tech"
+    unit_a.time.event_time = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
+
+    unit_b = build_unit(
+        summary="该政策对科技板块构成利空",
+        doc_id="doc-2",
+        published_at=datetime(2026, 4, 1, 10, 0, tzinfo=UTC),
+    )
+    unit_b.entities[0].entity_id = "ent_tech"
+    unit_b.time.event_time = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
+
+    cluster = build_event_cluster_snapshot([unit_a, unit_b])
+
+    assert cluster.conflict_status == "possible"
+    assert "semantic:sentiment" in cluster.conflict_reasons
+    semantic_details = [d for d in cluster.conflict_details if d["type"] == "semantic_sentiment"]
+    assert len(semantic_details) == 1
+    assert semantic_details[0]["severity"] == "medium"
+
+
+# ---------------------------------------------------------------------------
+# Embedding-enhanced clustering tests
+# ---------------------------------------------------------------------------
+
+
+class _MockEmbeddingProvider:
+    """Deterministic embedding provider for testing."""
+
+    def __init__(self, text_to_vector: dict[str, list[float]] | None = None):
+        self._text_to_vector = text_to_vector if text_to_vector is not None else {}
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        results = []
+        for text in texts:
+            vec = self._text_to_vector.get(text)
+            if vec is not None:
+                results.append(vec)
+            else:
+                results.append([0.0] * 4)
+        return results
+
+
+def test_find_cluster_uses_embedding_similarity(tmp_path) -> None:
+    db_path = tmp_path / "clusters.db"
+    repo = EventClusterRepository(str(db_path))
+
+    # High similarity embedding: same direction → cosine ≈ 0.99
+    high_sim_vec_a = [0.9, 0.3, 0.1, 0.0]
+    high_sim_vec_b = [0.85, 0.35, 0.15, 0.0]
+
+    text_map: dict[str, list[float]] = {}
+    provider = _MockEmbeddingProvider(text_map)
+    clusterer = EventMerger(repo, embedding_provider=provider)
+
+    from src.retrieval.vector_index import build_embedding_text
+
+    unit_a = build_unit(
+        summary="腾讯以425亿元收购搜狗",
+        mention="腾讯",
+        doc_id="doc-1",
+        published_at=datetime(2026, 4, 1, 10, 0, tzinfo=UTC),
+    )
+    unit_a.entities[0].entity_id = "ent_tencent"
+    unit_a.time.event_time = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
+    text_map[build_embedding_text(unit_a)] = high_sim_vec_a
+
+    unit_b = build_unit(
+        summary="搜狗被腾讯全资收购",
+        mention="搜狗",
+        doc_id="doc-2",
+        published_at=datetime(2026, 4, 1, 10, 0, tzinfo=UTC),
+    )
+    unit_b.entities[0].entity_id = "ent_sogou"
+    unit_b.entities.append(EntityRef(mention="腾讯", entity_id="ent_tencent", entity_type="Company"))
+    unit_b.time.event_time = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
+    text_map[build_embedding_text(unit_b)] = high_sim_vec_b
+
+    _, clusters = clusterer.assign_clusters([unit_a, unit_b], persist=False)
+    assert len(clusters) == 1
+    assert clusters[0].member_count == 2
+
+
+def test_find_cluster_falls_back_to_sequencematcher(tmp_path) -> None:
+    """Without embedding provider, uses SequenceMatcher fallback."""
+    db_path = tmp_path / "clusters.db"
+    repo = EventClusterRepository(str(db_path))
+    clusterer = EventMerger(repo)  # No embedding_provider
+
+    unit_a = build_unit(
+        summary="腾讯以425亿元收购搜狗",
+        mention="腾讯",
+        doc_id="doc-1",
+    )
+    unit_a.entities[0].entity_id = "ent_tencent"
+
+    unit_b = build_unit(
+        summary="腾讯以425亿元收购搜狗",
+        mention="腾讯",
+        doc_id="doc-2",
+    )
+    unit_b.entities[0].entity_id = "ent_tencent"
+
+    _, clusters = clusterer.assign_clusters([unit_a, unit_b], persist=False)
+    assert len(clusters) == 1
+    assert clusters[0].member_count == 2
+
+
+def test_find_candidates_by_entity_overlap(tmp_path) -> None:
+    """Relaxed entity matching: shared entity_id is enough to become a candidate."""
+    db_path = tmp_path / "clusters.db"
+    repo = EventClusterRepository(str(db_path))
+
+    unit_a = build_unit(summary="A and B did something", doc_id="doc-1")
+    unit_a.entities = [
+        EntityRef(mention="A", entity_id="ent_a", entity_type="Company"),
+        EntityRef(mention="B", entity_id="ent_b", entity_type="Company"),
+    ]
+
+    clusterer = EventMerger(repo)
+    _, clusters = clusterer.assign_clusters([unit_a], persist=True)
+    assert len(clusters) == 1
+
+    candidates = repo._find_candidates_by_entity_overlap(["ent_a", "ent_c"], "investment")
+    assert len(candidates) == 1
+    assert candidates[0].cluster_id == clusters[0].cluster_id
+
+
+def test_embedding_below_threshold_does_not_merge(tmp_path) -> None:
+    """Clusters should NOT merge when embedding similarity is below threshold."""
+    db_path = tmp_path / "clusters.db"
+    repo = EventClusterRepository(str(db_path))
+
+    vec_a = [1.0, 0.0, 0.0, 0.0]
+    vec_b = [0.0, 1.0, 0.0, 0.0]
+
+    text_map: dict[str, list[float]] = {}
+    provider = _MockEmbeddingProvider(text_map)
+    clusterer = EventMerger(repo, embedding_provider=provider)
+
+    from src.retrieval.vector_index import build_embedding_text
+
+    unit_a = build_unit(
+        summary="腾讯发布Q1财报",
+        mention="腾讯",
+        doc_id="doc-1",
+    )
+    unit_a.entities[0].entity_id = "ent_tencent"
+    text_map[build_embedding_text(unit_a)] = vec_a
+
+    unit_b = build_unit(
+        summary="腾讯被反垄断调查",
+        mention="腾讯",
+        doc_id="doc-2",
+    )
+    unit_b.entities[0].entity_id = "ent_tencent"
+    text_map[build_embedding_text(unit_b)] = vec_b
+
+    _, clusters = clusterer.assign_clusters([unit_a, unit_b], persist=False)
+    assert len(clusters) == 2
 

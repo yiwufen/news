@@ -8,7 +8,7 @@
 - `src/cli.py`（search 命令相关）
 - `src/knowledge_base.py`（FTS5 / 查询相关）
 - `src/entities.py`（实体解析相关）
-- `src/event_clustering.py`（归并策略相关）
+- `src/event_merging.py`（归并策略相关）
 
 确认你的修改不会导致 findings.md 中 OPEN 状态的发现恶化。
 

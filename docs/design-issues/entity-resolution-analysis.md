@@ -197,7 +197,7 @@ EntityResolver._find_match()      ← 合并时：仅 normalized name + Sequence
 ```
 
 - **实体上下文注入**：`EntityContextFilter` 在 LLM 抽取前将已有实体注入 prompt，指导 LLM 使用标准实体名。若实体解析延迟到聚类阶段，新文档的抽取质量下降。
-- **事件聚类依赖**：`EventClusterer` 需要 entity_id 来关联同一事件的不同 KU。延迟解析会导致聚类断裂。
+- **事件归并依赖**：`EventMerger` 需要 entity_id 来关联同一事件的不同 KU。延迟解析会导致归并断裂。
 - **图同步复杂度**：聚类后的实体合并需要重写已同步到 Neo4j 的节点和边，以及所有引用旧 entity_id 的 KU 和 EventCluster，工程代价显著。
 
 **结论**：定期聚类不能替代即时解析，最多只能作为**定期修正**叠加。但修正涉及 entity_id 重映射，影响 KU、EventCluster、Graph 三层数据。

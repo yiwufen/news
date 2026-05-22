@@ -8,7 +8,7 @@ import json
 from typing import ContextManager, Protocol, TypedDict
 
 from src.entities import Entity
-from src.event_clustering import EventCluster
+from src.event_merging import EventCluster
 from src.graph.connection import get_connection
 
 

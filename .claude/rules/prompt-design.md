@@ -70,7 +70,7 @@ Extraction prompt 只负责准确识别和提取（感知）。实体消歧、�
 
 - Prompt 阶段不应要求模型做别名归并——单篇新闻没有全局视角，消歧由 `src/entities.py` 后处理负责
 - Prompt 阶段不应要求模型裁决冲突——由 `src/conflict_detection.py` 负责
-- Prompt 阶段不应要求模型做事件归并——由 `src/event_clustering.py` 负责
+- Prompt 阶段不应要求模型做事件归并——由 `src/event_merging.py` 负责
 
 **具体场景**：`entity_context_filter.py` 注入已知实体列表是正确的（帮助模型使用标准名称），但不应在 prompt 中要求模型"将别名统一归并为主称"——这和后处理消歧逻辑冲突，增加调试难度。
 

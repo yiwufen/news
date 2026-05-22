@@ -193,7 +193,7 @@ def _extract_time_expression(self, parsed, raw_query):
 
 ### 缺陷 9（P0）：`find_related()` 只查 `primary_entity_id`，非主实体的 Cluster 被遗漏
 
-**位置**：`src/event_clustering.py:420-434`
+**位置**：`src/event_merging.py:420-434`
 
 ```python
 where_clauses.append(f"primary_entity_id IN ({placeholders})")

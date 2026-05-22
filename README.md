@@ -314,7 +314,7 @@ news/
 │   ├── cli.py                   # knowledge-cli entry point
 │   ├── knowledge_base.py        # RawDocument + KnowledgeUnit models + SQLite repos
 │   ├── entities.py              # Entity resolution + EntityRepository
-│   ├── event_clustering.py      # EventCluster conservative merge
+│   ├── event_merging.py        # EventCluster conservative merge
 │   ├── knowledge_extractor.py   # LLM-based KnowledgeUnit extraction (Anthropic)
 │   ├── time_normalization.py    # Relative/fuzzy time → absolute
 │   ├── conflict_detection.py    # Multi-source conflict analysis

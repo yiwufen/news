@@ -21,7 +21,7 @@ from src.entities import (
     EntityResolver,
     build_entity_name_variants,
 )
-from src.event_clustering import EventCluster, EventClusterRepository, EventClusterer
+from src.event_merging import EventCluster, EventClusterRepository, EventMerger
 from src.schemas.query import IntentType, StructuredQuery
 from src.knowledge_base import (
     KnowledgeUnit,
@@ -85,7 +85,7 @@ class KnowledgeSearcher:
         )
         self.extractor = extractor or KnowledgeExtractor()
         self.entity_resolver = EntityResolver(self.entities)
-        self.clusterer = EventClusterer(
+        self.clusterer = EventMerger(
             self.clusters,
             knowledge_units=self.units,
         )

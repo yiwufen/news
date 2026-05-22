@@ -39,7 +39,7 @@ event_time 是事件发生的绝对时间，不是报道发布时间。
 2. 原文含相对时间（"昨天"、"上周五"、"3天前"）→ 基于 published_at 推算绝对日期，设 event_time_resolution = "contextual"
 3. 原文含模糊时间（"近期"、"近日"、"本月初"）→ 基于 published_at 取最合理的绝对日期估计，设 event_time_resolution = "contextual"，并设 time_grain：
    - "月"级模糊（"本月初"、"上个月"）→ time_grain = "month"
-   - "季度"级模糊（"本季度"、"Q1"）→ time_grain = "quarter"，日期取季度首日
+   - "季度"级模糊（"本季度"、"Q1"）→ time_grain = "quarter"，日期取季度末日
    - "年"级模糊（"今年初"、"去年"）→ time_grain = "year"，日期取年份首日
 4. 原文无时间表达 → event_time = published_at，event_time_resolution = "contextual"（报道行为本身就是事件）
 
@@ -54,7 +54,7 @@ event_time 是事件发生的绝对时间，不是报道发布时间。
 → event_time: "2026-03-29T00:00:00Z", event_time_resolution: "contextual", time_grain: "day"
 
 原文："今年Q1营收同比增长15%" + published_at: 2026-04-05
-→ event_time: "2026-01-01T00:00:00Z", event_time_resolution: "explicit", time_grain: "quarter"
+→ event_time: "2026-03-31T00:00:00Z", event_time_resolution: "contextual", time_grain: "quarter"
 
 原文："比亚迪发布新品" + published_at: 2026-04-05（无时间词）
 → event_time: "2026-04-05T00:00:00Z", event_time_resolution: "contextual", time_grain: "day"
@@ -70,7 +70,7 @@ event_time 是事件发生的绝对时间，不是报道发布时间。
 → event_time: null ✗（无时间表达时 event_time = published_at，不是 null）
 
 原文："Q1业绩超预期" + published_at: 2026-04-05
-→ event_time: "2026-01-01T00:00:00Z", time_grain: "day" ✗（季度表达式应标记 time_grain = "quarter"）
+→ event_time: "2026-03-31T00:00:00Z", time_grain: "day" ✗（季度表达式应标记 time_grain = "quarter"）
 # 实体抽取规范
 entities 只能包含具名实体——现实世界中具有特定专有名称的对象。
 - Company：具体企业（腾讯控股、比亚迪、锦鸡股份）

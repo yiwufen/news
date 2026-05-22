@@ -10,7 +10,7 @@ from datetime import date, datetime
 from typing import Any, ContextManager, Iterable, Protocol, cast
 
 from src.entities import Entity, EntityRepository
-from src.event_clustering import EventCluster, EventClusterRepository
+from src.event_merging import EventCluster, EventClusterRepository
 from src.graph.connection import get_connection
 from src.schemas.query import StructuredQuery
 

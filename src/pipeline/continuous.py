@@ -8,7 +8,7 @@ from typing import Literal
 
 from src.entities import Entity, EntityRepository, EntityResolver, is_valid_entity_mention
 from src.entity_context_filter import filter_relevant_entities
-from src.event_clustering import EventCluster, EventClusterRepository, EventClusterer
+from src.event_merging import EventCluster, EventClusterRepository, EventMerger
 from src.knowledge_base import (
     KnowledgeProcessingLogRepository,
     KnowledgeUnit,
@@ -104,9 +104,11 @@ class ContinuousPipeline:
             embedding_provider=self._embedding_provider,
             description_generator=self._description_generator,
         )
-        self.clusterer = EventClusterer(
+        self.clusterer = EventMerger(
             self.cluster_repo,
             knowledge_units=self.knowledge_units,
+            embedding_provider=self._embedding_provider,
+            vector_index=self._try_get_vector_index(),
         )
         self.graph_sync = KnowledgeGraphSync() if graph_enabled else None
         self.index_builder = index_builder or KnowledgeIndexBuilder(
@@ -123,6 +125,19 @@ class ContinuousPipeline:
         except Exception:
             logger.info("Entity disambiguation disabled (no embedding config)")
             return None
+
+    def _try_get_vector_index(self):
+        """Attempt to get the existing FAISS vector index for embedding lookups."""
+        try:
+            if self._embedding_provider is None:
+                return None
+            from src.retrieval.vector_index import VectorIndex
+            idx = VectorIndex("data/news.db", self._embedding_provider)
+            if idx.is_available():
+                return idx
+        except Exception:
+            pass
+        return None
 
     @staticmethod
     def _try_create_description_generator():
@@ -296,12 +311,12 @@ class ContinuousPipeline:
             result.failed_stage = "complete"
             return result
 
-        # Stage 2: Resolve Entities
+        # Stage 2: Resolve Entities (defer persist until KUs are saved)
         try:
             resolved_units, resolved_entities = self.entity_resolver.resolve_units_with_cache(
                 units=units,
                 entities_cache=context.entities_cache,
-                persist=not dry_run,
+                persist=False,
             )
             result.units = resolved_units
             result.entities = resolved_entities
@@ -335,13 +350,13 @@ class ContinuousPipeline:
             logger.error(f"[{document.doc_id}] Resolve failed: {exc}")
             return result
 
-        # Stage 3: Assign Clusters
+        # Stage 3: Assign Clusters (defer persist until KUs are saved)
         try:
             clustered_units, clusters = self.clusterer.assign_clusters_with_cache(
                 units=resolved_units,
                 clusters_cache=context.clusters_cache,
                 cluster_members_cache=context.cluster_members_cache,
-                persist=not dry_run,
+                persist=False,
             )
             result.units = clustered_units
             result.clusters = clusters
@@ -355,10 +370,12 @@ class ContinuousPipeline:
             logger.error(f"[{document.doc_id}] Cluster failed: {exc}")
             return result
 
-        # Stage 4: Save Units
+        # Stage 4: Persist KUs first, then entities and clusters
         if not dry_run:
             try:
                 self.knowledge_units.save_batch(clustered_units)
+                self.entity_repo.save_batch(resolved_entities)
+                self.cluster_repo.save_batch(clusters)
             except Exception as exc:
                 result.failed_stage = "save"
                 result.error_message = f"save failed: {exc}"
