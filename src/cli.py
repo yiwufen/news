@@ -3,8 +3,8 @@
 Usage::
 
     knowledge-cli search --entities "小米集团" --time-range 2025-04-01:2026-04-13
-    knowledge-cli ingest --dry-run
     knowledge-cli start --graph-enabled
+    knowledge-cli start --offline-only --once --full
     knowledge-cli stop
     knowledge-cli status
 """
@@ -27,7 +27,6 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 from src.orchestration.graph import run_pipeline
 from src.paths import DEFAULT_DB_PATH
 from src.orchestration.result import PipelineResult
-from src.pipeline.continuous import run_continuous
 from src.process_manager import (
     SERVICES,
     is_process_alive,
@@ -117,36 +116,6 @@ def cmd_graph_expand(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
-# ingest (single-shot)
-# ---------------------------------------------------------------------------
-
-def cmd_ingest(args: argparse.Namespace) -> None:
-    """Run the continuous ingestion pipeline."""
-    result = run_continuous(
-        batch_size=args.batch_size,
-        graph_enabled=args.graph_enabled,
-        incremental=args.incremental,
-        dry_run=args.dry_run,
-        db_path=args.db,
-    )
-    json.dump(
-        {
-            "knowledge_units_extracted": result.knowledge_units_extracted,
-            "knowledge_units_saved": result.knowledge_units_saved,
-            "entities_saved": result.entities_saved,
-            "clusters_saved": result.clusters_saved,
-            "nodes_created": result.nodes_created,
-            "edges_created": result.edges_created,
-            "errors": result.errors,
-        },
-        sys.stdout,
-        ensure_ascii=False,
-        indent=2,
-    )
-    sys.stdout.write("\n")
-
-
-# ---------------------------------------------------------------------------
 # index-vectors
 # ---------------------------------------------------------------------------
 
@@ -226,6 +195,12 @@ def cmd_start(args: argparse.Namespace) -> None:
             offline_args.append("--graph-enabled")
         if args.time_window:
             offline_args.extend(["--time-window", args.time_window])
+        if args.once:
+            offline_args.append("--once")
+        if args.full:
+            offline_args.append("--full")
+        if args.dry_run:
+            offline_args.append("--dry-run")
         _spawn_service("offline", offline_args)
 
 
@@ -288,6 +263,19 @@ def cmd_run_fetch(args: argparse.Namespace) -> None:
     crawler.run(page_size=args.limit, continuous=True, interval=args.interval)
 
 
+def _progress_bar(done: int, total: int, width: int = 30) -> None:
+    """Print a progress bar to stderr (does not interfere with stdout JSON)."""
+    if total == 0:
+        return
+    pct = done / total
+    filled = int(width * pct)
+    bar = "█" * filled + "░" * (width - filled)
+    sys.stderr.write(f"\r  [{bar}] {done}/{total} ({pct:.0%})")
+    sys.stderr.flush()
+    if done == total:
+        sys.stderr.write("\n")
+
+
 def cmd_run_offline(args: argparse.Namespace) -> None:
     """Internal: continuous offline loop (launched as subprocess by ``start``)."""
     _setup_child_logging("data/logs/offline.log")
@@ -299,20 +287,35 @@ def cmd_run_offline(args: argparse.Namespace) -> None:
     vector_index = try_create_vector_index(args.db)
     index_builder = KnowledgeIndexBuilder(ku_repo, vector_index=vector_index)
 
+    incremental = not args.full
     pipeline = ContinuousPipeline(
         batch_size=args.batch_size,
         graph_enabled=args.graph_enabled,
-        incremental=True,
+        incremental=incremental,
         db_path=args.db,
         index_builder=index_builder,
+        vector_index=vector_index,
     )
 
-    print("Starting offline processing loop ...", flush=True)
-    while True:
-        result = pipeline.run(time_window=args.time_window or None, dry_run=False)
+    on_progress = _progress_bar if args.once else None
+    dry_run = args.dry_run if args.once else False
+
+    if args.once:
+        print("Starting offline processing (single run) ...", flush=True)
+        result = pipeline.run(
+            time_window=args.time_window or None,
+            dry_run=dry_run,
+            on_progress=on_progress,
+        )
         payload = asdict(result) if is_dataclass(result) else result
         print(json.dumps(payload, ensure_ascii=False), flush=True)
-        time.sleep(args.interval)
+    else:
+        print("Starting offline processing loop ...", flush=True)
+        while True:
+            result = pipeline.run(time_window=args.time_window or None, dry_run=False)
+            payload = asdict(result) if is_dataclass(result) else result
+            print(json.dumps(payload, ensure_ascii=False), flush=True)
+            time.sleep(args.interval)
 
 
 # ---------------------------------------------------------------------------
@@ -379,31 +382,6 @@ def main() -> None:
     )
     expand_parser.set_defaults(func=cmd_graph_expand)
 
-    # --- ingest ---
-    ingest_parser = subparsers.add_parser("ingest", help="Run offline ingestion")
-    ingest_parser.add_argument(
-        "--batch-size", type=int, default=10, help="Documents per batch (default: 10)"
-    )
-    ingest_parser.add_argument(
-        "--graph-enabled", dest="graph_enabled", action="store_true", default=True
-    )
-    ingest_parser.add_argument(
-        "--no-graph", dest="graph_enabled", action="store_false"
-    )
-    ingest_parser.add_argument(
-        "--incremental", dest="incremental", action="store_true", default=True
-    )
-    ingest_parser.add_argument(
-        "--full", dest="incremental", action="store_false"
-    )
-    ingest_parser.add_argument(
-        "--dry-run", action="store_true", help="Preview without writing"
-    )
-    ingest_parser.add_argument(
-        "--db", type=str, default=DEFAULT_DB_PATH, help="SQLite database path"
-    )
-    ingest_parser.set_defaults(func=cmd_ingest)
-
     # --- index-vectors ---
     idx_vec_parser = subparsers.add_parser(
         "index-vectors", help="Build vector index for dense retrieval"
@@ -438,6 +416,12 @@ def main() -> None:
                               help="Start fetch only (skip offline)")
     start_parser.add_argument("--offline-only", action="store_true",
                               help="Start offline only (skip fetch)")
+    start_parser.add_argument("--once", action="store_true",
+                              help="Run one offline iteration then exit")
+    start_parser.add_argument("--full", action="store_true",
+                              help="Force reprocess all documents (not incremental)")
+    start_parser.add_argument("--dry-run", action="store_true",
+                              help="Preview without writing (requires --once)")
     start_parser.set_defaults(func=cmd_start)
 
     # --- stop ---
@@ -465,6 +449,9 @@ def main() -> None:
     run_offline_parser.add_argument("--time-window", type=str, default="")
     run_offline_parser.add_argument("--graph-enabled", dest="graph_enabled",
                                      action="store_true", default=False)
+    run_offline_parser.add_argument("--once", action="store_true", default=False)
+    run_offline_parser.add_argument("--full", action="store_true", default=False)
+    run_offline_parser.add_argument("--dry-run", action="store_true", default=False)
     run_offline_parser.set_defaults(func=cmd_run_offline)
 
     args = parser.parse_args()

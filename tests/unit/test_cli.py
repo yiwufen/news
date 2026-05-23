@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.cli import cmd_ingest, cmd_search, cmd_start, cmd_stop, cmd_status, main
+from src.cli import cmd_search, cmd_start, cmd_stop, cmd_status, main
 from src.orchestration.result import GraphMeta, PipelineResult, RetrievalMeta
 from src.paths import DEFAULT_DB_PATH
 from src.schemas.query import IntentType
@@ -135,39 +135,58 @@ class TestCmdSearch:
         assert captured_kwargs["graph_enabled"] is False
 
 
-class TestCmdIngest:
-    """Tests for the ingest subcommand."""
+class TestCmdStartOnceFlags:
+    """Tests for start --once / --full flag forwarding."""
 
-    def test_ingest_outputs_summary_json(self, capsys, monkeypatch) -> None:
-        from src.pipeline.continuous import ContinuousRunResult
+    def test_start_once_forwards_to_offline(self, monkeypatch) -> None:
+        spawned_args = []
 
-        fake_result = ContinuousRunResult(
-            nodes_created=5,
-            edges_created=3,
-            errors=[],
-            knowledge_units_extracted=10,
-            knowledge_units_saved=10,
-            entities_saved=4,
-            clusters_saved=3,
-        )
+        def fake_spawn(command):
+            spawned_args.extend(command)
+            return 1000
 
-        monkeypatch.setattr("src.cli.run_continuous", lambda **kwargs: fake_result)
-
-        import argparse
+        monkeypatch.setattr("src.cli.read_pid", lambda s: None)
+        monkeypatch.setattr("src.cli.spawn_process", fake_spawn)
+        monkeypatch.setattr("src.cli.write_pid", lambda *a: None)
+        monkeypatch.setattr("builtins.print", lambda *a, **kw: None)
 
         args = argparse.Namespace(
-            batch_size=10,
-            graph_enabled=True,
-            incremental=True,
-            dry_run=False,
-            db="data/news.db",
+            fetch_limit=100, fetch_interval=900,
+            process_batch_size=10, process_interval=300,
+            db="data/news.db", graph_enabled=False, time_window="",
+            fetch_only=False, offline_only=True,
+            once=True, full=True, dry_run=True,
         )
-        cmd_ingest(args)
+        cmd_start(args)
 
-        captured = capsys.readouterr()
-        output = json.loads(captured.out)
-        assert output["knowledge_units_extracted"] == 10
-        assert output["nodes_created"] == 5
+        assert "--once" in spawned_args
+        assert "--full" in spawned_args
+        assert "--dry-run" in spawned_args
+
+    def test_start_without_once_no_extra_flags(self, monkeypatch) -> None:
+        spawned_args = []
+
+        def fake_spawn(command):
+            spawned_args.extend(command)
+            return 1000
+
+        monkeypatch.setattr("src.cli.read_pid", lambda s: None)
+        monkeypatch.setattr("src.cli.spawn_process", fake_spawn)
+        monkeypatch.setattr("src.cli.write_pid", lambda *a: None)
+        monkeypatch.setattr("builtins.print", lambda *a, **kw: None)
+
+        args = argparse.Namespace(
+            fetch_limit=100, fetch_interval=900,
+            process_batch_size=10, process_interval=300,
+            db="data/news.db", graph_enabled=False, time_window="",
+            fetch_only=False, offline_only=True,
+            once=False, full=False, dry_run=False,
+        )
+        cmd_start(args)
+
+        assert "--once" not in spawned_args
+        assert "--full" not in spawned_args
+        assert "--dry-run" not in spawned_args
 
 
 class TestMainArgparse:
@@ -185,17 +204,10 @@ class TestMainArgparse:
         main()
         assert calls == ["search"]
 
-    def test_ingest_subcommand_dispatches(self, monkeypatch) -> None:
-        calls = []
-
-        def fake_cmd_ingest(args):
-            calls.append("ingest")
-
-        monkeypatch.setattr("src.cli.cmd_ingest", fake_cmd_ingest)
+    def test_ingest_subcommand_removed(self, monkeypatch) -> None:
         monkeypatch.setattr(sys, "argv", ["knowledge-cli", "ingest"])
-
-        main()
-        assert calls == ["ingest"]
+        with pytest.raises(SystemExit):
+            main()
 
     def test_no_subcommand_exits(self, monkeypatch) -> None:
         monkeypatch.setattr(sys, "argv", ["knowledge-cli"])
@@ -269,6 +281,7 @@ class TestCmdStart:
             time_window="",
             fetch_only=False,
             offline_only=False,
+            once=False, full=False, dry_run=False,
         )
         cmd_start(args)
 
@@ -291,6 +304,7 @@ class TestCmdStart:
             process_batch_size=10, process_interval=300,
             db="data/news.db", graph_enabled=False, time_window="",
             fetch_only=False, offline_only=False,
+            once=False, full=False, dry_run=False,
         )
         cmd_start(args)
 
@@ -310,6 +324,7 @@ class TestCmdStart:
             process_batch_size=10, process_interval=300,
             db="data/news.db", graph_enabled=False, time_window="",
             fetch_only=True, offline_only=False,
+            once=False, full=False, dry_run=False,
         )
         cmd_start(args)
         assert len(spawned) == 1
@@ -328,6 +343,7 @@ class TestCmdStart:
             process_batch_size=10, process_interval=300,
             db="data/news.db", graph_enabled=False, time_window="",
             fetch_only=False, offline_only=True,
+            once=False, full=False, dry_run=False,
         )
         cmd_start(args)
         assert len(spawned) == 1

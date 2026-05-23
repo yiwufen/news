@@ -312,7 +312,8 @@ class RawDocumentRepository:
         batch_size: int = 10,
         time_window: str | None = None,
         incremental: bool = True,
-    ) -> Iterator[list[RawDocument]]:
+    ) -> Iterator[tuple[list[RawDocument], int]]:
+        """Yield (batch, total_remaining) pairs."""
         documents = [adapt_article_to_raw_document(article) for article in self.db.get_all_articles()]
 
         if incremental:
@@ -326,8 +327,9 @@ class RawDocumentRepository:
                 if compute_slice_window_from_datetime(doc.published_at) == time_window
             ]
 
-        for index in range(0, len(documents), batch_size):
-            yield documents[index:index + batch_size]
+        total = len(documents)
+        for index in range(0, total, batch_size):
+            yield documents[index:index + batch_size], total
 
 
 class KnowledgeUnitRepository(_SQLiteRepository):

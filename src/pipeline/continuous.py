@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Callable, Literal
+
+if TYPE_CHECKING:
+    from src.retrieval.vector_index import VectorIndex
 
 from src.entities import Entity, EntityRepository, EntityResolver, is_valid_entity_mention
 from src.entity_context_filter import filter_relevant_entities
@@ -84,6 +87,7 @@ class ContinuousPipeline:
         db_path: str = "data/news.db",
         extractor: KnowledgeExtractor | None = None,
         index_builder: KnowledgeIndexBuilder | None = None,
+        vector_index: VectorIndex | None = None,
     ):
         self.batch_size = batch_size
         self.graph_enabled = graph_enabled
@@ -99,6 +103,8 @@ class ContinuousPipeline:
         self.extractor = extractor or KnowledgeExtractor()
         self._embedding_provider = self._try_create_embedding_provider()
         self._description_generator = self._try_create_description_generator()
+        # Shared vector index — same instance for clusterer and index_builder
+        self._vector_index = vector_index or self._try_create_vector_index()
         self.entity_resolver = EntityResolver(
             self.entity_repo,
             embedding_provider=self._embedding_provider,
@@ -108,11 +114,12 @@ class ContinuousPipeline:
             self.cluster_repo,
             knowledge_units=self.knowledge_units,
             embedding_provider=self._embedding_provider,
-            vector_index=self._try_get_vector_index(),
+            vector_index=self._vector_index,
         )
         self.graph_sync = KnowledgeGraphSync() if graph_enabled else None
         self.index_builder = index_builder or KnowledgeIndexBuilder(
             self.knowledge_units,
+            vector_index=self._vector_index,
         )
         logger.info(f"ContinuousPipeline initialized (batch_size={batch_size}, graph_enabled={graph_enabled}, incremental={incremental})")
 
@@ -126,18 +133,16 @@ class ContinuousPipeline:
             logger.info("Entity disambiguation disabled (no embedding config)")
             return None
 
-    def _try_get_vector_index(self):
-        """Attempt to get the existing FAISS vector index for embedding lookups."""
+    def _try_create_vector_index(self):
+        """Create a VectorIndex if embedding is configured. Returns None on failure."""
         try:
             if self._embedding_provider is None:
                 return None
             from src.retrieval.vector_index import VectorIndex
-            idx = VectorIndex("data/news.db", self._embedding_provider)
-            if idx.is_available():
-                return idx
+            return VectorIndex("data/news.db", self._embedding_provider)
         except Exception:
-            pass
-        return None
+            logger.info("Vector index disabled (no embedding config)")
+            return None
 
     @staticmethod
     def _try_create_description_generator():
@@ -153,6 +158,7 @@ class ContinuousPipeline:
         self,
         time_window: str | None = None,
         dry_run: bool = False,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> ContinuousRunResult:
         logger.info(f"Starting pipeline run (time_window={time_window}, dry_run={dry_run})")
         all_errors: list[str] = []
@@ -162,8 +168,9 @@ class ContinuousPipeline:
         total_entities_saved = 0
         total_clusters_saved = 0
         batch_count = 0
+        docs_done = 0
 
-        for batch in self.raw_documents.iter_documents(
+        for batch, total in self.raw_documents.iter_documents(
             batch_size=self.batch_size,
             time_window=time_window,
             incremental=self.incremental,
@@ -230,6 +237,10 @@ class ContinuousPipeline:
                     for r in context.results
                 ]
                 self.log_repo.log_batch(log_records)
+
+            docs_done += len(batch)
+            if on_progress:
+                on_progress(docs_done, total)
 
         result = ContinuousRunResult(
             nodes_created=total_nodes,
@@ -417,6 +428,7 @@ def run_continuous(
     time_window: str | None = None,
     dry_run: bool = False,
     db_path: str = "data/news.db",
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> ContinuousRunResult:
     """Convenience entrypoint for the continuous pipeline."""
     from src.retrieval.indexing import KnowledgeIndexBuilder, try_create_vector_index
@@ -431,5 +443,6 @@ def run_continuous(
         incremental=incremental,
         db_path=db_path,
         index_builder=index_builder,
+        vector_index=vector_index,
     )
-    return pipeline.run(time_window=time_window, dry_run=dry_run)
+    return pipeline.run(time_window=time_window, dry_run=dry_run, on_progress=on_progress)
