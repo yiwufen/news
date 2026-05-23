@@ -931,13 +931,6 @@ class EntityResolver:
         unit_evidence: list[str] | None,
     ) -> Entity | None:
         """Disambiguate among multiple candidates using embedding similarity."""
-        # Fall back if any candidate lacks a description
-        if any(not c.description for c in candidates):
-            logger.debug(
-                "Disambiguation skipped: some candidates lack descriptions"
-            )
-            return candidates[0]
-
         # Build context text from KU summary + evidence
         parts = [unit_summary]
         if unit_evidence:
@@ -947,8 +940,12 @@ class EntityResolver:
         if not ku_context.strip():
             return candidates[0]
 
-        # Build description texts for each candidate
-        candidate_texts = [c.description for c in candidates if c.description]
+        # Build comparison text for each candidate
+        candidate_texts = [
+            c.description if c.description
+            else " ".join([c.canonical_name] + c.aliases[:3])
+            for c in candidates
+        ]
 
         # Compute embeddings
         all_texts = [ku_context] + candidate_texts

@@ -146,8 +146,18 @@ def _merge_conflict_status(current: ConflictStatus, incoming: ConflictStatus) ->
 def _unit_representative_sort_key(
     unit: KnowledgeUnit,
     summary_group_sizes: dict[str, int],
-) -> tuple[int, float, float, str]:
+    all_entity_ids: set[str],
+) -> tuple[float, int, int, float, float, str]:
+    entity_coverage = (
+        len({e.entity_id for e in unit.entities if e.entity_id} & all_entity_ids)
+        / len(all_entity_ids)
+        if all_entity_ids
+        else 0.0
+    )
+    evidence_length = sum(len(e.text) for e in unit.evidence)
     return (
+        -entity_coverage,
+        -evidence_length,
         -summary_group_sizes[_normalize_summary(unit.summary)],
         -unit.confidence,
         -_anchor_datetime(unit).timestamp(),
@@ -201,9 +211,17 @@ def build_event_cluster_snapshot(
         summary_groups.setdefault(_normalize_summary(unit.summary), []).append(unit)
     summary_group_sizes = {key: len(value) for key, value in summary_groups.items()}
 
+    # Compute entity_ids before representative selection for coverage scoring
+    all_entity_ids: set[str] = {
+        entity.entity_id
+        for unit in deduped_units
+        for entity in unit.entities
+        if entity.entity_id
+    }
+
     representative = sorted(
         deduped_units,
-        key=lambda unit: _unit_representative_sort_key(unit, summary_group_sizes),
+        key=lambda unit: _unit_representative_sort_key(unit, summary_group_sizes, all_entity_ids),
     )[0]
 
     explicit_times = [unit.time.event_time for unit in deduped_units if unit.time.event_time is not None]
@@ -218,14 +236,7 @@ def build_event_cluster_snapshot(
         "end": max(anchor_values).isoformat(),
     }
 
-    entity_ids = sorted(
-        {
-            entity.entity_id
-            for unit in deduped_units
-            for entity in unit.entities
-            if entity.entity_id
-        }
-    )
+    entity_ids = sorted(all_entity_ids)
     representative_entity_ids = [
         entity.entity_id for entity in representative.entities if entity.entity_id
     ]

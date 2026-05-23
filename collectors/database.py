@@ -7,7 +7,7 @@ SQLite 数据库操作：建表、插入、查询。
 import sqlite3
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 
 class Database:
@@ -138,11 +138,15 @@ class Database:
             row = cursor.fetchone()
             return self._row_to_dict(row) if row else None
 
-    def get_all_articles(self, limit: int | None = None) -> list[dict]:
+    def get_all_articles(
+        self,
+        limit: int | None = None,
+        order: Literal["ASC", "DESC"] = "ASC",
+    ) -> list[dict]:
         """获取所有文章"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            sql = "SELECT * FROM news_articles ORDER BY publish_time DESC"
+            sql = f"SELECT * FROM news_articles ORDER BY publish_time {order}"
             if limit:
                 cursor.execute(f"{sql} LIMIT ?", (limit,))
             else:

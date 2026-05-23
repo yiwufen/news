@@ -2,12 +2,15 @@
 Entity context filtering for LLM extraction prompt injection.
 
 Controls token consumption by selecting only relevant entities from the knowledge base.
+Uses Aho-Corasick automaton for efficient longest-match entity detection.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+
+import ahocorasick
 
 if TYPE_CHECKING:
     from src.entities import Entity
@@ -24,19 +27,46 @@ class EntityContext:
     aliases: list[str] = field(default_factory=list)
 
 
+def _build_automaton(
+    all_entities: dict[str, "Entity"],
+) -> tuple[ahocorasick.Automaton, dict[str, str]]:
+    """Build Aho-Corasick automaton from entity names/aliases.
+
+    Returns:
+        (automaton, name_to_entity_id) — automaton maps lowercase names to entity_id.
+        name_to_entity_id maps each lowercase name back to entity_id.
+    """
+    automaton = ahocorasick.Automaton()
+    # name_lower → entity_id; last write wins for duplicate names across entities
+    name_to_entity_id: dict[str, str] = {}
+
+    for entity_id, entity in all_entities.items():
+        if entity.canonical_name:
+            key = entity.canonical_name.lower()
+            name_to_entity_id[key] = entity_id
+            automaton.add_word(key, key)
+
+        for alias in entity.aliases:
+            if alias:
+                key = alias.lower()
+                if key not in name_to_entity_id:
+                    name_to_entity_id[key] = entity_id
+                    automaton.add_word(key, key)
+
+    automaton.make_automaton()
+    return automaton, name_to_entity_id
+
+
 def filter_relevant_entities(
     document: "RawDocument",
     all_entities: dict[str, "Entity"],
     max_entities: int = 50,
     max_tokens_estimate: int = 2000,
 ) -> list[EntityContext]:
-    """
-    Filter entities relevant to the current document for prompt injection.
+    """Filter entities relevant to the current document for prompt injection.
 
-    Strategy:
-    1. Exact match of canonical name in title/content → high priority
-    2. Match of alias in title/content → medium priority
-    3. Match of identifier (e.g., ticker) → high priority
+    Uses Aho-Corasick automaton for O(text_length) matching with longest-match
+    semantics. Separately checks identifiers (tickers, etc.) via substring match.
 
     Args:
         document: The raw document being processed
@@ -50,18 +80,41 @@ def filter_relevant_entities(
     if not all_entities:
         return []
 
-    # Pre-compute lowercase text once for efficiency
     text_lower = f"{document.title} {document.content}".lower()
-    scored_entities: list[tuple[float, "Entity"]] = []
 
+    automaton, name_to_entity_id = _build_automaton(all_entities)
+
+    # Collect matched entity_ids with hit details
+    entity_hits: dict[str, list[tuple[int, str]]] = {}  # entity_id → [(length, matched_name)]
+
+    for end_index, matched_name in automaton.iter(text_lower):
+        entity_id = name_to_entity_id[matched_name]
+        length = len(matched_name)
+        entity_hits.setdefault(entity_id, []).append((length, matched_name))
+
+    # Also match identifiers (tickers, etc.) via substring
     for entity in all_entities.values():
-        score = _compute_relevance_score(entity, text_lower)
-        if score > 0:
-            scored_entities.append((score, entity))
+        for identifier in entity.identifiers.values():
+            if identifier and identifier.lower() in text_lower:
+                entity_hits.setdefault(entity.entity_id, []).append(
+                    (len(identifier), identifier),
+                )
 
-    # Sort by relevance score (descending), then by name for stability
-    scored_entities.sort(key=lambda x: (-x[0], x[1].canonical_name))
-    selected = scored_entities[:max_entities]
+    # Score entities: longest match × hit count, with bonus for canonical name
+    scored: list[tuple[float, "Entity"]] = []
+    for entity_id, hits in entity_hits.items():
+        entity = all_entities[entity_id]
+        max_len = max(h[0] for h in hits)
+        hit_count = len(hits)
+        # Canonical name match gets bonus
+        canonical_bonus = 2.0 if any(
+            h[1] == entity.canonical_name.lower() for h in hits
+        ) else 0.0
+        score = max_len * hit_count + canonical_bonus
+        scored.append((score, entity))
+
+    scored.sort(key=lambda x: (-x[0], x[1].canonical_name))
+    selected = scored[:max_entities]
 
     # Token budget control
     result: list[EntityContext] = []
@@ -70,12 +123,11 @@ def filter_relevant_entities(
     for score, entity in selected:
         entity_ctx = EntityContext(
             canonical_name=entity.canonical_name,
-            entity_type=entity.entity_type,
+            entity_type=entity.entity_type or "",
             identifiers=entity.identifiers,
-            aliases=entity.aliases[:3],  # Limit aliases to control tokens
+            aliases=entity.aliases[:3],
         )
 
-        # Estimate: base 20 tokens + 5 tokens per alias
         entity_tokens = 20 + len(entity_ctx.aliases) * 5
         if estimated_tokens + entity_tokens > max_tokens_estimate:
             break
@@ -86,48 +138,8 @@ def filter_relevant_entities(
     return result
 
 
-def _compute_relevance_score(entity: "Entity", text_lower: str) -> float:
-    """
-    Compute relevance score between an entity and document text.
-
-    Scoring:
-    - Canonical name exact match: 10 points
-    - Alias match: 5 points each
-    - Identifier match (e.g., ticker): 8 points each
-
-    Args:
-        entity: The entity to score
-        text_lower: Pre-lowercased document text for efficient matching
-    """
-    score = 0.0
-
-    # Exact match of canonical name
-    if entity.canonical_name and entity.canonical_name.lower() in text_lower:
-        score += 10.0
-
-    # Match aliases
-    for alias in entity.aliases:
-        if alias and alias.lower() in text_lower:
-            score += 5.0
-
-    # Match identifiers (e.g., stock tickers)
-    for identifier in entity.identifiers.values():
-        if identifier and identifier.lower() in text_lower:
-            score += 8.0
-
-    return score
-
-
 def build_entity_context_section(entities: list[EntityContext]) -> str:
-    """
-    Build the entity context section for the extraction prompt.
-
-    Args:
-        entities: List of entity contexts to include
-
-    Returns:
-        Formatted prompt section string
-    """
+    """Build the entity context section for the extraction prompt."""
     if not entities:
         return ""
 
@@ -135,7 +147,6 @@ def build_entity_context_section(entities: list[EntityContext]) -> str:
     section += "以下实体已在知识库中存在，抽取时请优先使用标准名称：\n\n"
 
     for entity in entities:
-        # Format: "标准名称 (类型) [标识符]"
         identifiers_str = ""
         if entity.identifiers:
             key_id = next(iter(entity.identifiers.values()), "")
@@ -144,7 +155,6 @@ def build_entity_context_section(entities: list[EntityContext]) -> str:
 
         section += f"- **{entity.canonical_name}** ({entity.entity_type}){identifiers_str}\n"
 
-        # Add aliases if present
         if entity.aliases:
             section += f"  别名: {', '.join(entity.aliases)}\n"
 

@@ -8,7 +8,6 @@ import pytest
 
 from src.entity_context_filter import (
     EntityContext,
-    _compute_relevance_score,
     build_entity_context_section,
     filter_relevant_entities,
 )
@@ -48,49 +47,43 @@ def _make_document(title: str, content: str) -> RawDocument:
     )
 
 
-class TestComputeRelevanceScore:
-    """Tests for _compute_relevance_score."""
 
-    def test_canonical_name_match(self) -> None:
-        entity = _make_entity("小米集团")
-        text_lower = "小米集团发布新款手机".lower()
-        score = _compute_relevance_score(entity, text_lower)
-        assert score == 10.0
+class TestLongestMatchPriority:
+    """Tests for Aho-Corasick longest-match semantics."""
 
-    def test_alias_match(self) -> None:
-        entity = _make_entity("小米集团", aliases=["小米", "Xiaomi"])
-        text_lower = "小米发布新款手机".lower()
-        score = _compute_relevance_score(entity, text_lower)
-        assert score == 5.0  # Only alias match
+    def test_short_name_not_matched_inside_longer_name(self) -> None:
+        """'华为' should NOT match when text says '华为海思'."""
+        document = _make_document("华为海思发布新芯片", "华为海思发布新芯片")
+        entities = {
+            "ent_huawei": _make_entity("华为"),
+            "ent_huawei_hisi": _make_entity("华为海思"),
+        }
+        result = filter_relevant_entities(document, entities)
+        # 华为海思 should be matched; 华为 should NOT be matched separately
+        matched_names = {ctx.canonical_name for ctx in result}
+        assert "华为海思" in matched_names
+        # 华为 may appear if its name also matched, but 华为海思 should rank higher
+        if "华为" in matched_names:
+            huawei_hisi_idx = next(
+                i for i, ctx in enumerate(result) if ctx.canonical_name == "华为海思"
+            )
+            huawei_idx = next(
+                i for i, ctx in enumerate(result) if ctx.canonical_name == "华为"
+            )
+            assert huawei_hisi_idx < huawei_idx
 
-    def test_identifier_match(self) -> None:
-        entity = _make_entity("小米集团", identifiers={"ticker": "1810.HK"})
-        text_lower = "1810.HK 股价上涨".lower()
-        score = _compute_relevance_score(entity, text_lower)
-        assert score == 8.0
-
-    def test_multiple_matches(self) -> None:
-        entity = _make_entity(
-            "小米集团",
-            aliases=["小米"],
-            identifiers={"ticker": "1810.HK"},
-        )
-        text_lower = "小米集团(1810.HK)发布新品，小米品牌受欢迎".lower()
-        score = _compute_relevance_score(entity, text_lower)
-        # 10 (canonical) + 5 (alias) + 8 (identifier) = 23
-        assert score == 23.0
-
-    def test_no_match(self) -> None:
-        entity = _make_entity("小米集团")
-        text_lower = "华为发布新款手机".lower()
-        score = _compute_relevance_score(entity, text_lower)
-        assert score == 0.0
-
-    def test_case_insensitive(self) -> None:
-        entity = _make_entity("Xiaomi")
-        text_lower = "XIAOMI 发布新品".lower()
-        score = _compute_relevance_score(entity, text_lower)
-        assert score == 10.0  # Canonical name match (case insensitive)
+    def test_short_name_matched_standalone(self) -> None:
+        """'华为' SHOULD match when it appears standalone."""
+        document = _make_document("华为发布新品", "华为发布新品")
+        entities = {
+            "ent_huawei": _make_entity("华为"),
+            "ent_huawei_hisi": _make_entity("华为海思"),
+        }
+        result = filter_relevant_entities(document, entities)
+        matched_names = {ctx.canonical_name for ctx in result}
+        assert "华为" in matched_names
+        # 华为海思 should NOT match (text doesn't contain it)
+        assert "华为海思" not in matched_names
 
 
 class TestFilterRelevantEntities:

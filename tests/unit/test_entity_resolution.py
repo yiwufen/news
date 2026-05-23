@@ -460,11 +460,13 @@ class TestDisambiguation:
             "Should create new entity when all candidates below threshold"
         )
 
-    def test_disambiguation_skipped_without_description(self, tmp_path: Path):
-        """If any candidate lacks description, falls back to first candidate."""
+    def test_disambiguation_works_without_description(self, tmp_path: Path):
+        """Disambiguation proceeds even when some candidates lack descriptions."""
         db_path = str(tmp_path / "test.db")
         repo = EntityRepository(db_path)
-        provider = _make_mock_embedding_provider()
+        provider = _make_mock_embedding_provider(
+            similarities={"科技公司": 0.9},
+        )
         resolver = EntityResolver(repo, embedding_provider=provider)
 
         e1 = _make_entity("苹果公司", aliases=["苹果"], description="科技公司")
@@ -474,10 +476,11 @@ class TestDisambiguation:
         cache = {e1.entity_id: e1, e2.entity_id: e2}
 
         result = _resolve_with_context(
-            resolver, "苹果", summary="test", entities_cache=cache,
+            resolver, "苹果", summary="苹果公司发布新品", entities_cache=cache,
         )
         assert result is not None
-        provider.embed.assert_not_called()
+        assert result.entity_id == e1.entity_id
+        provider.embed.assert_called_once()
 
 
 # ===========================================================================
