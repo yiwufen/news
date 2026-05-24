@@ -1,19 +1,29 @@
 # knowledge-ingestion.service
-# One-shot ingestion job. Triggered by knowledge-ingestion.timer
-# every 4 hours. Do not run this manually without --once.
+# Continuously runs the offline ingestion loop (crawl + extract + index).
+# Runs as a long-running service, not a timer-triggered oneshot.
 #
 # First-time setup (full backfill):
 #   sudo docker compose -f /home/deployer/knowledge/repo/docker-compose.yml \
 #     run --rm mcp python -m src.cli _run_offline --once --full
+#
+# Install:
+#   sudo cp deploy/knowledge-ingestion.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now knowledge-ingestion.service
 
 [Unit]
-Description=Knowledge CLI Periodic Ingestion
-Requires=docker.service
+Description=Knowledge CLI Continuous Ingestion
+Requires=docker.service knowledge-mcp.service
 After=docker.service knowledge-mcp.service
 
 [Service]
-Type=oneshot
+Type=simple
 WorkingDirectory=/home/deployer/knowledge/repo
-ExecStart=/usr/bin/docker compose --env-file /home/deployer/knowledge/.env run --rm mcp python -m src.cli _run_offline --once
+ExecStart=/usr/bin/docker compose --env-file /home/deployer/knowledge/.env run --rm mcp python -m src.cli _run_offline
+Restart=always
+RestartSec=30
 StandardOutput=journal
 StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
