@@ -3,7 +3,7 @@
 # every 4 hours. Do not run this manually without --once.
 #
 # First-time setup (full backfill):
-#   sudo docker compose -f /opt/knowledge/repo/docker-compose.yml \
+#   sudo docker compose -f /home/deployer/knowledge/repo/docker-compose.yml \
 #     run --rm mcp _run_offline --once --full
 
 [Unit]
@@ -13,7 +13,7 @@ After=docker.service knowledge-mcp.service
 
 [Service]
 Type=oneshot
-WorkingDirectory=/opt/knowledge/repo
-ExecStart=/usr/bin/docker compose --env-file /opt/knowledge/.env run --rm mcp _run_offline --once
+WorkingDirectory=/home/deployer/knowledge/repo
+ExecStart=/usr/bin/docker compose --env-file /home/deployer/knowledge/.env run --rm mcp _run_offline --once
 StandardOutput=journal
 StandardError=journal

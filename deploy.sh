@@ -8,14 +8,15 @@
 #
 # Prerequisites:
 #   - Docker + Docker Compose installed
-#   - /opt/knowledge/.env configured with API keys + NEO4J_PASSWORD
-#   - /opt/knowledge/data/ directory exists
+#   - /home/deployer/knowledge/.env configured with API keys + NEO4J_PASSWORD
+#   - /home/deployer/knowledge/data/ directory exists
 # ============================================================
 
 set -euo pipefail
 
-REPO_DIR="/opt/knowledge/repo"
-ENV_FILE="/opt/knowledge/.env"
+REPO_DIR="/home/deployer/knowledge/repo"
+ENV_FILE="/home/deployer/knowledge/.env"
+DATA_DIR="/home/deployer/knowledge/data"
 DOMAIN="${DOMAIN:-localhost}"
 
 echo "=== knowledge-cli deploy ==="
@@ -25,7 +26,7 @@ echo ""
 # --- 0. Verify env file ---
 if [ ! -f "${ENV_FILE}" ]; then
     echo "ERROR: ${ENV_FILE} not found."
-    echo "  cp /opt/knowledge/repo/.env.example ${ENV_FILE}"
+    echo "  cp /home/deployer/knowledge/repo/.env.example ${ENV_FILE}"
     echo "  Then edit ${ENV_FILE} with your API keys and passwords."
     exit 1
 fi
@@ -42,7 +43,7 @@ echo "[1/4] Pulling latest code..."
 git pull --ff-only origin master
 
 # --- 2. Ensure data directory exists ---
-mkdir -p /opt/knowledge/data
+mkdir -p /home/deployer/knowledge/data
 
 # --- 3. Rebuild & restart ---
 echo "[2/4] Rebuilding and restarting services..."

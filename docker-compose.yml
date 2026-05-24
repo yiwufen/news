@@ -27,9 +27,9 @@ services:
     build: .
     container_name: knowledge-mcp
     restart: unless-stopped
-    env_file: /opt/knowledge/.env
+    env_file: /home/deployer/knowledge/.env
     volumes:
-      - /opt/knowledge/data:/app/data
+      - /home/deployer/knowledge/data:/app/data
     networks:
       - knowledge-net
     depends_on:
