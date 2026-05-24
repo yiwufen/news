@@ -1,31 +1,79 @@
 services:
-  app:
-    build: .
-    container_name: knowledge-retrieval
-    env_file: .env
+  # ====================================================================
+  # Caddy — public-facing reverse proxy with auto HTTPS
+  # ====================================================================
+  caddy:
+    image: caddy:2-alpine
+    container_name: knowledge-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
     volumes:
-      - ./data:/app/data
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - knowledge-net
+    depends_on:
+      - mcp
+
+  # ====================================================================
+  # MCP Server — stateless Streamable HTTP API
+  # ====================================================================
+  mcp:
+    build: .
+    container_name: knowledge-mcp
+    restart: unless-stopped
+    env_file: /opt/knowledge/.env
+    volumes:
+      - /opt/knowledge/data:/app/data
+    networks:
+      - knowledge-net
     depends_on:
       neo4j:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/mcp')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
+  # ====================================================================
+  # Neo4j — graph database (internal network only, no public ports)
+  # ====================================================================
   neo4j:
     image: neo4j:5-community
     container_name: knowledge-neo4j
     environment:
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-test1234}
-    ports:
-      - "7474:7474"   # Browser UI
-      - "7687:7687"   # Bolt protocol
     volumes:
       - neo4j-data:/data
       - neo4j-logs:/logs
+    networks:
+      - knowledge-net
     healthcheck:
       test: ["CMD-SHELL", "cypher-shell -u neo4j -p ${NEO4J_PASSWORD:-test1234} 'RETURN 1' || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
 
+# ====================================================================
+# Networks
+# ====================================================================
+networks:
+  knowledge-net:
+    driver: bridge
+
+# ====================================================================
+# Volumes
+# ====================================================================
 volumes:
+  caddy-data:
+  caddy-config:
   neo4j-data:
   neo4j-logs:

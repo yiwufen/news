@@ -297,6 +297,8 @@ class _SQLiteRepository:
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA busy_timeout=5000")
         return connection
 
 
@@ -313,23 +315,26 @@ class RawDocumentRepository:
         time_window: str | None = None,
         incremental: bool = True,
     ) -> Iterator[tuple[list[RawDocument], int]]:
-        """Yield (batch, total_remaining) pairs."""
-        documents = [adapt_article_to_raw_document(article) for article in self.db.get_all_articles()]
+        """Yield (batch, estimated_total) pairs using streaming article iteration."""
+        processed_doc_ids = self.log_repo.get_processed_doc_ids() if incremental else set()
+        estimated_total = self.db.get_article_count() - len(processed_doc_ids)
 
-        if incremental:
-            processed_doc_ids = self.log_repo.get_processed_doc_ids()
-            documents = [doc for doc in documents if doc.doc_id not in processed_doc_ids]
+        batch: list[RawDocument] = []
+        yielded = 0
+        for article in self.db.iter_articles():
+            if incremental and article["doc_id"] in processed_doc_ids:
+                continue
+            doc = adapt_article_to_raw_document(article)
+            if time_window and compute_slice_window_from_datetime(doc.published_at) != time_window:
+                continue
+            batch.append(doc)
+            yielded += 1
+            if len(batch) >= batch_size:
+                yield batch, estimated_total
+                batch = []
 
-        if time_window:
-            documents = [
-                doc
-                for doc in documents
-                if compute_slice_window_from_datetime(doc.published_at) == time_window
-            ]
-
-        total = len(documents)
-        for index in range(0, total, batch_size):
-            yield documents[index:index + batch_size], total
+        if batch:
+            yield batch, estimated_total
 
 
 class KnowledgeUnitRepository(_SQLiteRepository):
@@ -466,7 +471,7 @@ class KnowledgeUnitRepository(_SQLiteRepository):
                 f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}"
             )
 
-    def save_batch(self, units: list[KnowledgeUnit]) -> int:
+    def save_batch(self, units: list[KnowledgeUnit], connection: sqlite3.Connection | None = None) -> int:
         if not units:
             return 0
         rows = [
@@ -490,8 +495,12 @@ class KnowledgeUnitRepository(_SQLiteRepository):
             )
             for unit in units
         ]
-        with self._connect() as connection:
-            connection.executemany(
+        conn = connection or self._connect()
+        own_connection = connection is None
+        try:
+            if own_connection:
+                conn.execute("BEGIN IMMEDIATE")
+            conn.executemany(
                 """
                 INSERT INTO knowledge_units (
                     ku_id, doc_id, unit_kind, unit_type, summary, primary_mentions, entity_ids,
@@ -515,8 +524,16 @@ class KnowledgeUnitRepository(_SQLiteRepository):
                 """,
                 rows,
             )
-            self._sync_fts_rows(connection, units)
-            connection.commit()
+            self._sync_fts_rows(conn, units)
+            if own_connection:
+                conn.commit()
+        except Exception:
+            if own_connection:
+                conn.rollback()
+            raise
+        finally:
+            if own_connection:
+                conn.close()
         return len(units)
 
     def _sync_fts_rows(

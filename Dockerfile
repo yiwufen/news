@@ -8,7 +8,8 @@ WORKDIR /app
 # Copy dependency manifests first for layer caching
 COPY pyproject.toml uv.toml ./
 
-# Sync production dependencies (no dev, no project itself)
+# Install production dependencies only (project itself is not installed —
+# at runtime we use `python -m src.cli` so source paths resolve correctly)
 RUN uv sync --no-dev --no-install-project
 
 # Copy application code
@@ -33,11 +34,10 @@ COPY --from=builder /app/collectors /app/collectors
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
 
-# Default database path (override with volume mount)
-ENV DB_PATH=/app/data/news.db
-
-# Create data directory
+# Create data directory (src/paths.py resolves PROJECT_ROOT → /app, DB → /app/data/news.db)
 RUN mkdir -p /app/data
 
-ENTRYPOINT ["knowledge-cli"]
-CMD ["--help"]
+# Default: MCP server (override CMD for ingestion:
+#   docker compose run --rm mcp python -m src.cli _run_offline --once)
+ENTRYPOINT ["python", "-m", "src.cli"]
+CMD ["serve", "--host", "0.0.0.0", "--port", "8000"]

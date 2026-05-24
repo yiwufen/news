@@ -361,6 +361,8 @@ class EventClusterRepository:
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA busy_timeout=5000")
         return connection
 
     @staticmethod
@@ -460,7 +462,7 @@ class EventClusterRepository:
             )
         )
 
-    def save_batch(self, clusters: list[EventCluster]) -> int:
+    def save_batch(self, clusters: list[EventCluster], connection: sqlite3.Connection | None = None) -> int:
         if not clusters:
             return 0
         rows = [
@@ -476,8 +478,12 @@ class EventClusterRepository:
             )
             for cluster in clusters
         ]
-        with self._connect() as connection:
-            connection.executemany(
+        conn = connection or self._connect()
+        own_connection = connection is None
+        try:
+            if own_connection:
+                conn.execute("BEGIN IMMEDIATE")
+            conn.executemany(
                 """
                 INSERT INTO event_clusters (
                     cluster_id, cluster_type, primary_entity_id, time_anchor,
@@ -498,7 +504,7 @@ class EventClusterRepository:
             # Maintain cluster_entity_map index table
             cluster_ids = [c.cluster_id for c in clusters]
             placeholders = ", ".join("?" for _ in cluster_ids)
-            connection.execute(
+            conn.execute(
                 f"DELETE FROM cluster_entity_map WHERE cluster_id IN ({placeholders})",
                 cluster_ids,
             )
@@ -509,11 +515,19 @@ class EventClusterRepository:
                 for eid in sorted_ids:
                     map_rows.append((eid, cluster.cluster_id, cluster.cluster_type, entity_hash))
             if map_rows:
-                connection.executemany(
+                conn.executemany(
                     "INSERT OR IGNORE INTO cluster_entity_map (entity_id, cluster_id, cluster_type, entity_set_hash) VALUES (?, ?, ?, ?)",
                     map_rows,
                 )
-            connection.commit()
+            if own_connection:
+                conn.commit()
+        except Exception:
+            if own_connection:
+                conn.rollback()
+            raise
+        finally:
+            if own_connection:
+                conn.close()
         return len(clusters)
 
     def get_all(self) -> list[EventCluster]:

@@ -125,3 +125,18 @@
 
 ### Summary
 以 casual 商务读者（P3）视角执行 5 个场景测试，同时进行 ad-hoc 话题探索。核心发现：(1) **Defect #5（时间过滤）已修复**——不同时间范围正确返回不同结果子集，之前完全无效的时间范围现在精确生效（CRITICAL→FIXED）；(2) **BYD 英文别名已修复**——从 0 条改善到 64 条高相关结果；(3) **BM25 回退对话题搜索显著改善**——"量化交易"、"供应链金融"、"芯片制裁"、"光刻"均从 0 条变为有结果；(4) **"海思"短 token 碰撞问题未改善**——仍 0/20 条华为海思相关。6 条评分记录：整体平均 3.1 分（Relevance 3.3, Info Density 2.8, Redundancy 3.5, Temporal 2.8），比历史平均 2.1 有明显提升。
+
+## Session: ut-developer-20260524-131436
+
+| Field | Value |
+|-------|-------|
+| **Started** | 2026-05-24 13:14:36 |
+| **Ended** | 2026-05-24 14:10:00 |
+| **Persona** | developer |
+| **Scenarios Claimed** | S001, S005, S009, S012, S013 |
+| **Scenarios Completed** | S001, S005, S009, S012, S013, ad-hoc (edge cases, graph) |
+| **Findings Filed** | F20260524-001 ~ F20260524-007 (7 findings) |
+| **Status** | COMPLETED |
+
+### Summary
+以 Agent 开发者视角执行了 5 个场景 + ad-hoc 边界测试，验证检索架构优化（BM25→entity_id+dense 多模式）后的效果。核心发现：(1) **Defect #2（event_type 词表断层）已修复**——中文"股价变动"精确映射到 "stock_price_change"，20/20 匹配；(2) **Cluster 去膨胀效果显著**——小米 cluster 从 141→20，宁德时代从 96→18；(3) **去重/多样化大幅改善**——宁德时代"超级科技日"从 8/10→0/20；(4) **Defect #15（意图感知）部分实现**——RISK_ASSESSMENT 和 ENTITY_OVERVIEW 返回不同类型结果；(5) **CRITICAL：COMPARATIVE_ANALYSIS 仍严重失衡**——小米:腾讯=1:13，宁德:比亚迪=17:2；(6) **新问题：dense fallback 引入无关噪声**——恒大集团搜索 0/20 提及恒大，半导体 entity_id_lookup 仅返回 4 条（之前 45 条，严重退步）；(7) **图谱功能退化为空**——graph_used=True 但 nodes=0, edges=0（之前 192 nodes）。8 条评分记录：整体平均 2.7 分（Relevance 2.8, Info Density 3.0, Redundancy 3.8, Temporal 1.0），Temporal 维度因 event_time 全部为 None 而持续低分。

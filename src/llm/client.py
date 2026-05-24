@@ -5,12 +5,20 @@ LLM 客户端工厂。
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Any
 
 from anthropic import Anthropic
 
 from src.llm.config import get_llm_config
+
+# Anthropic SDK reads ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL from system
+# env and uses them for auth/URL, which conflicts with third-party
+# Anthropic-compatible APIs (e.g. ZhiPu). Clear them at import time.
+for _var in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"):
+    if _var in os.environ:
+        del os.environ[_var]
 
 
 def create_llm_client() -> tuple[Anthropic, str]:

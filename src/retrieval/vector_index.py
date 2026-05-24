@@ -89,13 +89,28 @@ class VectorIndex:
             self._next_id = 0
 
     def _save(self) -> None:
-        """Persist current index and ID map to disk."""
+        """Persist current index and ID map to disk atomically."""
         if self._index is None:
             return
+        import os
         self._vec_dir.mkdir(parents=True, exist_ok=True)
-        faiss.write_index(self._index, str(self._index_path()))
-        raw = {str(k): v for k, v in self._id_map.items()}
-        self._id_map_path().write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+        # Write to temp files, then atomic rename
+        idx_tmp = str(self._index_path()) + ".tmp"
+        idmap_tmp = str(self._id_map_path()) + ".tmp"
+        try:
+            faiss.write_index(self._index, idx_tmp)
+            raw = {str(k): v for k, v in self._id_map.items()}
+            Path(idmap_tmp).write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+            os.replace(idx_tmp, str(self._index_path()))
+            os.replace(idmap_tmp, str(self._id_map_path()))
+        except Exception:
+            # Clean up temp files on failure
+            for tmp in (idx_tmp, idmap_tmp):
+                try:
+                    Path(tmp).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            raise
 
     def _create_index(self, dim: int) -> faiss.Index:
         """Create a new FAISS IndexIDMap wrapping IndexFlatIP."""

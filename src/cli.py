@@ -116,6 +116,28 @@ def cmd_graph_expand(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# serve — MCP server
+# ---------------------------------------------------------------------------
+
+
+def cmd_serve(args: argparse.Namespace) -> None:
+    """Start the knowledge-cli MCP server for remote access."""
+    from src.mcp_server import create_server
+
+    server = create_server(
+        host=args.host,
+        port=args.port,
+        db_path=args.db,
+    )
+    transport: str = "streamable-http"
+    print(
+        f"MCP server starting on http://{args.host}:{args.port}/mcp "
+        f"(transport: {transport})"
+    )
+    server.run(transport=transport)
+
+
+# ---------------------------------------------------------------------------
 # index-vectors
 # ---------------------------------------------------------------------------
 
@@ -191,8 +213,8 @@ def cmd_start(args: argparse.Namespace) -> None:
             "--interval", str(args.process_interval),
             "--db", args.db,
         ]
-        if args.graph_enabled:
-            offline_args.append("--graph-enabled")
+        if not args.graph_enabled:
+            offline_args.append("--no-graph")
         if args.time_window:
             offline_args.extend(["--time-window", args.time_window])
         if args.once:
@@ -408,8 +430,9 @@ def main() -> None:
                               help="Offline loop interval in seconds (default: 300)")
     start_parser.add_argument("--db", type=str, default=DEFAULT_DB_PATH,
                               help="SQLite database path")
-    start_parser.add_argument("--graph-enabled", action="store_true",
-                              help="Enable knowledge graph sync for offline process")
+    start_parser.add_argument("--no-graph", action="store_false", dest="graph_enabled",
+                              help="Disable knowledge graph sync for offline process")
+    start_parser.set_defaults(graph_enabled=True)
     start_parser.add_argument("--time-window", type=str, default="",
                               help="Optional ISO week window for offline process")
     start_parser.add_argument("--fetch-only", action="store_true",
@@ -434,6 +457,19 @@ def main() -> None:
     status_parser = subparsers.add_parser("status", help="Show running process status")
     status_parser.set_defaults(func=cmd_status)
 
+    # --- serve ---
+    serve_parser = subparsers.add_parser("serve", help="Start MCP server for remote access")
+    serve_parser.add_argument(
+        "--host", type=str, default="0.0.0.0", help="Bind address (default: 0.0.0.0)"
+    )
+    serve_parser.add_argument(
+        "--port", type=int, default=8000, help="Bind port (default: 8000)"
+    )
+    serve_parser.add_argument(
+        "--db", type=str, default=DEFAULT_DB_PATH, help="SQLite database path"
+    )
+    serve_parser.set_defaults(func=cmd_serve)
+
     # --- hidden: _run_fetch ---
     run_fetch_parser = subparsers.add_parser("_run_fetch")
     run_fetch_parser.add_argument("--limit", type=int, default=100)
@@ -447,8 +483,8 @@ def main() -> None:
     run_offline_parser.add_argument("--interval", type=int, default=300)
     run_offline_parser.add_argument("--db", type=str, default=DEFAULT_DB_PATH)
     run_offline_parser.add_argument("--time-window", type=str, default="")
-    run_offline_parser.add_argument("--graph-enabled", dest="graph_enabled",
-                                     action="store_true", default=False)
+    run_offline_parser.add_argument("--no-graph", dest="graph_enabled",
+                                     action="store_false", default=True)
     run_offline_parser.add_argument("--once", action="store_true", default=False)
     run_offline_parser.add_argument("--full", action="store_true", default=False)
     run_offline_parser.add_argument("--dry-run", action="store_true", default=False)

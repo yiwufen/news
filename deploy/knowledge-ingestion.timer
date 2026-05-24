@@ -1,0 +1,15 @@
+# knowledge-ingestion.timer
+# Triggers ingestion every 4 hours at minute 13 past the hour.
+# Randomized minute avoids thundering herd against other cron jobs.
+
+[Unit]
+Description=Periodic Knowledge Base Ingestion (every 4h)
+Requires=knowledge-ingestion.service
+
+[Timer]
+OnCalendar=*-*-* 00,04,08,12,16,20:13:00
+RandomizedDelaySec=120
+Persistent=true
+
+[Install]
+WantedBy=timers.target

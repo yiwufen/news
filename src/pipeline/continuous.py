@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from src.retrieval.vector_index import VectorIndex
 
 from src.entities import Entity, EntityRepository, EntityResolver, is_valid_entity_mention
+from src.alias_generator import AliasGenerator
 from src.entity_context_filter import filter_relevant_entities
 from src.event_merging import EventCluster, EventClusterRepository, EventMerger
 from src.knowledge_base import (
@@ -109,6 +110,7 @@ class ContinuousPipeline:
             self.entity_repo,
             embedding_provider=self._embedding_provider,
             description_generator=self._description_generator,
+            alias_generator=AliasGenerator(),
         )
         self.clusterer = EventMerger(
             self.cluster_repo,
@@ -170,6 +172,11 @@ class ContinuousPipeline:
         batch_count = 0
         docs_done = 0
 
+        # 一次性加载全量实体缓存，后续通过 resolve_entities 增量追加
+        shared_entities_cache: dict[str, Entity] = {
+            entity.entity_id: entity for entity in self.entity_repo.get_all()
+        }
+
         for batch, total in self.raw_documents.iter_documents(
             batch_size=self.batch_size,
             time_window=time_window,
@@ -178,12 +185,9 @@ class ContinuousPipeline:
             batch_count += 1
             logger.debug(f"Processing batch {batch_count} with {len(batch)} documents")
 
-            # Batch 初始化：加载全量实体缓存（resolve_units 需要）
             context = BatchProcessingContext(
-                entities_cache={
-                    entity.entity_id: entity for entity in self.entity_repo.get_all()
-                },
-                clusters_cache={},  # _find_cluster 改为查 DB，无需预加载
+                entities_cache=shared_entities_cache,
+                clusters_cache={},
             )
 
             # 文档级独立处理
@@ -381,12 +385,21 @@ class ContinuousPipeline:
             logger.error(f"[{document.doc_id}] Cluster failed: {exc}")
             return result
 
-        # Stage 4: Persist KUs first, then entities and clusters
+        # Stage 4: Persist KUs, entities, clusters in a single transaction
         if not dry_run:
             try:
-                self.knowledge_units.save_batch(clustered_units)
-                self.entity_repo.save_batch(resolved_entities)
-                self.cluster_repo.save_batch(clusters)
+                conn = self.knowledge_units._connect()
+                try:
+                    conn.execute("BEGIN IMMEDIATE")
+                    self.knowledge_units.save_batch(clustered_units, connection=conn)
+                    self.entity_repo.save_batch(resolved_entities, connection=conn)
+                    self.cluster_repo.save_batch(clusters, connection=conn)
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+                finally:
+                    conn.close()
             except Exception as exc:
                 result.failed_stage = "save"
                 result.error_message = f"save failed: {exc}"

@@ -8,16 +8,16 @@
 
 | Metric | Value | Last Updated |
 |--------|-------|--------------|
-| Total Sessions | 8 | 2026-05-20 |
-| Total Scenarios Executed | 63 | 2026-05-20 |
-| Total Findings | 54 | 2026-05-20 |
-| CRITICAL Findings (OPEN) | 4 | 2026-05-20 |
+| Total Sessions | 9 | 2026-05-24 |
+| Total Scenarios Executed | 71 | 2026-05-24 |
+| Total Findings | 61 | 2026-05-24 |
+| CRITICAL Findings (OPEN) | 2 | 2026-05-24 |
 | CRITICAL Findings (PARTIAL) | 1 | 2026-05-09 |
-| CRITICAL Findings (FIXED) | 4 | 2026-05-20 |
-| HIGH Findings (OPEN) | 12 | 2026-05-20 |
-| HIGH Findings (IMPROVED) | 2 | 2026-05-20 |
+| CRITICAL Findings (FIXED) | 5 | 2026-05-24 |
+| HIGH Findings (OPEN) | 12 | 2026-05-24 |
+| HIGH Findings (IMPROVED) | 3 | 2026-05-24 |
 | HIGH Findings (FIXED) | 4 | 2026-05-20 |
-| MEDIUM Findings (OPEN) | 13 | 2026-05-20 |
+| MEDIUM Findings (OPEN) | 16 | 2026-05-24 |
 | MEDIUM Findings (FIXED) | 4 | 2026-05-09 |
 | LOW Findings (OPEN) | 7 | 2026-05-16 |
 
@@ -26,26 +26,26 @@
 | Persona | Sessions | Scenarios Run | Findings |
 |---------|----------|---------------|----------|
 | analyst | 4 | 31 | 29 |
-| developer | 2 | 10 | 13 |
+| developer | 3 | 17 | 20 |
 | casual | 2 | 22 | 12 |
 
 ## Scenario Execution Heatmap
 
 | Scenario | Times Executed | Last Result | Last Run |
 |----------|---------------|-------------|----------|
-| S001     | 2 | PASS (20 unique clusters, good diversity) | 2026-05-20 |
+| S001     | 3 | PASS (14/20 mention entity, dense noise 30%, cluster 20) | 2026-05-24 |
 | S002     | 3 | FAIL (100% event_time=None for CATL, timeline unusable) | 2026-05-11 |
 | S003     | 1 | FAIL (graph unavailable) | 2026-05-09 |
-| S004     | 3 | FAIL (117 irrelevant BM25 results, no warning) | 2026-05-20 |
-| S005     | 1 | FAIL (filter eliminates all) | 2026-05-09 |
+| S004     | 3 | FAIL (117 irrelevant dense results, no warning) | 2026-05-24 |
+| S005     | 2 | PASS (event_type CN→EN mapping FIXED, 20/20 match) | 2026-05-24 |
 | S006     | 3 | FIXED (BYD 0→64, all short names work) | 2026-05-20 |
 | S007     | 3 | PASS (time_range filtering FIXED, correct subset behavior) | 2026-05-20 |
 | S008     | 1 | PASS (graph adds 85 entities, 17 clusters; off mode clean) | 2026-05-11 |
-| S009     | 2 | FIXED (both entities represented: 7+8) | 2026-05-09 |
+| S009     | 3 | FAIL (comparative mode exists but 1:13 severe imbalance) | 2026-05-24 |
 | S010     | 1 | PASS (all 5 intents have valid JSON schema) | 2026-05-11 |
 | S011     | 1 | FAIL (top-k=0 inconsistent, negative top-k no validation, hops=5 hangs) | 2026-05-16 |
-| S012     | 1 | FAIL (event_type filter non-functional, time_range non-functional, Defect #9 FIXED) | 2026-05-16 |
-| S013     | 3 | IMPROVED (量化交易/供应链金融 now return results, precision still low) | 2026-05-20 |
+| S012     | 2 | IMPROVED (Defect #1/#2/#5/#9 FIXED, #3/#15 still present, new dense noise) | 2026-05-24 |
+| S013     | 4 | IMPROVED (量化交易/供应链金融 now return results, 半导体 regression 45→4) | 2026-05-24 |
 | S014     | 1 | PARTIAL (graph adds value, limited edges) | 2026-05-09 |
 | S015     | 1 | PASS (deterministic results, identical KU order across runs) | 2026-05-16 |
 | ad-hoc-iran | 1 | FAIL (COMPARATIVE_ANALYSIS 0 results, FTS5 limits) | 2026-05-09 |
@@ -57,22 +57,22 @@
 
 | Defect | Description | Verified Present | Verified Fixed | Last Checked |
 |--------|-------------|-----------------|----------------|--------------|
-| #1     | Entity hard gate | YES (F20260509-008) | YES (F20260509-015, F20260509-016, F20260509-020, F20260520-002) | 2026-05-20 |
-| #2     | Event type vocabulary | YES (F20260509-007, F20260509-011, F20260516-005) | PARTIAL (F20260509-007) | 2026-05-16 |
-| #3     | FTS Chinese tokenization | YES (F20260509-016, F20260509-020, F20260509-023, F20260520-004) | - | 2026-05-20 |
-| #4     | Scoring calibration | YES (F20260509-020) | - | 2026-05-09 |
-| #5     | Time parsing fallback | YES (F20260510-002, F20260516-006) | YES (F20260520-001) | 2026-05-20 |
+| #1     | Entity hard gate | YES (F20260509-008) | YES (F20260524-004, BYD 61 results, fallback modes work) | 2026-05-24 |
+| #2     | Event type vocabulary | YES (F20260509-007, F20260509-011, F20260516-005) | YES (F20260524-002, 股价变动→stock_price_change 20/20) | 2026-05-24 |
+| #3     | FTS Chinese tokenization | YES (F20260509-016, F20260509-020, F20260509-023, F20260520-004) | - | 2026-05-24 |
+| #4     | Scoring calibration | YES (F20260509-020) | PARTIAL (entity_bonus=10.0, dense scores as primary) | 2026-05-24 |
+| #5     | Time parsing fallback | YES (F20260510-002, F20260516-006) | YES (F20260524-004, 2025→6, 2026-04→55) | 2026-05-24 |
 | #6     | Cluster no direct search | - | - | - |
 | #7     | Two-path scoring inconsistency | - | - | - |
 | #8     | Graph add-only | - | - | - |
-| #9     | find_related primary only | YES (F20260509-019) | YES (F20260516, 极氪+小鹏→比亚迪 cluster found) | 2026-05-16 |
-| #10    | Cluster over-expansion | YES (F20260509-001, F20260509-013, F20260509-025) | YES (F20260509-001) | 2026-05-09 |
-| #11    | No dedup | YES (F20260509-018, F20260511-002) | - | 2026-05-11 |
-| #12    | 1-hop graph | YES (F20260509-019, F20260511-006) | PARTIAL (F20260509-006) | 2026-05-16 |
+| #9     | find_related primary only | YES (F20260509-019) | YES (F20260524-004, multi-entity clusters: 腾讯13+小米7) | 2026-05-24 |
+| #10    | Cluster over-expansion | YES (F20260509-001, F20260509-013, F20260509-025) | YES (F20260524-001, 141→20 for 小米, 96→18 for CATL) | 2026-05-24 |
+| #11    | No dedup | YES (F20260509-018, F20260511-002) | YES (F20260524-001, 超级科技日 8/10→0/20, 20/20 unique) | 2026-05-24 |
+| #12    | 1-hop graph | YES (F20260509-019, F20260511-006) | REGRESSION (F20260524-007, graph nodes 192→0) | 2026-05-24 |
 | #13    | Legacy dead code | YES (F20260509-009) | YES (F20260509-009) | 2026-05-09 |
 | #14    | LIKE filter fragility | - | - | - |
-| #15    | No intent-aware retrieval | YES (F20260509-021, F20260511-003) | PARTIAL (F20260509-006) | 2026-05-11 |
-| #16    | No relaxation cascade | - | YES (F20260509-015, F20260509-016, F20260520-003) | 2026-05-20 |
+| #15    | No intent-aware retrieval | YES (F20260509-021, F20260511-003) | PARTIAL (F20260524-004, RISK≠OVERVIEW but results about wrong entity) | 2026-05-24 |
+| #16    | No relaxation cascade | - | YES (F20260524-004, bm25_fallback/dense_fallback/entity_id_lookup modes) | 2026-05-24 |
 | #17    | Per-request client init | - | - | - |
 
 ## Retrieval Quality Scores
@@ -91,22 +91,23 @@
 | ut-analyst-20260511-120618 | analyst | 8 | 2.8 | 2.8 | 1.4 | 1.0 | 2.0 |
 | ut-developer-20260516-103000 | developer | 5 | 2.0 | 2.2 | 2.8 | 1.6 | 2.1 |
 | ut-casual-20260520-143848 | casual | 6 | 3.3 | 2.7 | 3.5 | 2.8 | 3.1 |
+| ut-developer-20260524-131436 | developer | 8 | 2.8 | 3.0 | 3.8 | 1.0 | 2.7 |
 
 ### Cumulative Averages
 
 | Dimension | Score | Trend | Sample Size |
 |-----------|-------|-------|-------------|
-| Relevance | 2.6 | ↑ | 54 |
-| Info Density | 2.2 | ↑ | 54 |
-| Redundancy | 2.4 | ↑ | 54 |
-| Temporal | 1.8 | ↑ | 54 |
-| **Overall** | 2.3 | ↑ | 54 |
+| Relevance | 2.7 | ↑ | 62 |
+| Info Density | 2.6 | ↑ | 62 |
+| Redundancy | 2.8 | ↑ | 62 |
+| Temporal | 1.6 | → | 62 |
+| **Overall** | 2.4 | ↑ | 62 |
 
 ### Dimension-Defect Correlation
 
 | Dimension | Primary Defect | Secondary Defect |
 |-----------|---------------|-----------------|
-| Relevance | #4 (打分校准) | #1 (实体硬门, FIXED), #3 (FTS5 中文分词, 海思仍严重), #2 (event_type 过滤失效) |
-| Info Density | KU 粒度 | #3 (FTS 中文分词) |
-| Redundancy | #11 (无去重) | #10 (Cluster 过度扩展) |
-| Temporal | #5 (时间过滤, FIXED) | event_time 缺失率 25% (小米, 改善) |
+| Relevance | #4 (打分校准, PARTIAL) | dense noise (new), #3 (FTS5 中文分词, still present) |
+| Info Density | KU 粒度 | event_time 100% None (小米) |
+| Redundancy | #11 (无去重, FIXED) | #10 (Cluster 过度扩展, FIXED) |
+| Temporal | event_time 缺失 | published_at 回退未实现 |

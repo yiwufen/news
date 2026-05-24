@@ -29,6 +29,8 @@ class Database:
         """获取数据库连接"""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
         return conn
 
     def _init_db(self):
@@ -71,18 +73,6 @@ class Database:
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_particles_slice ON intelligence_particles(slice_window)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_particles_type ON intelligence_particles(event_type)")
-
-            # 处理记录表
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS processing_log (
-                    doc_id TEXT PRIMARY KEY,
-                    status TEXT NOT NULL,
-                    particle_id TEXT,
-                    error_message TEXT,
-                    processed_at TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_processing_status ON processing_log(status)")
 
             conn.commit()
 
@@ -152,6 +142,20 @@ class Database:
             else:
                 cursor.execute(sql)
             return [self._row_to_dict(row) for row in cursor.fetchall()]
+
+    def iter_articles(
+        self,
+        order: Literal["ASC", "DESC"] = "ASC",
+    ):
+        """Stream articles one at a time using a server-side cursor."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"SELECT * FROM news_articles ORDER BY publish_time {order}")
+            while True:
+                row = cursor.fetchone()
+                if row is None:
+                    break
+                yield self._row_to_dict(row)
 
     def get_statistics(self) -> dict[str, Any]:
         """获取数据库统计信息"""
@@ -253,65 +257,6 @@ class Database:
             else:
                 cursor.execute(sql)
             return [self._row_to_particle(row) for row in cursor.fetchall()]
-
-    def get_processed_doc_ids(self) -> set[str]:
-        """获取已成功处理的文档 ID"""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT doc_id FROM processing_log WHERE status = 'success'")
-            return {row[0] for row in cursor.fetchall()}
-
-    def log_processing(self, doc_id: str, status: str, particle_id: str | None = None, error_message: str | None = None):
-        """记录处理状态"""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """INSERT OR REPLACE INTO processing_log
-                   (doc_id, status, particle_id, error_message)
-                   VALUES (?, ?, ?, ?)""",
-                (doc_id, status, particle_id, error_message)
-            )
-            conn.commit()
-
-    def log_processing_batch(self, records: list[dict]):
-        """批量记录处理状态"""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            data = [
-                (
-                    r["doc_id"],
-                    r["status"],
-                    r.get("particle_id"),
-                    r.get("error_message"),
-                )
-                for r in records
-            ]
-            cursor.executemany(
-                """INSERT OR REPLACE INTO processing_log
-                   (doc_id, status, particle_id, error_message)
-                   VALUES (?, ?, ?, ?)""",
-                data
-            )
-            conn.commit()
-
-    def get_processing_stats(self) -> dict[str, int]:
-        """获取处理统计"""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT status, COUNT(*) FROM processing_log GROUP BY status")
-            return {row[0]: row[1] for row in cursor.fetchall()}
-
-    def get_failed_docs(self) -> list[dict]:
-        """获取处理失败的文档"""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT doc_id, error_message, processed_at FROM processing_log WHERE status = 'failed'"
-            )
-            return [
-                {"doc_id": row[0], "error_message": row[1], "processed_at": row[2]}
-                for row in cursor.fetchall()
-            ]
 
     def _row_to_particle(self, row: sqlite3.Row) -> dict:
         """将数据库行转换为情报微粒字典"""

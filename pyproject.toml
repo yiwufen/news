@@ -16,6 +16,9 @@ dependencies = [
     "faiss-cpu>=1.9.0",
     "jieba>=0.42.1",
     "pyahocorasick>=2.3.1",
+    "fastapi>=0.136.3",
+    "uvicorn>=0.47.0",
+    "mcp>=1.27.1",
 ]
 
 [project.scripts]

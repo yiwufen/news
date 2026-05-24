@@ -83,6 +83,7 @@ entities 只能包含具名实体——现实世界中具有特定专有名称�
 - 宁可漏提一个实体，也不要把非实体（概念、指标、时间词、行业泛称、协议名、政策名）塞进 entities。
 - 资产（如股权、房产）不要作为实体提取，应通过 relation_hints 表达。
 - 协议、条约、政策、法案（如美伊协议、巴黎协定、芯片法案）不是实体，它们是事件或政策，不要提取。
+- 单字中文不允许作为实体 mention。遇到单字缩写/简称（无论国别、省份、机构）时必须展开为全称。例如："以"→"以色列"、"美"→"美国"、"粤"→"广东"、"浙"→"浙江"。
 - 如果提示中包含「已知实体参考」，优先使用其中的标准名称作为 mention。
 
 示例：
@@ -202,6 +203,7 @@ def _build_extraction_tool_schema() -> dict[str, Any]:
 
     ku_schema["properties"]["unit_type"]["enum"] = unit_type_enum
     defs["EntityRef"]["properties"]["entity_type"]["enum"] = entity_type_enum
+    defs["EntityRef"]["properties"]["mention"]["minLength"] = 2
     defs["RelationHint"]["properties"]["relation_type"]["enum"] = relation_type_enum
 
     # Inject time field descriptions into TimeRef schema

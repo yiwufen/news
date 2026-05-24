@@ -611,6 +611,238 @@
 
 ---
 
+## Q20260524-001
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-24 |
+| **Session** | ut-developer-20260524-131436 |
+| **Scenario** | S001 |
+| **Query** | `knowledge-cli search --entities "小米集团"` |
+| **Intent** | ENTITY_OVERVIEW |
+| **Result Count** | 60 |
+| **Relevance** | 3 |
+| **Info Density** | 3 |
+| **Redundancy** | 4 |
+| **Temporal** | 1 |
+| **Overall** | 2.8 |
+
+### Scoring Rationale
+- **Relevance**: 3 — 14/20 KU 直接提及小米（70%），6 条来自 dense retrieval 的语义关联但非直接相关内容（小鹏、茅台、亿咖通、美的等），dense noise 占 30%
+- **Info Density**: 3 — KU 包含股价、产品、投资等多维度信息，但 event_time 全部为 None（0/20），信息时间维度完全缺失
+- **Redundancy**: 4 — 20/20 unique summaries，无重复事件。超级科技日问题已解决（不再占满 top-K）。对比上轮（141 clusters），cluster 去膨胀效果显著
+- **Temporal**: 1 — event_time 0/20 (100% None)，时间维度完全不可用。比上轮 25% 缺失率更严重
+
+### Top 3 Results Summary
+1. ku_202604103700887658_003: 权重科技股走势分化...腾讯、小米飘绿 (score: 13.66, src: dense, ent_b=10.0)
+2. ku_em_202604113701725970_2: 小米于2018年登陆港交所上市 (score: 4.46, src: dense)
+3. ku_524d93e5117a7e48: 小米集团-W遭南向资金净卖出24.21亿港元 (score: 4.22, src: dense)
+
+---
+
+## Q20260524-002
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-24 |
+| **Session** | ut-developer-20260524-131436 |
+| **Scenario** | S005 |
+| **Query** | `knowledge-cli search --entities "小米集团" --event-types "股价变动"` |
+| **Intent** | ENTITY_OVERVIEW (event type filter) |
+| **Result Count** | 66 |
+| **Relevance** | 5 |
+| **Info Density** | 4 |
+| **Redundancy** | 4 |
+| **Temporal** | 1 |
+| **Overall** | 3.5 |
+
+### Scoring Rationale
+- **Relevance**: 5 — "股价变动"(中文) 精确映射到 "stock_price_change"，20/20 全部匹配。Defect #2 完全修复
+- **Info Density**: 4 — 股价变动 KU 包含具体涨跌幅、公司名、时间等要素，信息密度高
+- **Redundancy**: 4 — 不同公司的股价变动，覆盖多样化
+- **Temporal**: 1 — event_time 仍然全部缺失
+
+### Top 3 Results Summary
+1. stock_price_change KU: 权重科技股走势分化，阿里巴巴涨近3%，美团涨近1%...
+2. stock_price_change KU: 权重科技股午间多数走低，小米跌超3%...
+3. stock_price_change KU: 小米上市以来8年内出现两次股价"腰斩"...
+
+---
+
+## Q20260524-003
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-24 |
+| **Session** | ut-developer-20260524-131436 |
+| **Scenario** | S009 |
+| **Query** | `knowledge-cli search --entities "小米集团" "腾讯控股" --intent COMPARATIVE_ANALYSIS` |
+| **Intent** | COMPARATIVE_ANALYSIS |
+| **Result Count** | 13 |
+| **Relevance** | 2 |
+| **Info Density** | 3 |
+| **Redundancy** | 4 |
+| **Temporal** | 1 |
+| **Overall** | 2.5 |
+
+### Scoring Rationale
+- **Relevance**: 2 — 小米仅 1/13 (7.7%)，腾讯 13/13 (100%)，严重失衡。用户期望对比两家公司，却几乎只看到腾讯信息。两个实体虽都被 matched 但结果严重偏向腾讯
+- **Info Density**: 3 — 腾讯相关 KU 信息量充足（AI算力涨价、QClaw、云服务等），但缺少小米维度的对比
+- **Redundancy**: 4 — 无重复事件，但信息全部来自单一实体
+- **Temporal**: 1 — 时间信息缺失
+
+### Top 3 Results Summary
+1. KU1: 权重科技股走势分化...腾讯、小米飘绿 [BOTH] — 唯一同时提及两者
+2. KU2: 腾讯云将于2026年5月9日起对AI算力...涨价 [腾讯]
+3. KU3: 第四届数据中心液冷技术大会...腾讯数据中心 [腾讯]
+
+---
+
+## Q20260524-004
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-24 |
+| **Session** | ut-developer-20260524-131436 |
+| **Scenario** | S009 |
+| **Query** | `knowledge-cli search --entities "宁德时代" "比亚迪" --intent COMPARATIVE_ANALYSIS` |
+| **Intent** | COMPARATIVE_ANALYSIS |
+| **Result Count** | 36 |
+| **Relevance** | 3 |
+| **Info Density** | 3 |
+| **Redundancy** | 3 |
+| **Temporal** | 1 |
+| **Overall** | 2.5 |
+
+### Scoring Rationale
+- **Relevance**: 3 — 宁德时代 17/20 (85%)、比亚迪 2/20 (10%)、Both 0/20 (0%)。比上轮 15:5 更偏向宁德时代，coverage_bonus 策略效果退化
+- **Info Density**: 3 — 宁德时代 KU 覆盖股价、投资、合作，但无两实体间的关联信息
+- **Redundancy**: 3 — 宁德时代部分 KU2/4/6/7 描述类似事件（股价涨超3.6%创新高），略有重复
+- **Temporal**: 1 — 时间信息缺失
+
+### Top 3 Results Summary
+1. KU1: 宁德时代在香港下跌4%，受配售50亿美元股票消息影响 [宁德]
+2. KU2: 创业板指涨幅扩大至1%...宁德时代持续走高 [宁德]
+3. KU3: 电池ETF万家(159156)上涨2.08%，创历史新高 [NONE]
+
+---
+
+## Q20260524-005
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-24 |
+| **Session** | ut-developer-20260524-131436 |
+| **Scenario** | S012 |
+| **Query** | `knowledge-cli search --entities "恒大集团" --intent ENTITY_OVERVIEW` |
+| **Intent** | ENTITY_OVERVIEW |
+| **Result Count** | 112 |
+| **Relevance** | 1 |
+| **Info Density** | 2 |
+| **Redundancy** | 3 |
+| **Temporal** | 1 |
+| **Overall** | 1.8 |
+
+### Scoring Rationale
+- **Relevance**: 1 — 0/20 KU 提及恒大。retrieval_mode=dense，但 dense 向量匹配到恒生指数、乐享集团等完全不相关内容。实体未匹配时 dense fallback 严重失准
+- **Info Density**: 2 — 返回的 KU 有完整信息，但全部是关于错误实体的
+- **Redundancy**: 3 — 涉及多个不同实体，无明显重复
+- **Temporal**: 1 — 时间信息缺失
+
+### Top 3 Results Summary
+1. KU1: 乐享集团涨超40% (完全无关)
+2. KU2: 中化岩土控股股东...股权质押风险 (完全无关)
+3. KU3: 碇点金融科技由渣打银行...设立 (完全无关)
+
+---
+
+## Q20260524-006
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-24 |
+| **Session** | ut-developer-20260524-131436 |
+| **Scenario** | S012 |
+| **Query** | `knowledge-cli search --entities "小米集团" --intent RISK_ASSESSMENT` |
+| **Intent** | RISK_ASSESSMENT |
+| **Result Count** | 60 |
+| **Relevance** | 2 |
+| **Info Density** | 3 |
+| **Redundancy** | 4 |
+| **Temporal** | 1 |
+| **Overall** | 2.5 |
+
+### Scoring Rationale
+- **Relevance**: 2 — RISK_ASSESSMENT 现在返回不同的结果（restructuring, executive_change 类型），说明意图感知已部分实现。但 Top 5 全部关于其他公司（亿咖通/淘宝/百花医药/三星），与小米集团无关
+- **Info Density**: 3 — KU 包含重组、高管变动等风险相关要素，但非查询实体
+- **Redundancy**: 4 — KU3 和 KU4 是同一事件（百花医药），但总体多样性尚可
+- **Temporal**: 1 — 时间信息缺失
+
+### Top 3 Results Summary
+1. KU1: 亿咖通科技宣布依据吉利控股集团《台州宣言》... (restructuring, 无关)
+2. KU2: 雷雁群接任淘宝闪购CEO职务 (executive_change, 无关)
+3. KU3: 百花医药控股股东...转让 (restructuring, 无关)
+
+---
+
+## Q20260524-007
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-24 |
+| **Session** | ut-developer-20260524-131436 |
+| **Scenario** | S013 |
+| **Query** | `knowledge-cli search --entities "半导体" --intent TOPIC_RESEARCH` |
+| **Intent** | TOPIC_RESEARCH |
+| **Result Count** | 4 |
+| **Relevance** | 5 |
+| **Info Density** | 3 |
+| **Redundancy** | 5 |
+| **Temporal** | 1 |
+| **Overall** | 3.5 |
+
+### Scoring Rationale
+- **Relevance**: 5 — 4/4 KU 全部关于半导体板块（兆易创新、中芯国际、华虹半导体），entity_id_lookup 精确匹配
+- **Info Density**: 3 — 包含股票涨跌幅、板块信息，但仅 4 条结果信息量有限
+- **Redundancy**: 5 — 4 条各不相同
+- **Temporal**: 1 — 时间信息缺失
+
+### Top 3 Results Summary
+1. KU1: 半导体板块走强，兆易创新涨逾11%，中芯国际涨3.5%...
+2. KU2: 华虹半导体低开2.2%
+3. KU3: 中证港股通科技指数上涨4.51%...华虹半导体...
+
+---
+
+## Q20260524-008
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-24 |
+| **Session** | ut-developer-20260524-131436 |
+| **Scenario** | S013 |
+| **Query** | `knowledge-cli search --entities "光刻" --intent TOPIC_RESEARCH` |
+| **Intent** | TOPIC_RESEARCH |
+| **Result Count** | 60 |
+| **Relevance** | 2 |
+| **Info Density** | 3 |
+| **Redundancy** | 3 |
+| **Temporal** | 1 |
+| **Overall** | 2.3 |
+
+### Scoring Rationale
+- **Relevance**: 2 — dense_fallback 模式，仅 1/20 KU 提及光刻（"光刻机概念盘中异动"）。Dense 向量匹配到光通信、激光等语义近似但非精确的内容
+- **Info Density**: 3 — KU 信息量适中，但大部分不相关
+- **Redundancy**: 3 — 无严重重复
+- **Temporal**: 1 — 时间信息缺失
+
+### Top 3 Results Summary
+1. KU1: 光刻机概念盘中局部异动，海立股份涨停 (1/20 唯一相关)
+2. KU2: 光库科技业绩变动...降本增效 (无关，"光"字匹配)
+3. KU3: 2025年我国光通信相关企业注册量同比增加12.2% (无关)
+
+---
+
 ## Q20260516-002
 
 | Field | Value |

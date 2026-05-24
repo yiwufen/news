@@ -16,8 +16,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, Literal, cast
 from uuid import uuid4
 
-import math
-
 if TYPE_CHECKING:
     from src.retrieval.embedding import EmbeddingProvider
 
@@ -228,6 +226,10 @@ def is_valid_entity_mention(mention: str) -> bool:
     if stripped in _ABSTRACT_CONCEPTS:
         return False
 
+    # 单字中文不作为实体（如"以"="以色列"、"美"="美国"等缩写）
+    if len(stripped) == 1 and "一" <= stripped <= "鿿":
+        return False
+
     for pattern in _NON_ENTITY_PATTERNS:
         if pattern.search(stripped):
             return False
@@ -407,13 +409,6 @@ class EntityRepository:
         "pony ma": "马化腾",
     }
 
-    # Chinese short-name aliases: abbreviated name → canonical full name
-    _CHINESE_SHORT_ALIASES: dict[str, str] = {
-        "宁德": "宁德时代",
-        "辉达": "英伟达",
-        "海思": "华为海思",
-    }
-
     def __init__(self, db_path: str = "data/news.db"):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -422,6 +417,8 @@ class EntityRepository:
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.db_path)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA busy_timeout=5000")
         return connection
 
     @staticmethod
@@ -488,7 +485,7 @@ class EntityRepository:
             )
             connection.commit()
 
-    def save_batch(self, entities: list[Entity]) -> int:
+    def save_batch(self, entities: list[Entity], connection: sqlite3.Connection | None = None) -> int:
         if not entities:
             return 0
         rows = [
@@ -503,8 +500,12 @@ class EntityRepository:
             )
             for entity in entities
         ]
-        with self._connect() as connection:
-            connection.executemany(
+        conn = connection or self._connect()
+        own_connection = connection is None
+        try:
+            if own_connection:
+                conn.execute("BEGIN IMMEDIATE")
+            conn.executemany(
                 """
                 INSERT INTO entities (
                     entity_id, canonical_name, entity_type, primary_identifier,
@@ -524,11 +525,11 @@ class EntityRepository:
             # Maintain alias and identifier index tables
             entity_ids = [entity.entity_id for entity in entities]
             placeholders = ", ".join("?" for _ in entity_ids)
-            connection.execute(
+            conn.execute(
                 f"DELETE FROM entity_aliases WHERE entity_id IN ({placeholders})",
                 entity_ids,
             )
-            connection.execute(
+            conn.execute(
                 f"DELETE FROM entity_identifiers WHERE entity_id IN ({placeholders})",
                 entity_ids,
             )
@@ -543,16 +544,24 @@ class EntityRepository:
                 for key, value in entity.identifiers.items():
                     ident_rows.append((entity.entity_id, key, value))
             if alias_rows:
-                connection.executemany(
+                conn.executemany(
                     "INSERT OR IGNORE INTO entity_aliases (entity_id, normalized_alias) VALUES (?, ?)",
                     alias_rows,
                 )
             if ident_rows:
-                connection.executemany(
+                conn.executemany(
                     "INSERT OR IGNORE INTO entity_identifiers (entity_id, identifier_key, identifier_value) VALUES (?, ?, ?)",
                     ident_rows,
                 )
-            connection.commit()
+            if own_connection:
+                conn.commit()
+        except Exception:
+            if own_connection:
+                conn.rollback()
+            raise
+        finally:
+            if own_connection:
+                conn.close()
         return len(entities)
 
     def get_all(self) -> list[Entity]:
@@ -695,37 +704,7 @@ class EntityRepository:
                         matched.append(entity)
                         matched_ids.add(entity.entity_id)
 
-            # Layer 2.5: Chinese short-name alias → resolve to full name
-            short_alias = self._CHINESE_SHORT_ALIASES.get(q_lower)
-            alias_target: Entity | None = None
-            if short_alias:
-                short_variants = list(build_entity_name_variants(short_alias))
-                short_candidates = self._entities_by_normalized_names_and_aliases(
-                    short_variants,
-                )
-                for entity in short_candidates:
-                    if entity.entity_id in matched_ids:
-                        continue
-                    if entity_matches_query_name(
-                        [entity.canonical_name, *entity.aliases],
-                        short_alias,
-                    ):
-                        alias_target = entity
-                        break
-
-            if alias_target is not None:
-                # Prefer alias target if layer-1 match is a low-data entity
-                if layer1_match is not None and len(layer1_match.source_ku_ids) <= 5:
-                    matched.append(alias_target)
-                    matched_ids.add(alias_target.entity_id)
-                elif layer1_match is None:
-                    matched.append(alias_target)
-                    matched_ids.add(alias_target.entity_id)
-                elif layer1_match is not None:
-                    # Both exist; keep layer-1 match (it's a real entity)
-                    matched.append(layer1_match)
-                    matched_ids.add(layer1_match.entity_id)
-            elif layer1_match is not None:
+            if layer1_match is not None:
                 matched.append(layer1_match)
                 matched_ids.add(layer1_match.entity_id)
 
@@ -738,7 +717,7 @@ class EntityRepository:
                     break
 
             # Layer 4: containment fallback for short names (<= 3 chars)
-            if layer1_match is None and alias_target is None and len(q_lower) <= 3:
+            if layer1_match is None and len(q_lower) <= 3:
                 contained = self._entities_by_normalized_prefix(q_lower)
                 best_contained: Entity | None = None
                 best_ku_count = -1
@@ -766,10 +745,12 @@ class EntityResolver:
         repository: EntityRepository,
         embedding_provider: EmbeddingProvider | None = None,
         description_generator: Any | None = None,
+        alias_generator: Any | None = None,
     ):
         self.repository = repository
         self._embedding_provider = embedding_provider
         self._description_generator = description_generator
+        self._alias_generator = alias_generator
 
     def resolve_units(
         self,
@@ -873,6 +854,29 @@ class EntityResolver:
                                 "Description generation failed for '%s': %s",
                                 matched.canonical_name, exc,
                             )
+                    # Generate aliases for new entity
+                    if self._alias_generator:
+                        try:
+                            generated = self._alias_generator.generate(
+                                matched.canonical_name,
+                                matched.entity_type or "",
+                                matched.identifiers,
+                            )
+                            for alias in generated:
+                                norm_alias = normalize_entity_name(alias)
+                                if (
+                                    alias not in matched.aliases
+                                    and norm_alias not in {normalize_entity_name(a) for a in matched.aliases}
+                                    and len(matched.aliases) < _MAX_ALIASES
+                                ):
+                                    matched.aliases.append(alias)
+                                    if norm_alias and norm_alias != nk:
+                                        alias_index.setdefault(norm_alias, []).append(matched.entity_id)
+                        except Exception as exc:
+                            logger.warning(
+                                "Alias generation failed for '%s': %s",
+                                matched.canonical_name, exc,
+                            )
                 else:
                     # Alias dedup: skip if normalized form already present
                     mention_norm = normalize_entity_name(entity_ref.mention)
@@ -920,7 +924,10 @@ class EntityResolver:
 
         # Multiple candidates: attempt embedding disambiguation
         if self._embedding_provider is not None:
-            return self._disambiguate(candidates, unit_summary, unit_evidence)
+            result = self._disambiguate(candidates, unit_summary, unit_evidence)
+            if result is not None:
+                return result
+            # Disambiguation inconclusive — fall through to first candidate
 
         return candidates[0]
 
@@ -976,11 +983,11 @@ class EntityResolver:
             return candidates[best_idx]
 
         logger.debug(
-            "Disambiguation: best score %.3f below threshold %.3f, treating as new entity",
+            "Disambiguation: best score %.3f below threshold %.3f, falling back to first candidate",
             best_score,
             _DISAMBIGUATION_THRESHOLD,
         )
-        return None
+        return None  # caller falls back to candidates[0]
 
     def _find_candidates(
         self,
@@ -1002,7 +1009,14 @@ class EntityResolver:
                     if entity.entity_id not in candidates:
                         if entity.entity_id not in entities_cache:
                             entities_cache[entity.entity_id] = entity
-                            norm_cache[entity.entity_id] = normalize_entity_name(entity.canonical_name)
+                            nk = normalize_entity_name(entity.canonical_name)
+                            norm_cache[entity.entity_id] = nk
+                            if nk:
+                                name_index.setdefault(nk, []).append(entity.entity_id)
+                            for alias in entity.aliases:
+                                ak = normalize_entity_name(alias)
+                                if ak and ak != nk:
+                                    alias_index.setdefault(ak, []).append(entity.entity_id)
                         candidates[entity.entity_id] = entities_cache[entity.entity_id]
 
         # Layer 1.5: cross-lingual alias → resolve to Chinese name → match
@@ -1015,19 +1029,6 @@ class EntityResolver:
                 if eid not in candidates:
                     candidates[eid] = entities_cache[eid]
             for eid in alias_index.get(cross_norm, []):
-                if eid not in candidates:
-                    candidates[eid] = entities_cache[eid]
-
-        # Layer 1.6: Chinese short-name alias → resolve to full name → match
-        short_alias = EntityRepository._CHINESE_SHORT_ALIASES.get(
-            mention.strip().lower()
-        )
-        if short_alias and not cross_lingual:
-            short_norm = normalize_entity_name(short_alias)
-            for eid in name_index.get(short_norm, []):
-                if eid not in candidates:
-                    candidates[eid] = entities_cache[eid]
-            for eid in alias_index.get(short_norm, []):
                 if eid not in candidates:
                     candidates[eid] = entities_cache[eid]
 

@@ -1,0 +1,19 @@
+# knowledge-ingestion.service
+# One-shot ingestion job. Triggered by knowledge-ingestion.timer
+# every 4 hours. Do not run this manually without --once.
+#
+# First-time setup (full backfill):
+#   sudo docker compose -f /opt/knowledge/repo/docker-compose.yml \
+#     run --rm mcp _run_offline --once --full
+
+[Unit]
+Description=Knowledge CLI Periodic Ingestion
+Requires=docker.service
+After=docker.service knowledge-mcp.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/knowledge/repo
+ExecStart=/usr/bin/docker compose --env-file /opt/knowledge/.env run --rm mcp _run_offline --once
+StandardOutput=journal
+StandardError=journal

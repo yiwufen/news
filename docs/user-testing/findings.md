@@ -1966,3 +1966,287 @@ uv run knowledge-cli search --entities "完全不存在的公司名称XYZ"
 
 ### Impact
 HIGH。确认 F20260516-007 未改善。casual 用户看到 117 条结果会以为找到了信息，实际全部无关。对 AI 应用集成更严重——依赖 total_count>0 判断成功的逻辑会被误导。
+
+---
+
+## F20260524-001
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-24 |
+| **Session** | ut-developer-20260524-131436 |
+| **Persona** | developer |
+| **Scenario** | S001 |
+| **Severity** | HIGH |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #10 (FIXED), #11 (IMPROVED), new: dense retrieval noise |
+
+### Summary
+S001 基础实体搜索验证了检索优化后的显著改善：cluster 从 141→20（Defect #10 修复），超级科技日从 8/10→0/20（Defect #11 改善），retrieval_mode 从纯 BM25 改为 entity_id+dense。但 dense retrieval 引入了新问题：20 条 KU 中 6 条（30%）与小米集团无关（KU15-19 关于小鹏/茅台/亿咖通/美的），dense 向量匹配到的语义相似内容并非用户需要的精确实体信息。
+
+### Reproduction
+```
+knowledge-cli search --entities "小米集团"
+```
+返回 total_count=60, ku=20, cluster=20, retrieval_mode=entity_id+dense
+- KU15: "小鹏集团、哔哩哔哩跌超2%" — 与小米无关
+- KU16: "茅台集团总经理王莉根据安排到北京学习至5月" — 与小米无关
+- KU18: "亿咖通科技宣布依据吉利控股集团《台州宣言》..." — 与小米无关
+- KU19: "美的集团旗下公司在宁波成立光电科技公司" — 与小米无关
+- event_time: 0/20 全部为 None
+
+### Expected Behavior
+当实体精确匹配成功时（matched_entity_ids 有值），返回的 KU 应主要关于该实体。dense retrieval 引入的相关但不精确的内容应排在有实体匹配的 KU 之后，或设置相关度阈值过滤。
+
+### Impact
+HIGH。检索架构升级（BM25→dense）带来了显著改善（cluster 去膨胀、去重），但 dense retrieval 的噪声问题是新引入的退化。30% 的 top-K 被无关内容占满，对于分析师来说是信息浪费。
+
+---
+
+## F20260524-002
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-24 |
+| **Session** | ut-developer-20260524-131436 |
+| **Persona** | developer |
+| **Scenario** | S005 |
+| **Severity** | HIGH |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #2 (CONFIRMED FIXED), new: dense fallback entity mismatch |
+
+### Summary
+Defect #2（event_type 词表断层）已修复：中文"股价变动"→"stock_price_change"（20/20 匹配）、"产品发布"→"product_launch"（20/20 匹配）。但发现新问题：搜索"恒大集团"时 matched_entity_ids=[]（实体未匹配），dense fallback 返回的 20 条 KU 中 0/20 提及恒大，全是恒生指数、乐享集团等无关内容。检索模式 "dense" 对未匹配实体的查询返回完全不相关的结果。
+
+### Reproduction
+```
+# Event type filter - WORKS NOW
+knowledge-cli search --entities "小米集团" --event-types "股价变动"
+# → 20/20 unit_type=stock_price_change ✅
+
+knowledge-cli search --entities "小米集团" --event-types "产品发布"
+# → 20/20 unit_type=product_launch ✅
+
+# But entity not found + dense fallback - PROBLEM
+knowledge-cli search --entities "恒大集团" --intent ENTITY_OVERVIEW
+# → total=112, ku=20, matched_entity_ids=[], retrieval_mode=dense
+# → 0/20 KUs mention 恒大. All about 恒生指数, 乐享集团, etc.
+```
+
+### Expected Behavior
+1. "恒大集团"实体应被解析（恒大在库中有数据，之前可返回60条）
+2. 当实体未匹配且 dense fallback 结果与查询无关时，应有 LOW_RELEVANCE 或 ENTITY_NOT_FOUND 警告
+3. Dense fallback 不应将完全无关的结果作为正常结果返回
+
+### Impact
+HIGH。Defect #2 修复是重大进步（中英文映射完美工作），但 dense fallback 的无关结果问题是新退化。"恒大集团"作为知名实体应该能被解析到，但 matched_entity_ids=[] 说明实体解析在检索架构变更后可能退化了。
+
+---
+
+## F20260524-003
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-24 |
+| **Session** | ut-developer-20260524-131436 |
+| **Persona** | developer |
+| **Scenario** | S009 |
+| **Severity** | CRITICAL |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #15 (PARTIAL) |
+
+### Summary
+COMPARATIVE_ANALYSIS 检索模式已实现（retrieval_mode="comparative"），两个实体都能被正确匹配。但对比分析的覆盖率严重失衡：(1) 小米 vs 腾讯 = 1:13（仅 1 条提及小米）；(2) 宁德时代 vs 比亚迪 = 17:2。两种情况均 0 条 KU 同时提及两个实体。coverage_bonus 策略未能有效平衡两个实体的结果分布。
+
+### Reproduction
+```
+# 小米 vs 腾讯
+knowledge-cli search --entities "小米集团" "腾讯控股" --intent COMPARATIVE_ANALYSIS
+# → total=13, ku=13, retrieval_mode=comparative
+# → matched_entity_ids: ['ent_3fc5f35f46a7', 'ent_2711217756bf'] ✅ 两个都匹配
+# → Xiaomi KUs: 1/13 (7.7%), Tencent KUs: 13/13 (100%), Both: 1/13 (7.7%)
+
+# 宁德 vs 比亚迪
+knowledge-cli search --entities "宁德时代" "比亚迪" --intent COMPARATIVE_ANALYSIS
+# → total=36, ku=20, retrieval_mode=comparative
+# → CATL KUs: 17/20 (85%), BYD KUs: 2/20 (10%), Both: 0/20 (0%)
+```
+
+### Expected Behavior
+1. 两个实体应均衡覆盖（至少各占 30%+）
+2. 应优先返回同时提及两个实体的 KU
+3. 对比分析应交替展示两个实体的信息，而非按数据量偏向一方
+
+### Impact
+CRITICAL。对比分析是核心场景。"小米 vs 腾讯" 1:13 的比例意味着小米几乎完全消失——用户期望比较两家公司，却几乎只看到腾讯的信息。retrieval_mode="comparative" 已实现，但实际的检索策略仍然偏向数据量大的实体。
+
+---
+
+## F20260524-004
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-24 |
+| **Session** | ut-developer-20260524-131436 |
+| **Persona** | developer |
+| **Scenario** | S012 |
+| **Severity** | MEDIUM |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #3 (STILL PRESENT), #16 (NEW fallback modes) |
+
+### Summary
+S012 跨缺陷验证总结：Defect #1（实体硬门）已修复——BYD 返回 61 条，BM25/dense fallback 均正常执行。Defect #5（时间过滤）已修复——2025 和 2026-04 返回完全不同的 total_count（6 vs 55）。但发现三个新的 fallback 模式：bm25_fallback（量化交易）、dense_fallback（光刻）、entity_id_lookup（半导体）。
+
+### Reproduction
+```
+# Defect #1 FIXED: BYD alias → 61 results, 17/20 mention 比亚迪
+# Defect #5 FIXED: 2025→total=6, 2026-04→total=55
+
+# New fallback modes discovered:
+# bm25_fallback: "量化交易" → total=60, 0/20 about 量化交易
+# dense_fallback: "光刻" → total=60, 1/20 about 光刻
+# entity_id_lookup: "半导体" → total=4 (was 45, REGRESSION)
+
+# Defect #15 PARTIAL FIX:
+# RISK_ASSESSMENT returns restructuring KUs (risk-related)
+# ENTITY_OVERVIEW returns stock/financial KUs (overview-related)
+# But RISK_ASSESSMENT results are about OTHER companies, not 小米
+
+# Defect #3 STILL PRESENT:
+# "芯片制裁" → bm25_fallback, 0/20 about 制裁/chip sanction
+# FTS5 Chinese tokenization still can't match compound phrases
+```
+
+### Expected Behavior
+1. "半导体" entity_id_lookup 应返回与 bm25/dense 相当的结果量（之前 45 条，现在仅 4 条）
+2. RISK_ASSESSMENT 应返回与查询实体直接相关的风险内容
+3. 芯片制裁等复合短语应能被检索
+
+### Impact
+MEDIUM。多个缺陷已确认修复，但新的检索模式（entity_id_lookup）导致某些场景退步。RISK_ASSESSMENT 的意图感知虽然存在（不再与 ENTITY_OVERVIEW 相同），但返回的结果与查询实体无关。
+
+---
+
+## F20260524-005
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-24 |
+| **Session** | ut-developer-20260524-131436 |
+| **Persona** | developer |
+| **Scenario** | S013 |
+| **Severity** | MEDIUM |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #3, #15 |
+
+### Summary
+话题搜索验证：半导体 entity_id_lookup 仅返回 4 条（之前 45 条，严重退步）；新能源汽车 bm25_fallback 返回 60 条但内容相关性一般；光刻 dense_fallback 仅 1/20 提及光刻；芯片制裁 bm25_fallback 0/20 提及制裁。新检索模式丰富了回退策略，但精确度仍受 FTS5 中文分词和 dense 向量语义模糊的限制。
+
+### Reproduction
+```
+# 半导体 (entity in KB) → REGRESSION
+knowledge-cli search --entities "半导体" --intent TOPIC_RESEARCH
+# → total=4, ku=4, retrieval_mode=entity_id_lookup (was 45 with bm25)
+
+# 新能源汽车 (not in entity KB)
+knowledge-cli search --entities "新能源汽车" --intent TOPIC_RESEARCH
+# → total=60, ku=20, retrieval_mode=bm25_fallback
+
+# 光刻 (not in entity KB)
+knowledge-cli search --entities "光刻" --intent TOPIC_RESEARCH
+# → total=60, ku=20, retrieval_mode=dense_fallback, 1/20 relevant
+
+# 芯片制裁 (compound phrase)
+knowledge-cli search --entities "芯片制裁" --intent TOPIC_RESEARCH
+# → total=60, ku=20, retrieval_mode=bm25_fallback, 0/20 about 制裁
+```
+
+### Expected Behavior
+1. 半导体应返回更多结果（entity_id_lookup 过于严格）
+2. 光刻和芯片制裁应有更精确的匹配
+3. Dense fallback 应有相关度阈值，不返回完全无关的结果
+
+### Impact
+MEDIUM。半导体从 45→4 条是显著退步，说明 entity_id_lookup 模式仅返回直接关联该实体的 KU，而不做 BM25 扩展。其他话题搜索行为与上一轮测试基本一致，BM25/dense fallback 保证了不返回 0 结果，但精确度仍受限。
+
+---
+
+## F20260524-006
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-24 |
+| **Session** | ut-developer-20260524-131436 |
+| **Persona** | developer |
+| **Scenario** | S011 (ad-hoc) |
+| **Severity** | MEDIUM |
+| **Category** | schema |
+| **Status** | OPEN |
+| **Related Defect** | - |
+
+### Summary
+top-k=0 仍返回 total_count=60 但 knowledge_units=[] 的不一致状态（同 F20260516-001）；top-k=-1 仍静默返回全部结果（同 F20260516-002）；非存在实体"完全不存在的公司名称XYZ"仍返回 117 条 0 相关结果且无警告（同 F20260516-007/F20260520-005）。jieba stdout 污染问题已修复。
+
+### Reproduction
+```
+# top-k=0
+knowledge-cli search --entities "小米集团" --top-k 0
+# → total_count=60, knowledge_units=[], errors=[], warnings=[]
+
+# top-k=-1
+knowledge-cli search --entities "小米集团" --top-k -1
+# → total_count=60, knowledge_units=[59条], errors=[], warnings=[]
+
+# Non-existent entity
+knowledge-cli search --entities "完全不存在的公司名称XYZ"
+# → total_count=117, ku=20, matched_entity_ids=[], warnings=[]
+# → 0/20 KU mentions XYZ, retrieval_mode=dense
+```
+
+### Expected Behavior
+1. top-k=0/-1 应触发输入验证错误或警告
+2. 非存在实体应提供 ENTITY_NOT_FOUND 警告
+3. 当 dense fallback 结果与查询完全无关时应提供 LOW_RELEVANCE 警告
+
+### Impact
+MEDIUM。边界条件处理与上轮测试一致，未改善。但 jieba stdout 污染问题已修复（stdout 现在是纯 JSON）。对 AI 应用集成，total_count>0 且无 warnings 的 117 条无关结果仍是最严重的误导风险。
+
+---
+
+## F20260524-007
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-24 |
+| **Session** | ut-developer-20260524-131436 |
+| **Persona** | developer |
+| **Scenario** | S012 (ad-hoc) |
+| **Severity** | MEDIUM |
+| **Category** | retrieval-accuracy |
+| **Status** | OPEN |
+| **Related Defect** | #12 |
+
+### Summary
+图谱功能：graph_enabled=True, graph_used=True，但 graph_nodes=0, graph_edges=0。Neo4j 可能运行中但查询返回空结果。上一轮测试（2026-05-11）ENTITY_OVERVIEW 返回 192 nodes/246 edges，现在返回 0。可能是检索架构变更后图谱增强逻辑受到影响。
+
+### Reproduction
+```
+knowledge-cli search --entities "小米集团"
+# → graph_enabled: True, graph_used: True
+# → graph_nodes: 0, graph_edges: 0
+# → retrieval_mode: entity_id+dense
+
+# 对比 2026-05-11 同样查询:
+# → graph_nodes: 192, graph_edges: 246
+```
+
+### Expected Behavior
+当 graph_used=True 时，graph_data 应包含节点和边。如果图谱服务不可用，应设置 graph_used=False 并提供警告。
+
+### Impact
+MEDIUM。图谱功能在检索优化后退化为空结果，影响了 EVENT_IMPACT_ANALYSIS 和 RELATIONSHIP_QUERY 等依赖图谱的功能。用户看到 graph_used=True 但无任何图数据，可能误以为两个实体之间确实无关系。
