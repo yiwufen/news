@@ -324,7 +324,41 @@ class Entity(BaseModel):
     updated_at: datetime
 
 
+# Chinese surnames (top ~200, covering >95% of Han Chinese population)
+_CN_SURNAMES: frozenset[str] = frozenset({
+    "王", "李", "张", "刘", "陈", "杨", "黄", "赵", "周", "吴",
+    "徐", "孙", "马", "朱", "胡", "郭", "何", "高", "林", "罗",
+    "郑", "梁", "谢", "宋", "唐", "许", "韩", "冯", "邓", "曹",
+    "彭", "曾", "萧", "田", "董", "潘", "袁", "蔡", "蒋", "余",
+    "于", "杜", "叶", "程", "苏", "魏", "吕", "丁", "任", "卢",
+    "姚", "沈", "钟", "姜", "崔", "谭", "陆", "汪", "范", "金",
+    "石", "廖", "贾", "夏", "韦", "付", "方", "白", "邹", "孟",
+    "熊", "秦", "邱", "江", "尹", "薛", "闫", "段", "雷", "侯",
+    "龙", "史", "陶", "黎", "贺", "顾", "毛", "郝", "龚", "邵",
+    "万", "钱", "严", "覃", "武", "戴", "莫", "孔", "向", "汤",
+    "温", "康", "施", "文", "牛", "樊", "葛", "邢", "安", "齐",
+    "易", "乔", "伍", "庞", "颜", "倪", "庄", "聂", "章", "鲁",
+    "岳", "翟", "殷", "詹", "申", "欧", "耿", "关", "兰", "焦",
+    "俞", "左", "柳", "甘", "祝", "包", "宁", "尚", "符", "舒",
+    "阮", "柯", "纪", "梅", "童", "凌", "毕", "单", "季", "裴",
+    "霍", "涂", "成", "苗", "谷", "盛", "曲", "翁", "冉", "骆",
+    "蓝", "路", "游", "辛", "靳", "管", "柴", "蒙", "喻", "廉",
+    "解", "应", "宗", "丁", "宣", "贲", "杭", "诸", "吉", "嵇",
+    "荣", "糜", "松", "井", "富", "巫", "乌", "巴", "弓", "牧",
+    "牧", "山", "谷", "车", "侯", "宓", "蓬", "全", "郗", "班",
+    "习", "蔚", "奚", "储", "靳", "汲", "邬", "糜", "松", "井",
+})
+
+
 def _infer_entity_type(name: str) -> EntityKind:
+    """Infer entity type from name when the extractor provides no type.
+
+    Only used as a fallback; the LLM extractor's entity_type is authoritative.
+    Conservative by design:
+    - Person requires explicit indicators (title suffix, Western name pattern)
+    - Organization/Company detection relies on structural suffixes
+    - Defaults to Company for ambiguous names (financial-domain prior)
+    """
     # Non-entity patterns that should NOT default to Person
     _NON_PERSON_PATTERNS = re.compile(
         r"^(市场份额|股价|销售额|一季度|二季度|三季度|四季度|数据中心"
@@ -338,21 +372,45 @@ def _infer_entity_type(name: str) -> EntityKind:
     )
     if _NON_PERSON_PATTERNS.fullmatch(name):
         return "Company"
-    # Person: title suffix
-    if re.search(r"(先生|女士|总裁|董事长|CEO|创始人)$", name, re.IGNORECASE):
+
+    # Organization: government/regulatory/institutional body suffixes (check first —
+    # many Chinese gov names are 2-3 chars and would otherwise be ambiguous)
+    if re.search(
+        r"(部|委|局|院|署|会|厅|处|办|行|所|中心|总局|总署|办公室"
+        r"|委员会|管理局|监管局|交易所|清算所|联合会|基金会|理事会"
+        r"|协会|机构|研究院|部门|政府|联盟|银行|证券|保险|信托"
+        r"|商会|法院|检察院|代表大会|办公厅|指挥部|司令部)$",
+        name,
+    ):
+        return "Organization"
+
+    # Person: explicit title suffix (strongest Person signal)
+    if re.search(
+        r"(先生|女士|总裁|董事长|CEO|创始人|总理|首相|总统|主席"
+        r"|部长|局长|市长|省长|书记|教授|博士|法官|律师|司令"
+        r"|将军|经理|总监|主任|秘书|发言人|代表|大使)$",
+        name,
+        re.IGNORECASE,
+    ):
         return "Person"
-    # Person: 2-3 char Chinese names (4-char names are rare)
-    if re.fullmatch(r"[一-鿿]{2,3}", name):
-        return "Person"
-    # Person: Western name pattern
+
+    # Person: Western name pattern ("John Smith", "Elon Musk")
     if re.search(r"^[A-Z][a-z]+\s+[A-Z]", name):
         return "Person"
-    if re.search(r"(产品|计划|基金|债券)$", name, re.IGNORECASE):
+
+    # Person: 2-3 char Chinese with known surname AND no org/company suffix
+    # (conservative: only when no structural suffix present)
+    if re.fullmatch(r"[一-鿿]{2,3}", name) and name[0] in _CN_SURNAMES:
+        return "Person"
+
+    # Product: financial product suffixes
+    if re.search(r"(产品|计划|基金|债券|ETF|指数|合约|期货|权证)$", name, re.IGNORECASE):
         return "Product"
-    if re.search(r"(资产|地块|厂房|专利)$", name, re.IGNORECASE):
+
+    # Asset: physical/tangible asset suffixes
+    if re.search(r"(资产|地块|厂房|专利|矿|油田|港口|码头|楼盘)$", name, re.IGNORECASE):
         return "Asset"
-    if re.search(r"(协会|机构|研究院|部门|政府|委员会|联盟|银行|证券|基金公司)$", name):
-        return "Organization"
+
     return "Company"
 
 

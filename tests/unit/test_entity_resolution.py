@@ -231,7 +231,7 @@ class TestRecall:
         assert EntityRepository._CROSS_LINGUAL_ALIASES["byd"] == "比亚迪"
 
     def test_tencent_type_mismatch_still_merges(self, tmp_path: Path):
-        """'腾讯' (Person) vs '腾讯控股' (Company) — type differs but should merge."""
+        """'腾讯' (Company) vs '腾讯控股' (Company) — short name should merge."""
         db_path = str(tmp_path / "test.db")
         repo = EntityRepository(db_path)
         resolver = EntityResolver(repo)
@@ -239,14 +239,14 @@ class TestRecall:
         existing = _make_entity("腾讯控股", entity_type="Company", aliases=["腾讯控股"])
         cache = {existing.entity_id: existing}
 
-        # _infer_entity_type('腾讯') returns Person
-        assert _infer_entity_type("腾讯") == "Person"
+        # _infer_entity_type no longer infers Person from bare 2-3 char Chinese
+        assert _infer_entity_type("腾讯") == "Company"
 
         resolved = _resolve_single(
-            resolver, "腾讯", entity_type="Person", entities_cache=cache
+            resolver, "腾讯", entity_type="Company", entities_cache=cache
         )
         assert resolved.entity_id == existing.entity_id, (
-            "腾讯 (Person) must merge into 腾讯控股 (Company)"
+            "腾讯 must merge into 腾讯控股 via normalized name match"
         )
 
     def test_byd_merges_via_resolver(self, tmp_path: Path):
@@ -434,8 +434,8 @@ class TestDisambiguation:
             "Should disambiguate to 苹果公司 for financial context"
         )
 
-    def test_disambiguation_below_threshold_returns_none(self, tmp_path: Path):
-        """Both candidates below threshold → treat as new entity."""
+    def test_disambiguation_below_threshold_falls_back_to_first_candidate(self, tmp_path: Path):
+        """Both candidates below threshold → fallback to first candidate (no duplicate created)."""
         db_path = str(tmp_path / "test.db")
         repo = EntityRepository(db_path)
         provider = _make_mock_embedding_provider(
@@ -454,10 +454,12 @@ class TestDisambiguation:
         result = _resolve_with_context(
             resolver, "苹果", summary="苹果价格波动", entities_cache=cache,
         )
-        # Below threshold → None → new entity created
+        # Below threshold → fallback to first candidate (e1)
+        # This is the correct behavior: we never create a duplicate when
+        # candidates exist, even if disambiguation is inconclusive.
         assert result is not None
-        assert result.entity_id not in {e1.entity_id, e2.entity_id}, (
-            "Should create new entity when all candidates below threshold"
+        assert result.entity_id == e1.entity_id, (
+            "Should fall back to first candidate when disambiguation inconclusive"
         )
 
     def test_disambiguation_works_without_description(self, tmp_path: Path):
