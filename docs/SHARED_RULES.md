@@ -19,13 +19,17 @@
 
 ## 2. 核心架构
 
-项目提供 CLI 工具 `knowledge-cli`，包含以下子命令：
+项目提供 CLI 工具 `knowledge-cli`（容器外）或 `python -m src.cli`（Docker 内直接执行），包含以下子命令：
 
-- `knowledge-cli search`：结构化参数检索，输出 JSON
-- `knowledge-cli ingest`：单次离线知识化建库
-- `knowledge-cli start`：启动爬取 + 离线处理后台进程
-- `knowledge-cli stop`：停止后台进程
-- `knowledge-cli status`：查看进程运行状态
+- `search`：结构化参数检索，输出 JSON
+- `_run_offline --once`：单次离线知识化处理
+- `_run_offline`：持续离线处理循环
+- `_run_fetch`：持续爬取循环
+- `index-vectors`：构建/重建向量索引
+- `serve`：启动 MCP 服务器（Streamable HTTP）
+- `start`：后台启动爬取 + 离线处理进程
+- `stop`：停止后台进程
+- `status`：查看进程运行状态
 
 底层 API：
 

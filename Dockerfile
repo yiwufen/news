@@ -37,7 +37,8 @@ ENV PYTHONUNBUFFERED=1
 # Create data directory (src/paths.py resolves PROJECT_ROOT → /app, DB → /app/data/news.db)
 RUN mkdir -p /app/data
 
-# Default: MCP server (override CMD for ingestion:
-#   docker compose run --rm mcp python -m src.cli _run_offline --once)
-ENTRYPOINT ["python", "-m", "src.cli"]
-CMD ["serve", "--host", "0.0.0.0", "--port", "8000"]
+# Default: MCP server
+# Override with other commands as needed:
+#   docker compose run --rm mcp python -m src.cli _run_offline --once --full
+#   docker compose run --rm mcp python -m collectors.eastmoney_crawler --limit 200 --db /app/data/news.db
+CMD ["python", "-m", "src.cli", "serve", "--host", "0.0.0.0", "--port", "8000"]

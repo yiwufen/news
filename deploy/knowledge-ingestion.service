@@ -4,7 +4,7 @@
 #
 # First-time setup (full backfill):
 #   sudo docker compose -f /home/deployer/knowledge/repo/docker-compose.yml \
-#     run --rm mcp _run_offline --once --full
+#     run --rm mcp python -m src.cli _run_offline --once --full
 
 [Unit]
 Description=Knowledge CLI Periodic Ingestion
@@ -14,6 +14,6 @@ After=docker.service knowledge-mcp.service
 [Service]
 Type=oneshot
 WorkingDirectory=/home/deployer/knowledge/repo
-ExecStart=/usr/bin/docker compose --env-file /home/deployer/knowledge/.env run --rm mcp _run_offline --once
+ExecStart=/usr/bin/docker compose --env-file /home/deployer/knowledge/.env run --rm mcp python -m src.cli _run_offline --once
 StandardOutput=journal
 StandardError=journal

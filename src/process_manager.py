@@ -1,29 +1,27 @@
 """Process lifecycle management for fetch and offline services.
 
 Uses PID files in ``data/.pids/`` to track running child processes.
-Windows-only: relies on ``ctypes`` for liveness checks and ``taskkill`` for termination.
+Supports Windows (ctypes/taskkill) and Linux/MacOS (kill/ps).
 """
 
 from __future__ import annotations
 
 import ctypes
 import json
+import os
+import signal
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from ctypes import wintypes
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PID_DIR = REPO_ROOT / "data" / ".pids"
 SERVICES = ("fetch", "offline")
 
-CREATE_NO_WINDOW = 0x08000000
+_IS_WINDOWS = sys.platform == "win32"
 
-# Windows ctypes constants for process liveness check
-_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-_STILL_ACTIVE = 259
-_kernel32 = ctypes.windll.kernel32
+CREATE_NO_WINDOW = 0x08000000 if _IS_WINDOWS else 0
 
 
 # ---------------------------------------------------------------------------
@@ -68,16 +66,31 @@ def remove_pid(service: str) -> None:
 # Process liveness
 # ---------------------------------------------------------------------------
 
-def is_process_alive(pid: int) -> bool:
-    handle = _kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-    if not handle:
-        return False
-    try:
-        exit_code = wintypes.DWORD()
-        _kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
-        return exit_code.value == _STILL_ACTIVE
-    finally:
-        _kernel32.CloseHandle(handle)
+if _IS_WINDOWS:
+    from ctypes import wintypes
+
+    _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    _STILL_ACTIVE = 259
+    _kernel32 = ctypes.windll.kernel32
+
+    def is_process_alive(pid: int) -> bool:
+        handle = _kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False
+        try:
+            exit_code = wintypes.DWORD()
+            _kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+            return exit_code.value == _STILL_ACTIVE
+        finally:
+            _kernel32.CloseHandle(handle)
+
+else:
+    def is_process_alive(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
 
 
 # ---------------------------------------------------------------------------
@@ -85,19 +98,27 @@ def is_process_alive(pid: int) -> bool:
 # ---------------------------------------------------------------------------
 
 def spawn_process(command: list[str]) -> int:
-    proc = subprocess.Popen(
-        command,
+    kwargs: dict = dict(
         cwd=str(REPO_ROOT),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        creationflags=CREATE_NO_WINDOW,
     )
+    if _IS_WINDOWS:
+        kwargs["creationflags"] = CREATE_NO_WINDOW
+    proc = subprocess.Popen(command, **kwargs)
     return proc.pid
 
 
-def stop_process(pid: int) -> None:
-    subprocess.run(
-        ["taskkill", "/PID", str(pid), "/F"],
-        capture_output=True,
-        check=False,
-    )
+if _IS_WINDOWS:
+    def stop_process(pid: int) -> None:
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/F"],
+            capture_output=True,
+            check=False,
+        )
+else:
+    def stop_process(pid: int) -> None:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
