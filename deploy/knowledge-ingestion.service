@@ -13,8 +13,8 @@
 
 [Unit]
 Description=Knowledge CLI Continuous Ingestion
-Requires=docker.service knowledge-mcp.service
-After=docker.service knowledge-mcp.service
+Requires=docker.service
+After=docker.service
 
 [Service]
 Type=simple
