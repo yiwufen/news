@@ -11,6 +11,12 @@ services:
       - "443:443"
     environment:
       - DOMAIN=${DOMAIN:-localhost}
+      - NO_PROXY=mcp,neo4j,caddy,localhost,127.0.0.1,172.18.0.0/16,172.17.0.0/16
+      - no_proxy=mcp,neo4j,caddy,localhost,127.0.0.1,172.18.0.0/16,172.17.0.0/16
+      - HTTP_PROXY=
+      - http_proxy=
+      - HTTPS_PROXY=
+      - https_proxy=
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
