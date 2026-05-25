@@ -4,31 +4,36 @@
 # Disable buffering on the MCP route so streaming responses reach
 # clients immediately.
 
-{$DOMAIN:localhost} {
-    # Auto HTTPS via Let's Encrypt (remove the tls directive when using
-    # localhost for testing; Caddy disables it automatically for loopback).
-    #
-    # When DOMAIN is set to a real domain (e.g. mcp.example.com), Caddy
-    # will provision a certificate automatically.
-
-    # ------------------------------------------------------------------
-    # MCP Streamable HTTP endpoint
-    # ------------------------------------------------------------------
+# ------------------------------------------------------------------
+# Primary: nip.io (free DNS, auto Let's Encrypt cert)
+# ------------------------------------------------------------------
+182-61-1-77.nip.io {
     handle /mcp* {
         reverse_proxy mcp:8000 {
             flush_interval -1
         }
     }
 
-    # ------------------------------------------------------------------
-    # Health check (no auth, lightweight)
-    # ------------------------------------------------------------------
     handle /health {
         reverse_proxy mcp:8000
     }
 
-    # ------------------------------------------------------------------
-    # Default: return 404 for other routes
-    # ------------------------------------------------------------------
+    respond 404
+}
+
+# ------------------------------------------------------------------
+# Fallback: {$DOMAIN} or localhost
+# ------------------------------------------------------------------
+{$DOMAIN:localhost} {
+    handle /mcp* {
+        reverse_proxy mcp:8000 {
+            flush_interval -1
+        }
+    }
+
+    handle /health {
+        reverse_proxy mcp:8000
+    }
+
     respond 404
 }
