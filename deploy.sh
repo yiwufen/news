@@ -45,6 +45,11 @@ git pull --ff-only origin master
 # --- 2. Ensure data directory exists ---
 mkdir -p /home/deployer/knowledge/data
 
+# BuildKit needs proxy to pull base images from Docker Hub
+export HTTP_PROXY="${HTTP_PROXY:-http://127.0.0.1:7890}"
+export HTTPS_PROXY="${HTTPS_PROXY:-http://127.0.0.1:7890}"
+export NO_PROXY="${NO_PROXY:-localhost,127.0.0.1}"
+
 # --- 3. Rebuild & restart ---
 echo "[2/4] Rebuilding and restarting services..."
 docker compose --env-file "${ENV_FILE}" up -d --build --remove-orphans
