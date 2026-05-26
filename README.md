@@ -198,53 +198,6 @@ flowchart TB
 
 ---
 
-## Data Model
-
-```mermaid
-erDiagram
-    RawDocument ||--o{ KnowledgeUnit : "LLM extracts"
-    KnowledgeUnit }o--o{ Entity : "mentions"
-    KnowledgeUnit }o--o{ EventCluster : "assigned to"
-    Entity }o--o{ EventCluster : "INVOLVED_IN"
-
-    RawDocument {
-        string doc_id PK
-        string title
-        string content
-        datetime published_at
-        string source_name
-    }
-    KnowledgeUnit {
-        string ku_id PK
-        string summary
-        string unit_kind
-        string unit_type
-        float confidence
-        list entity_ids
-    }
-    Entity {
-        string entity_id PK
-        string canonical_name
-        string entity_type
-        list aliases
-    }
-    EventCluster {
-        string cluster_id PK
-        string title
-        string cluster_type
-        list member_ku_ids
-    }
-```
-
-| Layer | Storage | Index | Purpose |
-| --- | --- | --- | --- |
-| RawDocument | SQLite `news_articles` | - | 原始新闻文章 |
-| KnowledgeUnit | SQLite `knowledge_units` | FTS5 + FAISS | 最小可检索单元 (statement-level) |
-| Entity | SQLite `entities` + Neo4j | - | 标准化实体 (Company / Person / Org) |
-| EventCluster | SQLite `event_clusters` + Neo4j | - | 保守聚合的事件簇 |
-
----
-
 ## Tech Stack
 
 | Layer | Technology | Purpose |
