@@ -7,11 +7,14 @@ import {
   ClusterOutlined,
   ReadOutlined,
   SettingOutlined,
+  ApartmentOutlined,
 } from '@ant-design/icons'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 
 const { Sider, Content, Header } = Layout
 const { Title } = Typography
+
+const neo4jUrl = `${window.location.origin}/neo4j/browser/`
 
 const menuItems = [
   { key: '/', icon: <DashboardOutlined />, label: 'Dashboard' },
@@ -20,6 +23,7 @@ const menuItems = [
   { key: '/event-clusters', icon: <ClusterOutlined />, label: 'Event Clusters' },
   { key: '/articles', icon: <ReadOutlined />, label: 'Articles' },
   { key: '/processing', icon: <SettingOutlined />, label: 'Processing' },
+  { key: '__neo4j__', icon: <ApartmentOutlined />, label: 'Graph (Neo4j)' },
 ]
 
 export default function AppLayout() {
@@ -40,7 +44,13 @@ export default function AppLayout() {
           mode="inline"
           selectedKeys={[location.pathname]}
           items={menuItems}
-          onClick={({ key }) => navigate(key)}
+          onClick={({ key }) => {
+            if (key === '__neo4j__') {
+              window.open(neo4jUrl, '_blank')
+            } else {
+              navigate(key)
+            }
+          }}
         />
       </Sider>
       <Layout>
