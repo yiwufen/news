@@ -294,7 +294,7 @@ def get_ku_related_entities(db_path: str, ku_id: str) -> list[dict[str, Any]]:
             return []
         placeholders = ", ".join("?" for _ in ids)
         rows = conn.execute(
-            f"""SELECT e.entity_id, e.canonical_name, e.entity_type
+            f"""SELECT e.entity_id, e.canonical_name, e.entity_type, e.updated_at
                 FROM entities e WHERE e.entity_id IN ({placeholders})""",
             ids,
         ).fetchall()
@@ -314,7 +314,7 @@ def get_entity_related_kus(
 
         offset = (page - 1) * page_size
         rows = conn.execute(
-            """SELECT ku.ku_id, ku.unit_type, ku.unit_kind, ku.summary, ku.published_at, ku.conflict_status
+            """SELECT ku.ku_id, ku.unit_type, ku.unit_kind, ku.summary, ku.published_at, ku.conflict_status, ku.status
                FROM knowledge_units ku, json_each(ku.entity_ids) je
                WHERE je.value = ?
                ORDER BY ku.published_at DESC
@@ -354,6 +354,7 @@ def get_entity_related_clusters(
                 "cluster_type": r["cluster_type"],
                 "title": payload.get("title", ""),
                 "member_count": payload.get("member_count", 0),
+                "source_count": payload.get("source_count", len(payload.get("source_doc_ids", []))),
                 "conflict_status": r["conflict_status"],
                 "updated_at": r["updated_at"],
             })
@@ -372,7 +373,7 @@ def get_cluster_member_kus(
 
         offset = (page - 1) * page_size
         rows = conn.execute(
-            """SELECT ku_id, unit_type, unit_kind, summary, published_at, conflict_status
+            """SELECT ku_id, unit_type, unit_kind, summary, published_at, conflict_status, status
                FROM knowledge_units
                WHERE cluster_id = ?
                ORDER BY published_at DESC
@@ -386,7 +387,7 @@ def get_cluster_related_entities(db_path: str, cluster_id: str) -> list[dict[str
     """Return entities associated with a given cluster."""
     with _connect(db_path) as conn:
         rows = conn.execute(
-            """SELECT e.entity_id, e.canonical_name, e.entity_type
+            """SELECT e.entity_id, e.canonical_name, e.entity_type, e.updated_at
                FROM entities e
                JOIN cluster_entity_map cem ON e.entity_id = cem.entity_id
                WHERE cem.cluster_id = ?""",
