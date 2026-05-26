@@ -28,11 +28,6 @@
         reverse_proxy admin:8001
     }
 
-    handle /neo4j* {
-        uri strip_prefix /neo4j
-        reverse_proxy neo4j:7474
-    }
-
     handle /mcp* {
         reverse_proxy mcp:8000 {
             flush_interval -1
@@ -68,11 +63,6 @@
 
     handle /openapi.json {
         reverse_proxy admin:8001
-    }
-
-    handle /neo4j* {
-        uri strip_prefix /neo4j
-        reverse_proxy neo4j:7474
     }
 
     handle /mcp* {

@@ -8,6 +8,7 @@ import KnowledgeUnits from './pages/KnowledgeUnits'
 import EventClusters from './pages/EventClusters'
 import Articles from './pages/Articles'
 import Processing from './pages/Processing'
+import Neo4jGuide from './pages/Neo4jGuide'
 
 export default function App() {
   return (
@@ -21,6 +22,7 @@ export default function App() {
             <Route path="/event-clusters" element={<EventClusters />} />
             <Route path="/articles" element={<Articles />} />
             <Route path="/processing" element={<Processing />} />
+            <Route path="/neo4j" element={<Neo4jGuide />} />
           </Route>
         </Routes>
       </BrowserRouter>
