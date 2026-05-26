@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.admin.config import AdminSettings
@@ -65,9 +66,22 @@ def create_app() -> FastAPI:
     app.include_router(articles.router, prefix="/api/v1")
     app.include_router(processing.router, prefix="/api/v1")
 
-    # Serve frontend SPA (static files built into /app/static in Docker)
+    # Serve frontend SPA
     static_dir = Path(__file__).resolve().parent.parent.parent / "static"
     if static_dir.is_dir():
-        app.mount("/admin", StaticFiles(directory=str(static_dir), html=True), name="admin-spa")
+        app.mount("/admin/assets", StaticFiles(directory=str(static_dir / "assets")), name="admin-spa-assets")
+
+        @app.get("/admin", response_class=HTMLResponse, include_in_schema=False)
+        async def admin_index():
+            return FileResponse(static_dir / "index.html", media_type="text/html")
+
+        @app.get("/admin/{full_path:path}", response_class=HTMLResponse, include_in_schema=False)
+        async def admin_spa(full_path: str):
+            target = (static_dir / full_path).resolve()
+            if not str(target).startswith(str(static_dir.resolve())):
+                return HTMLResponse("Forbidden", status_code=403)
+            if target.is_file():
+                return FileResponse(target)
+            return FileResponse(static_dir / "index.html", media_type="text/html")
 
     return app
