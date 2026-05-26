@@ -62,7 +62,7 @@ services:
       - ADMIN_TOKEN=${ADMIN_TOKEN:-}
       - JWT_SECRET=${JWT_SECRET:-}
     volumes:
-      - /home/deployer/knowledge/data:/app/data:ro
+      - /home/deployer/knowledge/data:/app/data
     networks:
       - knowledge-net
     depends_on:
