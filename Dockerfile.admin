@@ -1,0 +1,45 @@
+# ============================================================
+# Stage 1: Build frontend SPA
+# ============================================================
+FROM node:20-alpine AS frontend-builder
+
+WORKDIR /app/frontend
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm install
+COPY frontend/ .
+RUN npm run build
+# Output: /app/frontend/dist/
+
+# ============================================================
+# Stage 2: Install Python dependencies with uv
+# ============================================================
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
+
+WORKDIR /app
+COPY pyproject.toml uv.toml ./
+RUN uv sync --no-dev --no-install-project
+COPY src/ src/
+COPY collectors/ collectors/
+
+# ============================================================
+# Stage 3: Runtime
+# ============================================================
+FROM python:3.13-slim-bookworm AS runtime
+
+WORKDIR /app
+
+# Copy Python venv and source
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /app/src /app/src
+COPY --from=builder /app/collectors /app/collectors
+
+# Copy frontend build output
+COPY --from=frontend-builder /app/frontend/dist /app/static
+
+ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONUNBUFFERED=1
+
+RUN mkdir -p /app/data
+
+EXPOSE 8001
+CMD ["python", "-m", "uvicorn", "src.admin.app:create_app", "--host", "0.0.0.0", "--port", "8001", "--factory"]

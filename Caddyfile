@@ -8,6 +8,26 @@
 # Primary: nip.io (free DNS, auto Let's Encrypt cert)
 # ------------------------------------------------------------------
 182-61-1-77.nip.io {
+    handle /admin* {
+        reverse_proxy admin:8001
+    }
+
+    handle /api/v1* {
+        reverse_proxy admin:8001
+    }
+
+    handle /api/docs* {
+        reverse_proxy admin:8001
+    }
+
+    handle /api/redoc* {
+        reverse_proxy admin:8001
+    }
+
+    handle /openapi.json {
+        reverse_proxy admin:8001
+    }
+
     handle /mcp* {
         reverse_proxy mcp:8000 {
             flush_interval -1
@@ -25,6 +45,26 @@
 # Fallback: {$DOMAIN} or localhost
 # ------------------------------------------------------------------
 {$DOMAIN:localhost} {
+    handle /admin* {
+        reverse_proxy admin:8001
+    }
+
+    handle /api/v1* {
+        reverse_proxy admin:8001
+    }
+
+    handle /api/docs* {
+        reverse_proxy admin:8001
+    }
+
+    handle /api/redoc* {
+        reverse_proxy admin:8001
+    }
+
+    handle /openapi.json {
+        reverse_proxy admin:8001
+    }
+
     handle /mcp* {
         reverse_proxy mcp:8000 {
             flush_interval -1

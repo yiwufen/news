@@ -49,6 +49,31 @@ services:
       start_period: 10s
 
   # ====================================================================
+  # Admin Dashboard — read-only monitoring and data browsing
+  # ====================================================================
+  admin:
+    build:
+      context: .
+      dockerfile: Dockerfile.admin
+    container_name: knowledge-admin
+    restart: unless-stopped
+    env_file: /home/deployer/knowledge/.env
+    environment:
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-}
+    volumes:
+      - /home/deployer/knowledge/data:/app/data:ro
+    networks:
+      - knowledge-net
+    depends_on:
+      - mcp
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import socket; s=socket.socket(); s.settimeout(3); s.connect(('localhost',8001)); s.close()\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ====================================================================
   # Neo4j — graph database (internal network only, no public ports)
   # ====================================================================
   neo4j:
