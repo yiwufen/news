@@ -1,5 +1,5 @@
 import client from './client'
-import type { PaginatedResponse, KUSummary } from './types'
+import type { PaginatedResponse, KUSummary, EntitySummary } from './types'
 
 export async function fetchKnowledgeUnits(
   page: number,
@@ -15,5 +15,10 @@ export async function fetchKnowledgeUnits(
 
 export async function fetchKnowledgeUnit(kuId: string): Promise<Record<string, unknown>> {
   const res = await client.get(`/knowledge-units/${kuId}`)
+  return res.data
+}
+
+export async function fetchKURelatedEntities(kuId: string): Promise<EntitySummary[]> {
+  const res = await client.get<EntitySummary[]>(`/knowledge-units/${kuId}/entities`)
   return res.data
 }

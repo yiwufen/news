@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from src.admin.config import AdminSettings
 from src.admin.dependencies import get_settings, verify_token
 from src.admin import queries
-from src.admin.schemas import KUSummary, PaginatedResponse
+from src.admin.schemas import EntitySummary, KUSummary, PaginatedResponse
 
 router = APIRouter(dependencies=[Depends(verify_token)], tags=["knowledge-units"])
 
@@ -36,3 +36,12 @@ def get_knowledge_unit(ku_id: str, settings: AdminSettings = Depends(get_setting
     if not result:
         raise HTTPException(status_code=404, detail="Knowledge unit not found")
     return result
+
+
+@router.get("/knowledge-units/{ku_id}/entities", response_model=list[EntitySummary])
+def ku_related_entities(ku_id: str, settings: AdminSettings = Depends(get_settings)) -> list[EntitySummary]:
+    result = queries.get_ku_detail(settings.db_path, ku_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Knowledge unit not found")
+    rows = queries.get_ku_related_entities(settings.db_path, ku_id)
+    return [EntitySummary(**r) for r in rows]

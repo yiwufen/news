@@ -275,6 +275,127 @@ def get_article_detail(db_path: str, doc_id: str) -> dict[str, Any] | None:
 
 
 # ---------------------------------------------------------------------------
+# Cross-reference queries
+# ---------------------------------------------------------------------------
+
+
+def get_ku_related_entities(db_path: str, ku_id: str) -> list[dict[str, Any]]:
+    """Return entities referenced by a knowledge unit via its entity_ids JSON column."""
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT entity_ids FROM knowledge_units WHERE ku_id = ?", [ku_id]).fetchone()
+        if not row:
+            return []
+        import json
+        try:
+            ids = json.loads(row["entity_ids"])
+        except (TypeError, json.JSONDecodeError):
+            return []
+        if not ids:
+            return []
+        placeholders = ", ".join("?" for _ in ids)
+        rows = conn.execute(
+            f"""SELECT e.entity_id, e.canonical_name, e.entity_type
+                FROM entities e WHERE e.entity_id IN ({placeholders})""",
+            ids,
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_entity_related_kus(
+    db_path: str, entity_id: str, page: int, page_size: int,
+) -> tuple[int, list[dict[str, Any]]]:
+    """Return knowledge units that reference a given entity."""
+    with _connect(db_path) as conn:
+        total = conn.execute(
+            """SELECT COUNT(*) AS cnt FROM knowledge_units ku, json_each(ku.entity_ids) je
+               WHERE je.value = ?""",
+            [entity_id],
+        ).fetchone()["cnt"]
+
+        offset = (page - 1) * page_size
+        rows = conn.execute(
+            """SELECT ku.ku_id, ku.unit_type, ku.unit_kind, ku.summary, ku.published_at, ku.conflict_status
+               FROM knowledge_units ku, json_each(ku.entity_ids) je
+               WHERE je.value = ?
+               ORDER BY ku.published_at DESC
+               LIMIT ? OFFSET ?""",
+            [entity_id, page_size, offset],
+        ).fetchall()
+        return total, [dict(r) for r in rows]
+
+
+def get_entity_related_clusters(
+    db_path: str, entity_id: str, page: int, page_size: int,
+) -> tuple[int, list[dict[str, Any]]]:
+    """Return event clusters that involve a given entity."""
+    import json
+    with _connect(db_path) as conn:
+        total = conn.execute(
+            """SELECT COUNT(*) AS cnt FROM cluster_entity_map WHERE entity_id = ?""",
+            [entity_id],
+        ).fetchone()["cnt"]
+
+        offset = (page - 1) * page_size
+        rows = conn.execute(
+            """SELECT ec.cluster_id, ec.cluster_type, ec.conflict_status, ec.updated_at, ec.payload
+               FROM event_clusters ec
+               JOIN cluster_entity_map cem ON ec.cluster_id = cem.cluster_id
+               WHERE cem.entity_id = ?
+               ORDER BY ec.updated_at DESC
+               LIMIT ? OFFSET ?""",
+            [entity_id, page_size, offset],
+        ).fetchall()
+
+        items = []
+        for r in rows:
+            payload = json.loads(r["payload"])
+            items.append({
+                "cluster_id": r["cluster_id"],
+                "cluster_type": r["cluster_type"],
+                "title": payload.get("title", ""),
+                "member_count": payload.get("member_count", 0),
+                "conflict_status": r["conflict_status"],
+                "updated_at": r["updated_at"],
+            })
+        return total, items
+
+
+def get_cluster_member_kus(
+    db_path: str, cluster_id: str, page: int, page_size: int,
+) -> tuple[int, list[dict[str, Any]]]:
+    """Return knowledge units that belong to a given cluster."""
+    with _connect(db_path) as conn:
+        total = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM knowledge_units WHERE cluster_id = ?",
+            [cluster_id],
+        ).fetchone()["cnt"]
+
+        offset = (page - 1) * page_size
+        rows = conn.execute(
+            """SELECT ku_id, unit_type, unit_kind, summary, published_at, conflict_status
+               FROM knowledge_units
+               WHERE cluster_id = ?
+               ORDER BY published_at DESC
+               LIMIT ? OFFSET ?""",
+            [cluster_id, page_size, offset],
+        ).fetchall()
+        return total, [dict(r) for r in rows]
+
+
+def get_cluster_related_entities(db_path: str, cluster_id: str) -> list[dict[str, Any]]:
+    """Return entities associated with a given cluster."""
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """SELECT e.entity_id, e.canonical_name, e.entity_type
+               FROM entities e
+               JOIN cluster_entity_map cem ON e.entity_id = cem.entity_id
+               WHERE cem.cluster_id = ?""",
+            [cluster_id],
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
 # Dashboard / stats
 # ---------------------------------------------------------------------------
 
