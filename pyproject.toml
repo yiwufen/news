@@ -19,6 +19,7 @@ dependencies = [
     "fastapi>=0.136.3",
     "uvicorn>=0.47.0",
     "mcp>=1.27.1",
+    "pyjwt>=2.10.0",
 ]
 
 [project.scripts]

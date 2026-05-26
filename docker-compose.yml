@@ -60,6 +60,7 @@ services:
     env_file: /home/deployer/knowledge/.env
     environment:
       - ADMIN_TOKEN=${ADMIN_TOKEN:-}
+      - JWT_SECRET=${JWT_SECRET:-}
     volumes:
       - /home/deployer/knowledge/data:/app/data:ro
     networks:

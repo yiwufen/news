@@ -12,5 +12,6 @@ class AdminSettings(BaseSettings):
     neo4j_user: str = "neo4j"
     neo4j_password: str = ""
     cors_origins: list[str] = ["*"]
+    jwt_secret: str = ""
 
     model_config = SettingsConfigDict(env_prefix="", extra="ignore")
