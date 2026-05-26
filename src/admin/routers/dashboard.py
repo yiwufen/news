@@ -5,7 +5,8 @@ from fastapi import APIRouter, Depends
 from src.admin.config import AdminSettings
 from src.admin.dependencies import get_settings, verify_token
 from src.admin import queries
-from src.admin.schemas import DashboardStats, ProcessingSummary, PipelineStatus, PipelineServiceStatus
+from src.admin.container_status import get_pipeline_status
+from src.admin.schemas import DashboardStats, ProcessingSummary
 
 router = APIRouter(dependencies=[Depends(verify_token)], tags=["dashboard"])
 
@@ -43,5 +44,5 @@ def dashboard_stats(settings: AdminSettings = Depends(get_settings)) -> Dashboar
         event_clusters=clusters_data,
         articles=articles_data,
         processing=ProcessingSummary(**proc_summary),
-        pipeline=None,
+        pipeline=get_pipeline_status(),
     )

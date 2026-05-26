@@ -7,18 +7,25 @@ import {
   ReadOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
+  SyncOutlined,
+  PauseCircleOutlined,
 } from '@ant-design/icons'
 import { fetchDashboardStats } from '../api/dashboard'
-import type { DashboardStats } from '../api/types'
+import { fetchPipelineStatus, fetchContainerStatuses } from '../api/processing'
+import type { DashboardStats, PipelineStatus, ContainerStatus } from '../api/types'
 
 export default function Dashboard() {
   const [stats, setStats] = useState<DashboardStats | null>(null)
+  const [pipeline, setPipeline] = useState<PipelineStatus | null>(null)
+  const [containers, setContainers] = useState<ContainerStatus[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     fetchDashboardStats()
       .then(setStats)
       .finally(() => setLoading(false))
+    fetchPipelineStatus().then(setPipeline).catch(() => {})
+    fetchContainerStatuses().then(setContainers).catch(() => {})
   }, [])
 
   if (loading) return <Spin size="large" style={{ display: 'block', marginTop: 100 }} />
@@ -98,6 +105,67 @@ export default function Dashboard() {
               <Typography.Text type="secondary">
                 Last processed: {stats.processing.last_processed_at || 'N/A'}
               </Typography.Text>
+            </Space>
+          </Card>
+        </Col>
+      </Row>
+
+      <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+        <Col span={12}>
+          <Card title="Pipeline Status">
+            <Space direction="vertical" style={{ width: '100%' }}>
+              <Space>
+                {pipeline?.fetch.running
+                  ? <SyncOutlined spin style={{ color: '#1890ff' }} />
+                  : <PauseCircleOutlined style={{ color: '#8c8c8c' }} />}
+                <Typography.Text strong>Fetch:</Typography.Text>
+                <Tag color={pipeline?.fetch.running ? 'green' : 'default'}>
+                  {pipeline?.fetch.running ? 'Running' : 'Stopped'}
+                </Tag>
+                {pipeline?.fetch.started_at && (
+                  <Typography.Text type="secondary">
+                    since {new Date(pipeline.fetch.started_at).toLocaleString()}
+                  </Typography.Text>
+                )}
+              </Space>
+              <Space>
+                {pipeline?.offline.running
+                  ? <SyncOutlined spin style={{ color: '#1890ff' }} />
+                  : <PauseCircleOutlined style={{ color: '#8c8c8c' }} />}
+                <Typography.Text strong>Offline:</Typography.Text>
+                <Tag color={pipeline?.offline.running ? 'green' : 'default'}>
+                  {pipeline?.offline.running ? 'Running' : 'Stopped'}
+                </Tag>
+                {pipeline?.offline.started_at && (
+                  <Typography.Text type="secondary">
+                    since {new Date(pipeline.offline.started_at).toLocaleString()}
+                  </Typography.Text>
+                )}
+              </Space>
+              {pipeline?.mode && (
+                <Typography.Text type="secondary">Detection mode: {pipeline.mode}</Typography.Text>
+              )}
+            </Space>
+          </Card>
+        </Col>
+        <Col span={12}>
+          <Card title="Container Status">
+            <Space direction="vertical" style={{ width: '100%' }}>
+              {containers.map((c) => (
+                <Space key={c.name}>
+                  {c.running
+                    ? <CheckCircleOutlined style={{ color: '#52c41a' }} />
+                    : <CloseCircleOutlined style={{ color: '#ff4d4f' }} />}
+                  <Typography.Text strong>{c.name}:</Typography.Text>
+                  <Tag color={c.running ? 'green' : 'red'}>
+                    {c.running ? 'Running' : 'Stopped'}
+                  </Tag>
+                  <Typography.Text type="secondary">{c.status}</Typography.Text>
+                </Space>
+              ))}
+              {containers.length === 0 && (
+                <Typography.Text type="secondary">Container status unavailable (local dev mode)</Typography.Text>
+              )}
             </Space>
           </Card>
         </Col>

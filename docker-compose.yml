@@ -63,6 +63,7 @@ services:
       - JWT_SECRET=${JWT_SECRET:-}
     volumes:
       - /home/deployer/knowledge/data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - knowledge-net
     depends_on:

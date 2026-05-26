@@ -68,3 +68,24 @@ export interface ProcessingLogEntry {
   error_message: string | null
   updated_at: string
 }
+
+export interface PipelineServiceStatus {
+  running: boolean
+  pid: number | null
+  started_at: string | null
+  command: string[] | null
+}
+
+export interface PipelineStatus {
+  fetch: PipelineServiceStatus
+  offline: PipelineServiceStatus
+  mode: string
+}
+
+export interface ContainerStatus {
+  name: string
+  container_name: string
+  running: boolean
+  status: string
+  started_at: string | null
+}

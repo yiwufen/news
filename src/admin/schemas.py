@@ -92,6 +92,14 @@ class PipelineStatus(BaseModel):
     offline: PipelineServiceStatus
 
 
+class ContainerStatus(BaseModel):
+    name: str
+    container_name: str
+    running: bool
+    status: str
+    started_at: str | None = None
+
+
 class DashboardStats(BaseModel):
     entities: dict[str, Any]
     knowledge_units: dict[str, Any]

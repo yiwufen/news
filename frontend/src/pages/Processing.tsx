@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Table, Tag } from 'antd'
+import { Table, Tag, Alert, Space, Typography } from 'antd'
+import { SyncOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
-import { fetchProcessingLog } from '../api/processing'
-import type { ProcessingLogEntry } from '../api/types'
+import { fetchProcessingLog, fetchPipelineStatus } from '../api/processing'
+import type { ProcessingLogEntry, PipelineStatus } from '../api/types'
 
 const statusColors: Record<string, string> = {
   processed: 'green',
@@ -57,6 +58,7 @@ export default function Processing() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [loading, setLoading] = useState(false)
+  const [pipeline, setPipeline] = useState<PipelineStatus | null>(null)
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -70,9 +72,30 @@ export default function Processing() {
   }, [page, pageSize])
 
   useEffect(() => { loadData() }, [loadData])
+  useEffect(() => { fetchPipelineStatus().then(setPipeline).catch(() => {}) }, [])
 
   return (
     <div>
+      {pipeline && (
+        <Alert
+          type={pipeline.offline.running ? 'info' : 'warning'}
+          message={
+            <Space>
+              <Typography.Text strong>Fetch:</Typography.Text>
+              <Tag color={pipeline.fetch.running ? 'green' : 'default'}>
+                {pipeline.fetch.running ? <><SyncOutlined spin /> Running</> : 'Stopped'}
+              </Tag>
+              <Typography.Text strong>Offline:</Typography.Text>
+              <Tag color={pipeline.offline.running ? 'green' : 'default'}>
+                {pipeline.offline.running ? <><SyncOutlined spin /> Running</> : 'Stopped'}
+              </Tag>
+              <Typography.Text type="secondary">mode: {pipeline.mode}</Typography.Text>
+            </Space>
+          }
+          style={{ marginBottom: 16 }}
+          showIcon
+        />
+      )}
       <Table<ProcessingLogEntry>
         columns={columns}
         dataSource={data}
