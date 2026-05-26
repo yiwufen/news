@@ -54,6 +54,12 @@ export NO_PROXY="${NO_PROXY:-localhost,127.0.0.1}"
 echo "[2/4] Rebuilding and restarting services..."
 docker compose --env-file "${ENV_FILE}" up -d --build --remove-orphans
 
+# --- 3a. Reload Caddy if config changed ---
+# Caddyfile is bind-mounted but caddy doesn't auto-reload.
+echo "[2a] Reloading Caddy config..."
+docker exec knowledge-caddy caddy reload --config /etc/caddy/Caddyfile 2>/dev/null \
+  || docker restart knowledge-caddy
+
 # --- 4. Health check ---
 echo "[3/4] Waiting for health checks..."
 sleep 5
