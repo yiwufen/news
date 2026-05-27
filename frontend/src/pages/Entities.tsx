@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { Table, Input, Drawer, Tabs, Descriptions, Tag, Space, Typography, Select, Button, Modal, Form, Input as AntInput, message, Popconfirm } from 'antd'
+import { PlusOutlined, MinusCircleOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { useNavigate } from 'react-router-dom'
 import { fetchEntities, fetchEntity, fetchEntityRelatedKUs, fetchEntityRelatedClusters, fetchEntityTypes, editEntity, mergeEntities, deleteEntity } from '../api/entities'
@@ -57,6 +58,8 @@ export default function Entities() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
   const [mergeOpen, setMergeOpen] = useState(false)
+  const [mergeSearchResults, setMergeSearchResults] = useState<EntitySummary[]>([])
+  const [mergeSearching, setMergeSearching] = useState(false)
   const [editForm] = Form.useForm()
   const [mergeForm] = Form.useForm()
   const navigate = useNavigate()
@@ -105,10 +108,18 @@ export default function Entities() {
 
   const handleEdit = () => {
     if (!detail) return
+    const aliases = (detail.aliases as string[]) || []
+    const identifiers = (detail.identifiers as Record<string, string>) || {}
+    const tags = (detail.tags as string[]) || []
     editForm.setFieldsValue({
       canonical_name: detail.canonical_name,
       entity_type: detail.entity_type || '',
       description: detail.description || '',
+      aliases: aliases.length > 0 ? aliases : [''],
+      identifierEntries: Object.entries(identifiers).length > 0
+        ? Object.entries(identifiers).map(([k, v]) => ({ key: k, value: v }))
+        : [{ key: '', value: '' }],
+      tags: tags.length > 0 ? tags : [],
     })
     setEditOpen(true)
   }
@@ -117,7 +128,30 @@ export default function Entities() {
     if (!detailId) return
     try {
       const values = await editForm.validateFields()
-      await editEntity(detailId, values)
+      const updates: Record<string, unknown> = {
+        canonical_name: values.canonical_name,
+        entity_type: values.entity_type,
+        description: values.description,
+      }
+      // Filter out empty aliases
+      const aliases = (values.aliases as string[] || []).filter((a: string) => a.trim())
+      if (aliases.length > 0) updates.aliases = aliases
+
+      // Convert identifier key-value pairs to dict
+      const identifierEntries = (values.identifierEntries || []) as { key: string; value: string }[]
+      const identifiers: Record<string, string> = {}
+      for (const entry of identifierEntries) {
+        if (entry.key.trim() && entry.value.trim()) {
+          identifiers[entry.key.trim()] = entry.value.trim()
+        }
+      }
+      if (Object.keys(identifiers).length > 0) updates.identifiers = identifiers
+
+      // Tags
+      const tags = (values.tags as string[] || []).filter((t: string) => t.trim())
+      if (tags.length > 0) updates.tags = tags
+
+      await editEntity(detailId, updates)
       message.success('Entity updated')
       setEditOpen(false)
       const d = await fetchEntity(detailId)
@@ -139,6 +173,20 @@ export default function Entities() {
       loadData()
     } catch {
       message.error('Merge failed')
+    }
+  }
+
+  const handleMergeSearch = async (keyword: string) => {
+    if (!keyword.trim()) {
+      setMergeSearchResults([])
+      return
+    }
+    setMergeSearching(true)
+    try {
+      const res = await fetchEntities(1, 20, keyword)
+      setMergeSearchResults(res.items.filter((e) => e.entity_id !== detailId))
+    } finally {
+      setMergeSearching(false)
     }
   }
 
@@ -248,22 +296,75 @@ export default function Entities() {
         {detail && <Tabs items={tabs} />}
       </Drawer>
 
-      <Modal title="Edit Entity" open={editOpen} onOk={handleEditSubmit} onCancel={() => setEditOpen(false)}>
+      <Modal title="Edit Entity" open={editOpen} onOk={handleEditSubmit} onCancel={() => setEditOpen(false)} width={600}>
         <Form form={editForm} layout="vertical">
           <Form.Item name="canonical_name" label="Name"><AntInput /></Form.Item>
           <Form.Item name="entity_type" label="Type"><AntInput /></Form.Item>
-          <Form.Item name="description" label="Description"><AntInput.TextArea rows={3} /></Form.Item>
+          <Form.Item name="description" label="Description"><AntInput.TextArea rows={2} /></Form.Item>
+
+          {/* Aliases — dynamic list */}
+          <Typography.Text strong>Aliases</Typography.Text>
+          <Form.List name="aliases">
+            {(fields, { add, remove }) => (
+              <>
+                {fields.map((field) => (
+                  <Space key={field.key} style={{ display: 'flex', marginBottom: 4 }} align="baseline">
+                    <Form.Item {...field} noStyle><AntInput placeholder="Alias" style={{ width: 300 }} /></Form.Item>
+                    <MinusCircleOutlined onClick={() => remove(field.name)} />
+                  </Space>
+                ))}
+                <Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />} size="small" style={{ marginBottom: 16 }}>
+                  Add Alias
+                </Button>
+              </>
+            )}
+          </Form.List>
+
+          {/* Identifiers — key-value pairs */}
+          <Typography.Text strong>Identifiers</Typography.Text>
+          <Form.List name="identifierEntries">
+            {(fields, { add, remove }) => (
+              <>
+                {fields.map((field) => (
+                  <Space key={field.key} style={{ display: 'flex', marginBottom: 4 }} align="baseline">
+                    <Form.Item name={[field.name, 'key']} noStyle><AntInput placeholder="Key (e.g. ticker)" style={{ width: 140 }} /></Form.Item>
+                    <Form.Item name={[field.name, 'value']} noStyle><AntInput placeholder="Value (e.g. 002594.SZ)" style={{ width: 200 }} /></Form.Item>
+                    <MinusCircleOutlined onClick={() => remove(field.name)} />
+                  </Space>
+                ))}
+                <Button type="dashed" onClick={() => add()} block icon={<PlusOutlined />} size="small" style={{ marginBottom: 16 }}>
+                  Add Identifier
+                </Button>
+              </>
+            )}
+          </Form.List>
+
+          {/* Tags */}
+          <Form.Item name="tags" label="Tags">
+            <Select mode="tags" placeholder="Add tags" />
+          </Form.Item>
         </Form>
       </Modal>
 
       <Modal title={`Merge "${detail?.canonical_name}" into...`} open={mergeOpen} onOk={handleMergeSubmit} onCancel={() => setMergeOpen(false)}>
         <Form form={mergeForm} layout="vertical">
-          <Form.Item name="target_id" label="Target Entity ID" rules={[{ required: true }]}>
-            <AntInput placeholder="Enter target entity_id" />
+          <Form.Item name="target_id" label="Target Entity" rules={[{ required: true, message: 'Please select a target entity' }]}>
+            <Select
+              showSearch
+              placeholder="Search entity name..."
+              filterOption={false}
+              onSearch={handleMergeSearch}
+              loading={mergeSearching}
+              notFoundContent={mergeSearching ? 'Searching...' : 'Type to search'}
+              options={mergeSearchResults.map((e) => ({
+                value: e.entity_id,
+                label: `${e.canonical_name} (${e.entity_type || 'Unknown'}) — ${e.entity_id}`,
+              }))}
+            />
           </Form.Item>
         </Form>
         <Typography.Text type="secondary">
-          The current entity will be absorbed into the target. All references will be reassigned.
+          The current entity will be absorbed into the target. All aliases, identifiers, and KU references will be merged.
         </Typography.Text>
       </Modal>
     </div>

@@ -191,6 +191,16 @@ class AdminWriteService:
             "target": target.model_dump(mode="json"),
         }
 
+        # Snapshot KU states BEFORE any mutation (for undo)
+        pre_merge_ku_ids = self.ku_repo.find_by_entity_ids([source_id])
+        pre_merge_ku_states = [
+            ku.model_dump(mode="json")
+            for ku in self.ku_repo.get_by_ids(pre_merge_ku_ids)
+        ] if pre_merge_ku_ids else []
+
+        # Snapshot affected clusters BEFORE mutation
+        pre_merge_cluster_ids = self._find_cluster_ids_by_entity(source_id)
+
         # Merge into target
         _MAX_ALIASES = 10
         seen_aliases = set()
@@ -217,17 +227,17 @@ class AdminWriteService:
         self.entity_repo.delete_by_id(source_id)
 
         # Update KUs
-        reassigned_ku_ids = self._update_kus_entity_refs(source_id, target_id)
+        self._update_kus_entity_refs(source_id, target_id)
 
         # Update clusters
         updated_cluster_ids = self._update_clusters_entity_refs(source_id, target_id)
-        updated_clusters = self.cluster_repo.get_by_ids(updated_cluster_ids) if updated_cluster_ids else []
 
         # Neo4j
         self._delete_graph_node(source_id)
+        updated_clusters = self.cluster_repo.get_by_ids(updated_cluster_ids) if updated_cluster_ids else []
         self._sync_graph(entities=[target], clusters=updated_clusters)
 
-        # Audit
+        # Audit — metadata contains pre-merge snapshots for undo
         self._audit(
             action="entity.merge",
             resource_type="entity",
@@ -236,12 +246,9 @@ class AdminWriteService:
             new_state=target.model_dump(mode="json"),
             metadata={
                 "source_id": source_id,
-                "reassigned_ku_ids": reassigned_ku_ids,
                 "updated_cluster_ids": updated_cluster_ids,
-                "original_ku_states": [
-                    ku.model_dump(mode="json")
-                    for ku in self.ku_repo.get_by_ids(reassigned_ku_ids)
-                ] if reassigned_ku_ids else [],
+                "pre_merge_ku_states": pre_merge_ku_states,
+                "pre_merge_cluster_ids": pre_merge_cluster_ids,
             },
         )
         return target
@@ -332,8 +339,15 @@ class AdminWriteService:
         source = source_list[0]
         old_state = source.model_dump(mode="json")
 
-        # Remove entity_id from KUs
+        # Snapshot cross-references BEFORE removal (for undo)
         ku_ids = self.ku_repo.find_by_entity_ids([entity_id])
+        pre_delete_ku_states = [
+            ku.model_dump(mode="json")
+            for ku in self.ku_repo.get_by_ids(ku_ids)
+        ] if ku_ids else []
+        pre_delete_cluster_ids = self._find_cluster_ids_by_entity(entity_id)
+
+        # Remove entity_id from KUs
         if ku_ids:
             kus = self.ku_repo.get_by_ids(ku_ids)
             for ku in kus:
@@ -352,13 +366,15 @@ class AdminWriteService:
             resource_type="entity",
             resource_id=entity_id,
             old_state=old_state,
+            metadata={
+                "pre_delete_ku_states": pre_delete_ku_states,
+                "pre_delete_cluster_ids": pre_delete_cluster_ids,
+            },
         )
 
     # -- Phase 2C: 集群操作 --
 
     def cluster_edit(self, cluster_id: str, updates: dict) -> EventCluster:
-        from src.event_merging import build_event_cluster_snapshot
-
         clusters = self.cluster_repo.get_by_ids([cluster_id])
         if not clusters:
             raise ValueError(f"Cluster {cluster_id} not found")
@@ -496,6 +512,7 @@ class AdminWriteService:
             resource_type="cluster",
             resource_id=cluster_id,
             old_state=old_state,
+            metadata={"member_ku_ids": cluster.member_ku_ids},
         )
 
     # -- Phase 2D: 文档重新处理 --
@@ -571,7 +588,9 @@ class AdminWriteService:
             raise ValueError(f"Undo not supported for resource_type={resource_type}")
 
     def _undo_entity(self, action: str, resource_id: str, old_state: dict, entry: dict) -> dict:
-        if action in ("entity.edit", "entity.delete"):
+        metadata = entry.get("metadata") or {}
+
+        if action == "entity.edit":
             entity = Entity.model_validate(old_state)
             self.entity_repo.save_batch([entity])
             self._sync_graph(entities=[entity])
@@ -584,8 +603,39 @@ class AdminWriteService:
             )
             return {"message": f"Undid {action} for entity {resource_id}", "restored": resource_id}
 
+        if action == "entity.delete":
+            entity = Entity.model_validate(old_state)
+            self.entity_repo.save_batch([entity])
+
+            # Restore KU cross-references
+            pre_delete_ku_states = metadata.get("pre_delete_ku_states", [])
+            if pre_delete_ku_states:
+                from src.knowledge_base import KnowledgeUnit
+                restored_kus = [KnowledgeUnit.model_validate(d) for d in pre_delete_ku_states]
+                self.ku_repo.save_batch(restored_kus)
+
+            # Restore cluster entity_ids
+            pre_delete_cluster_ids = metadata.get("pre_delete_cluster_ids", [])
+            if pre_delete_cluster_ids:
+                clusters = self.cluster_repo.get_by_ids(pre_delete_cluster_ids)
+                for cluster in clusters:
+                    if resource_id not in cluster.entity_ids:
+                        cluster.entity_ids.append(resource_id)
+                        cluster.updated_at = datetime.now(UTC)
+                if clusters:
+                    self.cluster_repo.save_batch(clusters)
+
+            self._sync_graph(entities=[entity])
+            self._audit(
+                action=f"undo.{action}",
+                resource_type="entity",
+                resource_id=resource_id,
+                old_state=entry.get("new_state"),
+                new_state=old_state,
+            )
+            return {"message": f"Undid {action} for entity {resource_id}", "restored": resource_id}
+
         if action == "entity.merge":
-            metadata = entry.get("metadata") or {}
             if not isinstance(old_state, dict) or "source" not in old_state or "target" not in old_state:
                 raise ValueError("Undo entity.merge requires source+target in old_state")
 
@@ -593,12 +643,27 @@ class AdminWriteService:
             target_entity = Entity.model_validate(old_state["target"])
             self.entity_repo.save_batch([source_entity, target_entity])
 
-            # Restore original KU states
-            original_ku_states = metadata.get("original_ku_states", [])
-            if original_ku_states:
+            # Restore pre-merge KU states
+            pre_merge_ku_states = metadata.get("pre_merge_ku_states", [])
+            if pre_merge_ku_states:
                 from src.knowledge_base import KnowledgeUnit
-                restored_kus = [KnowledgeUnit.model_validate(d) for d in original_ku_states]
+                restored_kus = [KnowledgeUnit.model_validate(d) for d in pre_merge_ku_states]
                 self.ku_repo.save_batch(restored_kus)
+
+            # Restore cluster entity_ids (re-add source_id to clusters that had it)
+            pre_merge_cluster_ids = metadata.get("pre_merge_cluster_ids", [])
+            if pre_merge_cluster_ids:
+                clusters = self.cluster_repo.get_by_ids(pre_merge_cluster_ids)
+                for cluster in clusters:
+                    # Replace target_id back to source_id where appropriate
+                    if target_entity.entity_id in cluster.entity_ids and source_entity.entity_id not in cluster.entity_ids:
+                        cluster.entity_ids = [
+                            source_entity.entity_id if eid == target_entity.entity_id else eid
+                            for eid in cluster.entity_ids
+                        ]
+                        cluster.updated_at = datetime.now(UTC)
+                if clusters:
+                    self.cluster_repo.save_batch(clusters)
 
             self._sync_graph(entities=[source_entity, target_entity])
             self._audit(
@@ -645,9 +710,33 @@ class AdminWriteService:
     def _undo_cluster(self, action: str, resource_id: str, old_state: dict, entry: dict) -> dict:
         from src.event_merging import EventCluster
 
-        if action in ("cluster.edit", "cluster.delete"):
+        metadata = entry.get("metadata") or {}
+
+        if action == "cluster.edit":
             cluster = EventCluster.model_validate(old_state)
             self.cluster_repo.save_batch([cluster])
+            self._sync_graph(clusters=[cluster])
+            self._audit(
+                action=f"undo.{action}",
+                resource_type="cluster",
+                resource_id=resource_id,
+                old_state=entry.get("new_state"),
+                new_state=old_state,
+            )
+            return {"message": f"Undid {action} for cluster {resource_id}", "restored": resource_id}
+
+        if action == "cluster.delete":
+            cluster = EventCluster.model_validate(old_state)
+            self.cluster_repo.save_batch([cluster])
+
+            # Re-attach member KUs
+            member_ku_ids = metadata.get("member_ku_ids", [])
+            if member_ku_ids:
+                kus = self.ku_repo.get_by_ids(member_ku_ids)
+                for ku in kus:
+                    ku.cluster_id = cluster.cluster_id
+                self.ku_repo.save_batch(kus)
+
             self._sync_graph(clusters=[cluster])
             self._audit(
                 action=f"undo.{action}",
