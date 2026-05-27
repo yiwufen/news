@@ -57,13 +57,19 @@ def paginated_entities(
     page: int,
     page_size: int,
     search: str = "",
+    entity_type: str = "",
 ) -> tuple[int, list[dict[str, Any]]]:
     with _connect(db_path) as conn:
-        where = ""
+        clauses: list[str] = []
         params: list[Any] = []
         if search:
-            where = "WHERE canonical_name LIKE ?"
+            clauses.append("canonical_name LIKE ?")
             params.append(f"%{search}%")
+        if entity_type:
+            clauses.append("entity_type = ?")
+            params.append(entity_type)
+
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
 
         total = conn.execute(f"SELECT COUNT(*) AS cnt FROM entities {where}", params).fetchone()["cnt"]
 
@@ -86,6 +92,7 @@ def paginated_knowledge_units(
     page_size: int,
     search: str = "",
     unit_type: str = "",
+    unit_kind: str = "",
     entity_id: str = "",
 ) -> tuple[int, list[dict[str, Any]]]:
     with _connect(db_path) as conn:
@@ -98,6 +105,9 @@ def paginated_knowledge_units(
         if unit_type:
             clauses.append("unit_type = ?")
             params.append(unit_type)
+        if unit_kind:
+            clauses.append("unit_kind = ?")
+            params.append(unit_kind)
         if entity_id:
             clauses.append("entity_ids LIKE ?")
             params.append(f'%"{entity_id}"%')
@@ -179,6 +189,8 @@ def paginated_articles(
     search: str = "",
     category: str = "",
     source_name: str = "",
+    date_from: str = "",
+    date_to: str = "",
 ) -> tuple[int, list[dict[str, Any]]]:
     with _connect(db_path) as conn:
         clauses: list[str] = []
@@ -193,6 +205,12 @@ def paginated_articles(
         if source_name:
             clauses.append("source_name = ?")
             params.append(source_name)
+        if date_from:
+            clauses.append("publish_time >= ?")
+            params.append(date_from)
+        if date_to:
+            clauses.append("publish_time <= ?")
+            params.append(date_to)
 
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
 
@@ -394,6 +412,65 @@ def get_cluster_related_entities(db_path: str, cluster_id: str) -> list[dict[str
             [cluster_id],
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Article cross-reference queries
+# ---------------------------------------------------------------------------
+
+
+def get_article_related_kus(
+    db_path: str, doc_id: str, page: int, page_size: int,
+) -> tuple[int, list[dict[str, Any]]]:
+    """Return knowledge units extracted from a given article."""
+    with _connect(db_path) as conn:
+        total = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM knowledge_units WHERE doc_id = ?",
+            [doc_id],
+        ).fetchone()["cnt"]
+
+        offset = (page - 1) * page_size
+        rows = conn.execute(
+            """SELECT ku_id, unit_type, unit_kind, summary, published_at, conflict_status, status
+               FROM knowledge_units
+               WHERE doc_id = ?
+               ORDER BY published_at DESC
+               LIMIT ? OFFSET ?""",
+            [doc_id, page_size, offset],
+        ).fetchall()
+        return total, [dict(r) for r in rows]
+
+
+def get_article_related_entities(db_path: str, doc_id: str) -> list[dict[str, Any]]:
+    """Return distinct entities referenced by all KUs of a given article."""
+    import json
+
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT entity_ids FROM knowledge_units WHERE doc_id = ? AND entity_ids IS NOT NULL",
+            [doc_id],
+        ).fetchall()
+
+        seen: set[str] = set()
+        for r in rows:
+            try:
+                ids = json.loads(r["entity_ids"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            for eid in ids:
+                seen.add(eid)
+
+        if not seen:
+            return []
+
+        placeholders = ", ".join("?" for _ in seen)
+        entity_rows = conn.execute(
+            f"""SELECT entity_id, canonical_name, entity_type, updated_at
+                FROM entities WHERE entity_id IN ({placeholders})
+                ORDER BY canonical_name""",
+            list(seen),
+        ).fetchall()
+        return [dict(r) for r in entity_rows]
 
 
 # ---------------------------------------------------------------------------

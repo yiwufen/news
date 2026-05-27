@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Table, Input, Drawer, Tabs, Descriptions, Tag, Space, Typography } from 'antd'
+import { Table, Input, Drawer, Tabs, Descriptions, Tag, Space, Typography, Select, Button, Modal, Form, Input as AntInput, message, Popconfirm } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useNavigate } from 'react-router-dom'
-import { fetchEntities, fetchEntity, fetchEntityRelatedKUs, fetchEntityRelatedClusters } from '../api/entities'
+import { fetchEntities, fetchEntity, fetchEntityRelatedKUs, fetchEntityRelatedClusters, fetchEntityTypes, editEntity, mergeEntities, deleteEntity } from '../api/entities'
 import type { EntitySummary, KUSummary, ClusterSummary } from '../api/types'
 
 const columns: ColumnsType<EntitySummary> = [
@@ -49,24 +49,32 @@ export default function Entities() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [search, setSearch] = useState('')
+  const [entityType, setEntityType] = useState('')
+  const [typeOptions, setTypeOptions] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
   const [detail, setDetail] = useState<Record<string, unknown> | null>(null)
   const [detailId, setDetailId] = useState<string | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [editOpen, setEditOpen] = useState(false)
+  const [mergeOpen, setMergeOpen] = useState(false)
+  const [editForm] = Form.useForm()
+  const [mergeForm] = Form.useForm()
   const navigate = useNavigate()
 
   const loadData = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await fetchEntities(page, pageSize, search)
+      const res = await fetchEntities(page, pageSize, search, entityType)
       setData(res.items)
       setTotal(res.total)
     } finally {
       setLoading(false)
     }
-  }, [page, pageSize, search])
+  }, [page, pageSize, search, entityType])
 
   useEffect(() => { loadData() }, [loadData])
+
+  useEffect(() => { fetchEntityTypes().then(setTypeOptions).catch(() => {}) }, [])
 
   useEffect(() => {
     const autoOpen = sessionStorage.getItem('autoOpenEntity')
@@ -93,6 +101,57 @@ export default function Entities() {
     setDrawerOpen(false)
     sessionStorage.setItem('autoOpenCluster', clusterId)
     navigate('/event-clusters')
+  }
+
+  const handleEdit = () => {
+    if (!detail) return
+    editForm.setFieldsValue({
+      canonical_name: detail.canonical_name,
+      entity_type: detail.entity_type || '',
+      description: detail.description || '',
+    })
+    setEditOpen(true)
+  }
+
+  const handleEditSubmit = async () => {
+    if (!detailId) return
+    try {
+      const values = await editForm.validateFields()
+      await editEntity(detailId, values)
+      message.success('Entity updated')
+      setEditOpen(false)
+      const d = await fetchEntity(detailId)
+      setDetail(d)
+      loadData()
+    } catch {
+      message.error('Update failed')
+    }
+  }
+
+  const handleMergeSubmit = async () => {
+    if (!detailId) return
+    try {
+      const { target_id } = await mergeForm.validateFields()
+      await mergeEntities(detailId, target_id)
+      message.success('Entities merged')
+      setMergeOpen(false)
+      setDrawerOpen(false)
+      loadData()
+    } catch {
+      message.error('Merge failed')
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!detailId) return
+    try {
+      await deleteEntity(detailId)
+      message.success('Entity deleted')
+      setDrawerOpen(false)
+      loadData()
+    } catch {
+      message.error('Delete failed')
+    }
   }
 
   const displayValue = (value: unknown): string => {
@@ -144,6 +203,14 @@ export default function Entities() {
           onSearch={setSearch}
           style={{ width: 300 }}
         />
+        <Select
+          placeholder="Entity type"
+          allowClear
+          style={{ width: 180 }}
+          value={entityType || undefined}
+          onChange={(v) => setEntityType(v || '')}
+          options={typeOptions.map((t) => ({ value: t, label: t || 'Unknown' }))}
+        />
       </Space>
 
       <Table<EntitySummary>
@@ -168,9 +235,37 @@ export default function Entities() {
         width={720}
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
+        extra={
+          <Space>
+            <Button size="small" onClick={handleEdit}>Edit</Button>
+            <Button size="small" onClick={() => { mergeForm.resetFields(); setMergeOpen(true) }}>Merge</Button>
+            <Popconfirm title="Delete this entity?" onConfirm={handleDelete} okText="Delete" okType="danger">
+              <Button size="small" danger>Delete</Button>
+            </Popconfirm>
+          </Space>
+        }
       >
         {detail && <Tabs items={tabs} />}
       </Drawer>
+
+      <Modal title="Edit Entity" open={editOpen} onOk={handleEditSubmit} onCancel={() => setEditOpen(false)}>
+        <Form form={editForm} layout="vertical">
+          <Form.Item name="canonical_name" label="Name"><AntInput /></Form.Item>
+          <Form.Item name="entity_type" label="Type"><AntInput /></Form.Item>
+          <Form.Item name="description" label="Description"><AntInput.TextArea rows={3} /></Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal title={`Merge "${detail?.canonical_name}" into...`} open={mergeOpen} onOk={handleMergeSubmit} onCancel={() => setMergeOpen(false)}>
+        <Form form={mergeForm} layout="vertical">
+          <Form.Item name="target_id" label="Target Entity ID" rules={[{ required: true }]}>
+            <AntInput placeholder="Enter target entity_id" />
+          </Form.Item>
+        </Form>
+        <Typography.Text type="secondary">
+          The current entity will be absorbed into the target. All references will be reassigned.
+        </Typography.Text>
+      </Modal>
     </div>
   )
 }

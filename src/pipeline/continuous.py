@@ -19,6 +19,7 @@ from src.knowledge_base import (
     KnowledgeUnitRepository,
     RawDocument,
     RawDocumentRepository,
+    adapt_article_to_raw_document,
 )
 from src.knowledge_extractor import KnowledgeExtractor
 from src.knowledge_graph_sync import KnowledgeGraphSync
@@ -423,6 +424,55 @@ class ContinuousPipeline:
         else:
             result.status = "success"
             result.failed_stage = "complete"
+
+        return result
+
+    def process_single_document(self, doc_id: str) -> DocumentProcessingResult:
+        """处理或重新处理单个文档（供 Admin API 调用）。"""
+        article = self.raw_documents.db.get_article_by_doc_id(doc_id)
+        if not article:
+            return DocumentProcessingResult(
+                doc_id=doc_id,
+                status="failed",
+                failed_stage="extract",
+                error_message="Document not found",
+            )
+
+        document = adapt_article_to_raw_document(article)
+
+        # Build context with full entity cache
+        context = BatchProcessingContext(
+            entities_cache={e.entity_id: e for e in self.entity_repo.get_all()},
+        )
+
+        # Clear existing log entry so the doc can be reprocessed
+        self.log_repo.log_batch([{
+            "doc_id": doc_id,
+            "status": "pending",
+            "knowledge_units_count": 0,
+            "entities_count": 0,
+            "clusters_count": 0,
+            "error_message": None,
+        }])
+
+        result = self._process_single_document(document, context, dry_run=False)
+
+        # Persist processing result
+        self.log_repo.log_batch([{
+            "doc_id": result.doc_id,
+            "status": result.status,
+            "knowledge_units_count": result.knowledge_units_count,
+            "entities_count": result.entities_count,
+            "clusters_count": result.clusters_count,
+            "error_message": result.error_message,
+        }])
+
+        # Graph sync
+        if self.graph_enabled and self.graph_sync and (result.entities or result.clusters):
+            try:
+                self.graph_sync.sync(result.entities, result.clusters)
+            except Exception:
+                logger.warning("Graph sync failed for %s", doc_id, exc_info=True)
 
         return result
 

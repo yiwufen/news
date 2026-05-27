@@ -15,9 +15,10 @@ def list_entities(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     search: str = Query(""),
+    entity_type: str = Query(""),
     settings: AdminSettings = Depends(get_settings),
 ) -> PaginatedResponse[EntitySummary]:
-    total, rows = queries.paginated_entities(settings.db_path, page, page_size, search)
+    total, rows = queries.paginated_entities(settings.db_path, page, page_size, search, entity_type)
     return PaginatedResponse(
         total=total,
         items=[EntitySummary(**r) for r in rows],
@@ -70,3 +71,9 @@ def entity_related_event_clusters(
         page=page,
         page_size=page_size,
     )
+
+
+@router.get("/entity-types")
+def list_entity_types(settings: AdminSettings = Depends(get_settings)) -> list[str]:
+    counts = queries.get_entity_type_counts(settings.db_path)
+    return [r["entity_type"] for r in counts if r["entity_type"]]

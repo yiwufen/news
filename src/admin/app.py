@@ -46,25 +46,33 @@ def create_app() -> FastAPI:
 
     from src.admin.routers import (
         articles,
+        audit,
         auth,
+        clusters_write,
         dashboard,
         entities,
+        entities_write,
         event_clusters,
         health,
         knowledge_units,
         processing,
+        reprocessing,
         users,
     )
 
     app.include_router(auth.router)
     app.include_router(users.router)
     app.include_router(health.router)
+    app.include_router(audit.router, prefix="/api/v1")
     app.include_router(dashboard.router, prefix="/api/v1")
     app.include_router(entities.router, prefix="/api/v1")
+    app.include_router(entities_write.router, prefix="/api/v1")
     app.include_router(knowledge_units.router, prefix="/api/v1")
     app.include_router(event_clusters.router, prefix="/api/v1")
+    app.include_router(clusters_write.router, prefix="/api/v1")
     app.include_router(articles.router, prefix="/api/v1")
     app.include_router(processing.router, prefix="/api/v1")
+    app.include_router(reprocessing.router, prefix="/api/v1")
 
     # Serve frontend SPA
     static_dir = Path(__file__).resolve().parent.parent.parent / "static"

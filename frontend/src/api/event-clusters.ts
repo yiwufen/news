@@ -32,3 +32,29 @@ export async function fetchClusterRelatedEntities(clusterId: string): Promise<En
   const res = await client.get<EntitySummary[]>(`/event-clusters/${clusterId}/entities`)
   return res.data
 }
+
+export interface EditClusterRequest {
+  title?: string
+  summary?: string
+  primary_entity_id?: string
+  conflict_status?: 'none' | 'possible' | 'confirmed'
+}
+
+export async function editCluster(clusterId: string, updates: EditClusterRequest): Promise<Record<string, unknown>> {
+  const res = await client.put(`/event-clusters/${clusterId}`, updates)
+  return res.data
+}
+
+export async function mergeClusters(clusterIds: string[]): Promise<Record<string, unknown>> {
+  const res = await client.post('/event-clusters/merge', { cluster_ids: clusterIds })
+  return res.data
+}
+
+export async function splitCluster(clusterId: string, removeKuIds: string[]): Promise<Record<string, unknown>> {
+  const res = await client.post(`/event-clusters/${clusterId}/split`, { remove_ku_ids: removeKuIds })
+  return res.data
+}
+
+export async function deleteCluster(clusterId: string): Promise<void> {
+  await client.delete(`/event-clusters/${clusterId}`)
+}

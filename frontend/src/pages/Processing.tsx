@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Table, Tag, Alert, Space, Typography } from 'antd'
-import { SyncOutlined } from '@ant-design/icons'
+import { Table, Tag, Alert, Space, Typography, Button, message } from 'antd'
+import { SyncOutlined, ReloadOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { fetchProcessingLog, fetchPipelineStatus } from '../api/processing'
+import { reprocessDocument } from '../api/reprocessing'
 import type { ProcessingLogEntry, PipelineStatus } from '../api/types'
 
 const statusColors: Record<string, string> = {
@@ -10,47 +11,9 @@ const statusColors: Record<string, string> = {
   failed: 'red',
   pending: 'orange',
   processing: 'blue',
+  success: 'green',
+  partial: 'orange',
 }
-
-const columns: ColumnsType<ProcessingLogEntry> = [
-  { title: 'Doc ID', dataIndex: 'doc_id', width: 200, ellipsis: true },
-  {
-    title: 'Status',
-    dataIndex: 'status',
-    width: 100,
-    render: (v: string) => <Tag color={statusColors[v] || 'default'}>{v}</Tag>,
-  },
-  {
-    title: 'KUs',
-    dataIndex: 'knowledge_units_count',
-    width: 80,
-    align: 'center',
-  },
-  {
-    title: 'Entities',
-    dataIndex: 'entities_count',
-    width: 80,
-    align: 'center',
-  },
-  {
-    title: 'Clusters',
-    dataIndex: 'clusters_count',
-    width: 80,
-    align: 'center',
-  },
-  {
-    title: 'Error',
-    dataIndex: 'error_message',
-    ellipsis: true,
-    render: (v: string | null) => v || '-',
-  },
-  {
-    title: 'Updated',
-    dataIndex: 'updated_at',
-    width: 180,
-    render: (v: string) => new Date(v).toLocaleString(),
-  },
-]
 
 export default function Processing() {
   const [data, setData] = useState<ProcessingLogEntry[]>([])
@@ -59,6 +22,7 @@ export default function Processing() {
   const [pageSize, setPageSize] = useState(20)
   const [loading, setLoading] = useState(false)
   const [pipeline, setPipeline] = useState<PipelineStatus | null>(null)
+  const [reprocessing, setReprocessing] = useState<Set<string>>(new Set())
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -73,6 +37,48 @@ export default function Processing() {
 
   useEffect(() => { loadData() }, [loadData])
   useEffect(() => { fetchPipelineStatus().then(setPipeline).catch(() => {}) }, [])
+
+  const handleReprocess = async (docId: string) => {
+    setReprocessing((prev) => new Set(prev).add(docId))
+    try {
+      const result = await reprocessDocument(docId)
+      message.success(`Reprocessed ${docId}: ${result.status}`)
+      loadData()
+    } catch {
+      message.error(`Failed to reprocess ${docId}`)
+    } finally {
+      setReprocessing((prev) => { const next = new Set(prev); next.delete(docId); return next })
+    }
+  }
+
+  const columns: ColumnsType<ProcessingLogEntry> = [
+    { title: 'Doc ID', dataIndex: 'doc_id', width: 200, ellipsis: true },
+    {
+      title: 'Status',
+      dataIndex: 'status',
+      width: 100,
+      render: (v: string) => <Tag color={statusColors[v] || 'default'}>{v}</Tag>,
+    },
+    { title: 'KUs', dataIndex: 'knowledge_units_count', width: 80, align: 'center' },
+    { title: 'Entities', dataIndex: 'entities_count', width: 80, align: 'center' },
+    { title: 'Clusters', dataIndex: 'clusters_count', width: 80, align: 'center' },
+    { title: 'Error', dataIndex: 'error_message', ellipsis: true, render: (v: string | null) => v || '-' },
+    { title: 'Updated', dataIndex: 'updated_at', width: 180, render: (v: string) => new Date(v).toLocaleString() },
+    {
+      title: 'Action',
+      width: 120,
+      render: (_: unknown, record: ProcessingLogEntry) => (
+        <Button
+          size="small"
+          icon={<ReloadOutlined />}
+          loading={reprocessing.has(record.doc_id)}
+          onClick={() => handleReprocess(record.doc_id)}
+        >
+          Rerun
+        </Button>
+      ),
+    },
+  ]
 
   return (
     <div>

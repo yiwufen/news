@@ -794,6 +794,25 @@ class EntityRepository:
 
         return matched
 
+    def delete_by_id(self, entity_id: str, connection: sqlite3.Connection | None = None) -> bool:
+        """从 entities、entity_aliases、entity_identifiers 三表删除指定实体。"""
+        if connection is not None:
+            cursor = connection.execute("DELETE FROM entities WHERE entity_id = ?", (entity_id,))
+            connection.execute("DELETE FROM entity_aliases WHERE entity_id = ?", (entity_id,))
+            connection.execute("DELETE FROM entity_identifiers WHERE entity_id = ?", (entity_id,))
+            return cursor.rowcount > 0
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM entities WHERE entity_id = ?", (entity_id,))
+            conn.execute("DELETE FROM entity_aliases WHERE entity_id = ?", (entity_id,))
+            conn.execute("DELETE FROM entity_identifiers WHERE entity_id = ?", (entity_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def get_snapshot(self, entity_id: str) -> Entity | None:
+        """加载单个实体，不存在返回 None。"""
+        results = self.get_by_ids([entity_id])
+        return results[0] if results else None
+
 
 class EntityResolver:
     """Conservative entity resolution with optional embedding-based disambiguation."""

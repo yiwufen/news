@@ -16,11 +16,12 @@ def list_knowledge_units(
     page_size: int = Query(20, ge=1, le=100),
     search: str = Query(""),
     unit_type: str = Query(""),
+    unit_kind: str = Query(""),
     entity_id: str = Query(""),
     settings: AdminSettings = Depends(get_settings),
 ) -> PaginatedResponse[KUSummary]:
     total, rows = queries.paginated_knowledge_units(
-        settings.db_path, page, page_size, search, unit_type, entity_id
+        settings.db_path, page, page_size, search, unit_type, unit_kind, entity_id
     )
     return PaginatedResponse(
         total=total,

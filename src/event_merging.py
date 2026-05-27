@@ -88,6 +88,7 @@ class EventCluster(BaseModel):
     conflict_reasons: list[str] = Field(default_factory=list)
     conflict_details: list[dict[str, Any]] = Field(default_factory=list)
     updated_at: datetime
+    manual_overrides: dict[str, Any] = Field(default_factory=dict)
 
 
 def _normalize_summary(summary: str) -> str:
@@ -443,6 +444,12 @@ class EventClusterRepository:
                 cluster_id=cluster.cluster_id,
                 updated_at=datetime.now(UTC),
             )
+            # Preserve manual overrides from admin edits
+            if cluster.manual_overrides:
+                for key, value in cluster.manual_overrides.items():
+                    if hasattr(repaired_cluster, key):
+                        setattr(repaired_cluster, key, value)
+                repaired_cluster.manual_overrides = cluster.manual_overrides
             repaired.append(repaired_cluster)
             changed = True
 
@@ -547,6 +554,18 @@ class EventClusterRepository:
                 list(cluster_ids),
             ).fetchall()
         return self._load_clusters_from_rows(rows)
+
+    def delete_by_id(self, cluster_id: str, connection: sqlite3.Connection | None = None) -> bool:
+        """从 event_clusters 和 cluster_entity_map 删除指定集群。"""
+        if connection is not None:
+            cursor = connection.execute("DELETE FROM event_clusters WHERE cluster_id = ?", (cluster_id,))
+            connection.execute("DELETE FROM cluster_entity_map WHERE cluster_id = ?", (cluster_id,))
+            return cursor.rowcount > 0
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM event_clusters WHERE cluster_id = ?", (cluster_id,))
+            conn.execute("DELETE FROM cluster_entity_map WHERE cluster_id = ?", (cluster_id,))
+            conn.commit()
+            return cursor.rowcount > 0
 
     def _find_matching_clusters(
         self,

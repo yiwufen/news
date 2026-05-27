@@ -100,6 +100,19 @@ class ContainerStatus(BaseModel):
     started_at: str | None = None
 
 
+class AuditLogEntry(BaseModel):
+    id: int
+    action: str
+    resource_type: str
+    resource_id: str
+    user_id: int
+    username: str
+    old_state: dict[str, Any] | None = None
+    new_state: dict[str, Any] | None = None
+    metadata: dict[str, Any] | None = None
+    created_at: str
+
+
 class DashboardStats(BaseModel):
     entities: dict[str, Any]
     knowledge_units: dict[str, Any]

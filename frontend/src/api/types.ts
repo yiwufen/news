@@ -89,3 +89,25 @@ export interface ContainerStatus {
   status: string
   started_at: string | null
 }
+
+export interface AuditLogEntry {
+  id: number
+  action: string
+  resource_type: string
+  resource_id: string
+  user_id: number
+  username: string
+  old_state: Record<string, unknown> | null
+  new_state: Record<string, unknown> | null
+  metadata: Record<string, unknown> | null
+  created_at: string
+}
+
+export interface ReprocessResult {
+  doc_id: string
+  status: string
+  knowledge_units_count: number
+  entities_count: number
+  clusters_count: number
+  error_message: string | null
+}

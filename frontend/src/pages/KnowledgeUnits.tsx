@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Table, Input, Drawer, Tabs, Descriptions, Tag, Space, Typography } from 'antd'
+import { Table, Input, Drawer, Tabs, Descriptions, Tag, Space, Typography, Select } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { useNavigate } from 'react-router-dom'
 import { fetchKnowledgeUnits, fetchKnowledgeUnit, fetchKURelatedEntities } from '../api/knowledge-units'
@@ -50,6 +50,7 @@ export default function KnowledgeUnits() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [search, setSearch] = useState('')
+  const [unitKind, setUnitKind] = useState('')
   const [loading, setLoading] = useState(false)
   const [detail, setDetail] = useState<Record<string, unknown> | null>(null)
   const [detailId, setDetailId] = useState<string | null>(null)
@@ -59,13 +60,13 @@ export default function KnowledgeUnits() {
   const loadData = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await fetchKnowledgeUnits(page, pageSize, search)
+      const res = await fetchKnowledgeUnits(page, pageSize, search, '', unitKind)
       setData(res.items)
       setTotal(res.total)
     } finally {
       setLoading(false)
     }
-  }, [page, pageSize, search])
+  }, [page, pageSize, search, unitKind])
 
   useEffect(() => { loadData() }, [loadData])
 
@@ -131,6 +132,18 @@ export default function KnowledgeUnits() {
           allowClear
           onSearch={setSearch}
           style={{ width: 300 }}
+        />
+        <Select
+          placeholder="Unit kind"
+          allowClear
+          style={{ width: 140 }}
+          value={unitKind || undefined}
+          onChange={(v) => setUnitKind(v || '')}
+          options={[
+            { value: 'event', label: 'Event' },
+            { value: 'relation', label: 'Relation' },
+            { value: 'fact', label: 'Fact' },
+          ]}
         />
       </Space>
 

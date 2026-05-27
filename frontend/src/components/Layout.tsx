@@ -11,6 +11,7 @@ import {
   UserOutlined,
   LogoutOutlined,
   KeyOutlined,
+  HistoryOutlined,
 } from '@ant-design/icons'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { clearTokens } from '../api/client'
@@ -25,6 +26,7 @@ const menuItems = [
   { key: '/event-clusters', icon: <ClusterOutlined />, label: 'Event Clusters' },
   { key: '/articles', icon: <ReadOutlined />, label: 'Articles' },
   { key: '/processing', icon: <SettingOutlined />, label: 'Processing' },
+  { key: '/audit-log', icon: <HistoryOutlined />, label: 'Audit Log' },
   { key: '/neo4j', icon: <ApartmentOutlined />, label: 'Graph (Neo4j)' },
   { key: '/users', icon: <TeamOutlined />, label: 'Users' },
 ]

@@ -6,9 +6,16 @@ export async function fetchKnowledgeUnits(
   pageSize: number,
   search = '',
   unitType = '',
+  unitKind = '',
 ): Promise<PaginatedResponse<KUSummary>> {
   const res = await client.get<PaginatedResponse<KUSummary>>('/knowledge-units', {
-    params: { page, page_size: pageSize, search: search || undefined, unit_type: unitType || undefined },
+    params: {
+      page,
+      page_size: pageSize,
+      search: search || undefined,
+      unit_type: unitType || undefined,
+      unit_kind: unitKind || undefined,
+    },
   })
   return res.data
 }
