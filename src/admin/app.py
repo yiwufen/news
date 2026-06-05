@@ -55,6 +55,7 @@ def create_app() -> FastAPI:
         event_clusters,
         health,
         knowledge_units,
+        mcp_stats,
         processing,
         reprocessing,
         users,
@@ -73,6 +74,7 @@ def create_app() -> FastAPI:
     app.include_router(articles.router, prefix="/api/v1")
     app.include_router(processing.router, prefix="/api/v1")
     app.include_router(reprocessing.router, prefix="/api/v1")
+    app.include_router(mcp_stats.router, prefix="/api/v1")
 
     # Serve frontend SPA
     static_dir = Path(__file__).resolve().parent.parent.parent / "static"

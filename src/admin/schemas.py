@@ -120,3 +120,19 @@ class DashboardStats(BaseModel):
     articles: dict[str, Any]
     processing: ProcessingSummary
     pipeline: PipelineStatus | None = None
+
+
+class MCPDailyStats(BaseModel):
+    date: str
+    total: int
+    success: int
+    failed: int
+    avg_duration_ms: float
+    by_tool: dict[str, int]
+    by_intent: dict[str, int]
+
+
+class MCPStatsResponse(BaseModel):
+    daily: list[MCPDailyStats]
+    total_calls: int
+    period_days: int

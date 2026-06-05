@@ -524,3 +524,80 @@ def get_processing_summary(db_path: str) -> dict[str, Any]:
             "total_pending": pending,
             "last_processed_at": last["updated_at"] if last else None,
         }
+
+
+# ---------------------------------------------------------------------------
+# MCP call stats
+# ---------------------------------------------------------------------------
+
+
+def get_mcp_call_stats(db_path: str, days: int = 7) -> list[dict[str, Any]]:
+    """Return daily MCP call stats for the last N days."""
+    with _connect(db_path) as conn:
+        exists = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='mcp_call_log'"
+        ).fetchone()
+        if not exists:
+            return []
+        rows = conn.execute(
+            """
+            SELECT
+                date(created_at) AS date,
+                COUNT(*) AS total,
+                SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) AS success,
+                SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS failed,
+                CAST(AVG(duration_ms) AS INTEGER) AS avg_duration_ms
+            FROM mcp_call_log
+            WHERE created_at >= date('now', ?)
+            GROUP BY date(created_at)
+            ORDER BY date(created_at) ASC
+            """,
+            [f"-{days} days"],
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_mcp_tool_breakdown(db_path: str, days: int = 7) -> list[dict[str, Any]]:
+    """Return per-tool call counts for the last N days."""
+    with _connect(db_path) as conn:
+        exists = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='mcp_call_log'"
+        ).fetchone()
+        if not exists:
+            return []
+        rows = conn.execute(
+            """
+            SELECT
+                tool_name,
+                COUNT(*) AS cnt
+            FROM mcp_call_log
+            WHERE created_at >= date('now', ?)
+            GROUP BY tool_name
+            ORDER BY cnt DESC
+            """,
+            [f"-{days} days"],
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_mcp_intent_breakdown(db_path: str, days: int = 7) -> list[dict[str, Any]]:
+    """Return per-intent call counts for the last N days."""
+    with _connect(db_path) as conn:
+        exists = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='mcp_call_log'"
+        ).fetchone()
+        if not exists:
+            return []
+        rows = conn.execute(
+            """
+            SELECT
+                intent,
+                COUNT(*) AS cnt
+            FROM mcp_call_log
+            WHERE created_at >= date('now', ?) AND intent IS NOT NULL
+            GROUP BY intent
+            ORDER BY cnt DESC
+            """,
+            [f"-{days} days"],
+        ).fetchall()
+        return [dict(r) for r in rows]

@@ -122,6 +122,10 @@ def cmd_graph_expand(args: argparse.Namespace) -> None:
 
 def cmd_serve(args: argparse.Namespace) -> None:
     """Start the knowledge-cli MCP server for remote access."""
+    import uvicorn
+
+    from src.admin.mcp_logger import MCPCallLogger
+    from src.admin.mcp_middleware import MCPCallTrackingMiddleware
     from src.mcp_server import create_server
 
     server = create_server(
@@ -129,12 +133,22 @@ def cmd_serve(args: argparse.Namespace) -> None:
         port=args.port,
         db_path=args.db,
     )
+
+    starlette_app = server.streamable_http_app()
+    call_logger = MCPCallLogger(args.db)
+    starlette_app.add_middleware(MCPCallTrackingMiddleware, logger=call_logger)
+
     transport: str = "streamable-http"
     print(
         f"MCP server starting on http://{args.host}:{args.port}/mcp "
         f"(transport: {transport})"
     )
-    server.run(transport=transport)
+    uvicorn.run(
+        starlette_app,
+        host=args.host,
+        port=args.port,
+        log_level="info",
+    )
 
 
 # ---------------------------------------------------------------------------
