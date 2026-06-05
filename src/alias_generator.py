@@ -11,6 +11,7 @@ from typing import Any
 
 from anthropic.types import Message, ToolUseBlock
 
+from src.entities import is_valid_entity_mention
 from src.llm import create_offline_llm_client, get_offline_max_tokens
 
 logger = logging.getLogger(__name__)
@@ -91,18 +92,32 @@ class AliasGenerator:
         """Generate common aliases for an entity.
 
         Returns a list of alias strings, or empty list on failure.
+        Aliases that fail is_valid_entity_mention are silently dropped.
         """
         if not self.enable:
             return []
 
         prompt = self._build_prompt(entity_name, entity_type, identifiers)
         try:
-            return self._call_llm(prompt)
+            raw = self._call_llm(prompt)
         except Exception as exc:
             logger.warning(
                 "Alias generation failed for '%s': %s", entity_name, exc
             )
             return []
+
+        # Post-filter: reject aliases that are invalid entity mentions
+        # (e.g. country names, abstract concepts, generic role words).
+        # This prevents aliases like "伊朗" for "伊朗国家男子足球队" that
+        # would collide with the actual country entity.
+        filtered = [a for a in raw if is_valid_entity_mention(a)]
+        if len(filtered) < len(raw):
+            dropped = set(raw) - set(filtered)
+            logger.info(
+                "Alias generator dropped %s for '%s': not valid entity mentions",
+                sorted(dropped), entity_name,
+            )
+        return filtered
 
     def _build_prompt(
         self,

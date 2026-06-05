@@ -956,10 +956,13 @@ class EntityResolver:
                             )
                 else:
                     # Alias dedup: skip if normalized form already present
+                    # Also skip if the mention is not a valid entity name
+                    # (prevents country names etc. from becoming aliases)
                     mention_norm = normalize_entity_name(entity_ref.mention)
                     existing_norms = {normalize_entity_name(a) for a in matched.aliases}
                     if (
-                        entity_ref.mention not in matched.aliases
+                        is_valid_entity_mention(entity_ref.mention)
+                        and entity_ref.mention not in matched.aliases
                         and mention_norm not in existing_norms
                         and len(matched.aliases) < _MAX_ALIASES
                     ):
