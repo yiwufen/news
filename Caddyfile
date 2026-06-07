@@ -28,15 +28,17 @@
         reverse_proxy admin:8001
     }
 
-    handle /mcp* {
-        reverse_proxy mcp:8000 {
-            flush_interval -1
-        }
-    }
+    # /mcp* 公网访问已移除，通过 SSH 隧道使用：
+    #   ssh -L 8000:mcp:8000 baidu
+    # handle /mcp* {
+    #     reverse_proxy mcp:8000 {
+    #         flush_interval -1
+    #     }
+    # }
 
-    handle /health {
-        reverse_proxy mcp:8000
-    }
+    # handle /health {
+    #     reverse_proxy mcp:8000
+    # }
 
     respond 404
 }
@@ -65,15 +67,17 @@
         reverse_proxy admin:8001
     }
 
-    handle /mcp* {
-        reverse_proxy mcp:8000 {
-            flush_interval -1
-        }
-    }
+    # /mcp* 公网访问已移除，通过 SSH 隧道使用：
+    #   ssh -L 8000:mcp:8000 baidu
+    # handle /mcp* {
+    #     reverse_proxy mcp:8000 {
+    #         flush_interval -1
+    #     }
+    # }
 
-    handle /health {
-        reverse_proxy mcp:8000
-    }
+    # handle /health {
+    #     reverse_proxy mcp:8000
+    # }
 
     respond 404
 }
