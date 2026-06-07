@@ -37,9 +37,8 @@ services:
     volumes:
       - /home/deployer/knowledge/data:/app/data
     networks:
-      - knowledge-net
-    ports:
-      - "127.0.0.1:8000:8000"
+      knowledge-net:
+        ipv4_address: 172.18.0.10
     depends_on:
       neo4j:
         condition: service_healthy
@@ -103,6 +102,9 @@ services:
 networks:
   knowledge-net:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.18.0.0/16
 
 # ====================================================================
 # Volumes
