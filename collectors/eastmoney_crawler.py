@@ -179,15 +179,16 @@ class EastMoneyCrawler:
             if not continuous:
                 break
 
-            # 计算等待时间：正常间隔 + 指数退避 (在反爬虫时自动延长休眠时间)
-            # 比如连续失败 1, 2, 3 次，额外等待 60, 120, 240 秒
+            # 正常间隔 + 指数退避 + 随机抖动（反检测）
+            # 抖动范围 -60~+120 秒，使请求间隔不再规律
+            jitter = random.randint(-60, 120)
             backoff_delay = 0
             if self.consecutive_errors > 0:
                 backoff_delay = interval * (2 ** (min(self.consecutive_errors - 1, 5)))
-                log.warning(f"⏱️ 触发指数退避机制，额外延迟 {backoff_delay} 秒...")
+                log.warning(f"退避 {backoff_delay}s + jitter {jitter}s...")
 
-            total_sleep = interval + backoff_delay
-            log.info(f"Waiting for {total_sleep} seconds before next fetch...")
+            total_sleep = interval + backoff_delay + jitter
+            log.info(f"Waiting {total_sleep}s before next fetch...")
             time.sleep(total_sleep)
 
         log.info("=== 爬虫任务完成 ===")
