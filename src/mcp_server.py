@@ -2,12 +2,36 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from src.paths import DEFAULT_DB_PATH
 from src.schemas.query import IntentType, make_query
+
+
+class MCPApiKeyMiddleware(BaseHTTPMiddleware):
+    """API Key authentication for MCP endpoints.
+
+    Reads MCP_API_KEY from environment. If not set, auth is skipped.
+    Clients must pass ``Authorization: Bearer <key>`` header.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path.startswith("/mcp"):
+            api_key = os.environ.get("MCP_API_KEY", "")
+            if api_key:
+                auth = request.headers.get("Authorization", "")
+                if auth != f"Bearer {api_key}":
+                    return JSONResponse(
+                        {"detail": "Unauthorized"},
+                        status_code=401,
+                    )
+        return await call_next(request)
 
 
 def create_server(

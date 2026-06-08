@@ -126,7 +126,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
     from src.admin.mcp_logger import MCPCallLogger
     from src.admin.mcp_middleware import MCPCallTrackingMiddleware
-    from src.mcp_server import create_server
+    from src.mcp_server import MCPApiKeyMiddleware, create_server
 
     server = create_server(
         host=args.host,
@@ -137,6 +137,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
     starlette_app = server.streamable_http_app()
     call_logger = MCPCallLogger(args.db)
     starlette_app.add_middleware(MCPCallTrackingMiddleware, logger=call_logger)
+    starlette_app.add_middleware(MCPApiKeyMiddleware)
 
     transport: str = "streamable-http"
     print(
