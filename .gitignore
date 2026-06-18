@@ -32,6 +32,10 @@ uv.lock
 .claude/settings.local.json
 .zcode/settings.local.json
 
+# EDD eval 运行产物（每次运行临时生成，不入库）
+eval/run_latest.json
+
 # Frontend
 frontend/node_modules/
 frontend/dist/
+

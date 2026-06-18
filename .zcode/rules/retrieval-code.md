@@ -1,6 +1,6 @@
 # Retrieval Code Change Rules
 
-修改以下文件前，必须先运行 `/review-findings` 查阅用户测试发现：
+修改以下文件前，必须先运行 `$review-findings` 查阅用户测试发现：
 
 - `src/retrieval/` 下任何文件
 - `src/orchestration/graph.py`
@@ -14,13 +14,49 @@
 
 ## 检索评估（Retrieval Eval）
 
-修改上述文件后，**必须**运行检索评估报告，对比改动前后的指标变化：
+修改上述文件后，**必须**运行本地 EDD 回归门禁（用新代码 + 固定 fixture DB 重跑检索，
+对比 `eval/baseline.json` 钉死的基线）：
 
 ```bash
-uv run python scripts/eval_report.py --input eval/golden_dataset_v2.json
+# 1. 在 fixture DB 上重跑 golden 集，产出当前指标
+uv run python scripts/eval_run.py \
+    --fixture tests/fixtures/eval_snapshot.db \
+    --golden eval/golden_dataset_v2.json \
+    --output eval/run_latest.json
+
+# 2. 门禁对比：超标非零退出
+uv run python scripts/eval_guard.py --run eval/run_latest.json
 ```
 
+> 注意：`eval_report.py` 只读冻结在 JSON 里的排名，无法检测检索代码回归；
+> 真正的回归检测靠上面的 `eval_run.py` + `eval_guard.py`。
+> `eval_report.py` 仅用于查看历史快照指标。
+
+### 基线刷新流程
+
+当 fixture DB 或 golden 集有意更新后，需要重置基线：
+
+```bash
+# 在真实库环境（远程）重生成 fixture
+uv run python scripts/snapshot_eval_pair.py \
+    --golden eval/golden_dataset_v2.json \
+    --source-db data/news.db
+
+# 本地首跑并写入新基线
+uv run python scripts/eval_run.py --init-baseline
+```
+
+### 门禁阈值
+
+- 全局 Recall@5 下降 > 2pp → FAIL
+- 任一 query_type Recall@5 下降 > 5pp → FAIL
+- fixture_db / golden_dataset sha256 漂移 → 硬失败（必须刷新 baseline）
+- MRR 下降 > 0.03 → WARN（不阻断）
+
 ### 当前基线（2026-05-16，300 queries，规则查询生成，rule-based）
+
+> 以下为 `eval_report.py` 对冻结 golden 集的历史快照指标；
+> EDD 门禁的活基线以 `eval/baseline.json` 的 `metrics` 为准。
 
 | 指标 | 基线值 |
 |------|--------|

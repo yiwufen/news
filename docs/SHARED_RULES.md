@@ -367,6 +367,20 @@ uv run pytest
 uv run pyright .
 ```
 
+检索质量回归（修改 `src/retrieval/`、`src/orchestration/graph.py`、`src/knowledge_base.py`、`src/entities.py`、`src/event_merging.py` 后必须运行）：
+
+```bash
+# fixture DB 与 golden 集 hash 锁定，本地 < 5 分钟跑完
+uv run python scripts/eval_run.py \
+    --fixture tests/fixtures/eval_snapshot.db \
+    --output eval/run_latest.json
+uv run python scripts/eval_guard.py --run eval/run_latest.json
+```
+
+> fixture DB 是真实库的 golden 子集快照，通过 `scripts/snapshot_eval_pair.py` 生成；
+> 基线指标钉在 `eval/baseline.json`，漂移或退化超阈值时门禁非零退出。
+> 详细流程见 `.zcode/rules/retrieval-code.md`。
+
 当前阶段验收重点：
 
 - 双模式入口可正常调用
