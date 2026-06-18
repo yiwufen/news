@@ -373,13 +373,16 @@ uv run pyright .
 # fixture DB 与 golden 集 hash 锁定，本地 < 5 分钟跑完
 uv run python scripts/eval_run.py \
     --fixture tests/fixtures/eval_snapshot.db \
+    --golden eval/golden_dataset_v3.json \
     --output eval/run_latest.json
 uv run python scripts/eval_guard.py --run eval/run_latest.json
 ```
 
 > fixture DB 是真实库的 golden 子集快照，通过 `scripts/snapshot_eval_pair.py` 生成；
 > 基线指标钉在 `eval/baseline.json`，漂移或退化超阈值时门禁非零退出。
-> 详细流程见 `.zcode/rules/retrieval-code.md`。
+> **注意**：本地 Recall@5 绝对值因子集候选池裁剪而虚高（趋近 100%），
+> EDD 只用于回归检测（代码改动后是否退化），不代表真实召回水平。
+> 详细流程与局限见 `.zcode/rules/retrieval-code.md`。
 
 当前阶段验收重点：
 

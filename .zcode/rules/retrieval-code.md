@@ -21,7 +21,7 @@
 # 1. 在 fixture DB 上重跑 golden 集，产出当前指标
 uv run python scripts/eval_run.py \
     --fixture tests/fixtures/eval_snapshot.db \
-    --golden eval/golden_dataset_v2.json \
+    --golden eval/golden_dataset_v3.json \
     --output eval/run_latest.json
 
 # 2. 门禁对比：超标非零退出
@@ -39,7 +39,7 @@ uv run python scripts/eval_guard.py --run eval/run_latest.json
 ```bash
 # 在真实库环境（远程）重生成 fixture
 uv run python scripts/snapshot_eval_pair.py \
-    --golden eval/golden_dataset_v2.json \
+    --golden eval/golden_dataset_v3.json \
     --source-db data/news.db
 
 # 本地首跑并写入新基线
@@ -53,10 +53,25 @@ uv run python scripts/eval_run.py --init-baseline
 - fixture_db / golden_dataset sha256 漂移 → 硬失败（必须刷新 baseline）
 - MRR 下降 > 0.03 → WARN（不阻断）
 
-### 当前基线（2026-05-16，300 queries，规则查询生成，rule-based）
+### ⚠ 基线语义与局限（重要）
 
-> 以下为 `eval_report.py` 对冻结 golden 集的历史快照指标；
-> EDD 门禁的活基线以 `eval/baseline.json` 的 `metrics` 为准。
+本地 EDD 的 Recall@5/MRR **绝对值不代表真实召回水平**，只用于**回归检测**。
+
+原因：fixture DB 是 golden 集涉及 KU 的子集（当前约 80 KU，真实库 31543 个），
+查询候选池被裁剪，ground truth 几乎必然排第一 → 本地 Recall@5 趋近 100% 是假象。
+真实召回水平需在**部署后**用远程全量库只读验证（`eval_generate.py` + `eval_report.py`）。
+
+**EDD 的真正价值**：同一 fixture DB 上，代码改动后指标是否下降（防回归），
+而非评估绝对召回质量。不要拿本地 Recall@5 当优化检索的目标值。
+
+golden 集会随 KU id 体系变化而失效（如 v2 的 `em_` 前缀 → 现语义化命名），
+`eval_report.py --skip-freshness` 之外，`eval_run.py` 首跑若 Recall 异常低，
+先检查 golden 集 KU id 是否仍在库中（`snapshot_eval_pair.py` 会打印失配数）。
+
+### v2 历史基线（已失效，仅存档）
+
+> v2 的 KU id 体系（`em_` 前缀）已与当前库（语义化命名）失配，1162/1163 ground truth 失效，
+> 以下数字不可复现。当前活基线以 v3 + `eval/baseline.json` 为准。
 
 | 指标 | 基线值 |
 |------|--------|

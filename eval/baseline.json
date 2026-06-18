@@ -1,0 +1,65 @@
+{
+  "version": "1.0",
+  "golden_dataset_path": "/repo/eval/golden_dataset_v3.json",
+  "golden_dataset_sha256": "988338abce6c109edd16a00e50ded4af8d47da5decbcc10d706028867157de67",
+  "fixture_db_path": "/repo/tests/fixtures/eval_snapshot.db",
+  "fixture_db_sha256": "4a7d4c268fdc8bd94d0e45f8645ce014e8656943f8e5139d9a2beebb851ea128",
+  "snapshot_stats": {
+    "kus_in_golden": 80,
+    "kus_extracted": 80,
+    "entities_extracted": 156,
+    "clusters_extracted": 80
+  },
+  "snapshot_metadata": {
+    "db_path": "/app/data/news.db",
+    "graph_enabled": false,
+    "top_k": 20
+  },
+  "metrics": {
+    "overall": {
+      "count": 362.0,
+      "recall_at_5": 1.0,
+      "recall_at_20": 1.0,
+      "mrr": 0.9930939226519337,
+      "ndcg_at_10": 0.0
+    },
+    "by_query_type": {
+      "entity_only": {
+        "count": 80.0,
+        "recall_at_5": 1.0,
+        "recall_at_20": 1.0,
+        "mrr": 0.9875,
+        "ndcg_at_10": 0.0
+      },
+      "entity_time": {
+        "count": 80.0,
+        "recall_at_5": 1.0,
+        "recall_at_20": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 0.0
+      },
+      "entity_event_type": {
+        "count": 73.0,
+        "recall_at_5": 1.0,
+        "recall_at_20": 1.0,
+        "mrr": 0.9931506849315068,
+        "ndcg_at_10": 0.0
+      },
+      "multi_entity": {
+        "count": 54.0,
+        "recall_at_5": 1.0,
+        "recall_at_20": 1.0,
+        "mrr": 1.0,
+        "ndcg_at_10": 0.0
+      },
+      "broad_topic": {
+        "count": 75.0,
+        "recall_at_5": 1.0,
+        "recall_at_20": 1.0,
+        "mrr": 0.9866666666666667,
+        "ndcg_at_10": 0.0
+      }
+    }
+  },
+  "created_at": null
+}
