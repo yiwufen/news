@@ -30,6 +30,7 @@ codex-manual-check-pipeline/
 .idea/
 uv.lock
 .claude/settings.local.json
+.zcode/settings.local.json
 
 # Frontend
 frontend/node_modules/

@@ -40,9 +40,9 @@ https://182-61-1-77.nip.io/mcp
 
 协议：**Streamable HTTP**（MCP 2024-11-05），无需 API Key。
 
-### Claude Code 接入
+### ZCode 接入
 
-在 Claude Code 配置中添加 MCP server：
+在 ZCode 配置中添加 MCP server：
 
 ```json
 {
@@ -275,7 +275,7 @@ docker compose exec mcp python -m src.cli serve
 ## Documentation
 
 - [docs/SHARED_RULES.md](docs/SHARED_RULES.md) — Project authority & guardrails
-- [CLAUDE.md](CLAUDE.md) — Claude Code entry point
+- [ZCODE.md](ZCODE.md) — ZCode entry point
 
 ---
 

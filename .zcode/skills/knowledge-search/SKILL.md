@@ -1,8 +1,6 @@
 ---
 name: knowledge-search
 description: Search the financial knowledge base for entities, events, relationships, timelines, and risk assessments. Use when the user asks about a company, person, or financial topic that requires structured knowledge retrieval.
-allowed-tools: Bash
-argument-hint: [entity names or query]
 ---
 
 # Knowledge Search
@@ -90,13 +88,13 @@ Returns JSON with `nodes`, `edges`, `paths` for the selected clusters.
 
 ## Examples from user arguments
 
-If the user invokes `/knowledge-search 小米集团`, run:
+If the user invokes `$knowledge-search 小米集团`, run:
 
 ```bash
 knowledge-cli search --entities "小米集团"
 ```
 
-If the user invokes `/knowledge-search 小米和腾讯的关系`, determine intent and entities, then run:
+If the user invokes `$knowledge-search 小米和腾讯的关系`, determine intent and entities, then run:
 
 ```bash
 knowledge-cli search --entities "小米集团" --intent RELATIONSHIP_QUERY --target-entity "腾讯" --hops 2

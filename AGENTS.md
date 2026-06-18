@@ -5,7 +5,7 @@
 ## 进入仓库后先看什么
 
 1. 先读 `docs/SHARED_RULES.md`
-2. 涉及 Claude 目录规则时，再看 `.claude/rules/`
+2. 涉及 ZCode 目录规则时，再看 `.zcode/rules/`
 
 ## 必须遵守的项目约定
 
@@ -25,4 +25,4 @@ uv run pyright .
 
 - 优先复用现有模块和文档，不额外复制一份项目规则
 - 代码或注释如果需要引用规范，优先引用 `docs/SHARED_RULES.md`
-- 若 `.claude/rules/` 与共享规范看起来重复，以共享规范为准，并仅把 `.claude/rules/` 视为 Claude 的机制适配层
+- 若 `.zcode/rules/` 与共享规范看起来重复，以共享规范为准，并仅把 `.zcode/rules/` 视为 ZCode 的机制适配层

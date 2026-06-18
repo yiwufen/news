@@ -1,10 +1,10 @@
 # 项目共享规范
 
-本文件是 Claude Code 与 Codex 共用的项目级规则真源。涉及项目目标、核心数据契约、图谱设计、离线知识化流程、检索产物、开发约束与进度维护时，统一以本文件为准。
+本文件是 ZCode 与 Codex 共用的项目级规则真源。涉及项目目标、核心数据契约、图谱设计、离线知识化流程、检索产物、开发约束与进度维护时，统一以本文件为准。
 
 ## 1. 项目目标
 
-项目目标：构建一个面向金融场景的知识检索 CLI 工具，将原始消息加工为可检索、可溯源、可组合的知识层，供 Claude Code 等 agent 作为工具调用。
+项目目标：构建一个面向金融场景的知识检索 CLI 工具，将原始消息加工为可检索、可溯源、可组合的知识层，供 ZCode 等 agent 作为工具调用。
 
 当前项目重点不是直接产出分析报告，而是提供：
 
@@ -380,12 +380,12 @@ uv run pyright .
 - `docs/SHARED_RULES.md`：项目级唯一真源
 - `README.md`：外部入口与高层说明
 - `AGENTS.md`：Codex 入口
-- `CLAUDE.md`：Claude Code 入口
-- `.claude/rules/`：Claude 机制适配层与历史专题规则
+- `ZCODE.md`：ZCode 入口
+- `.zcode/rules/`：ZCode 机制适配层与历史专题规则
 
 如果多个文档表述不一致，优先级如下：
 
 1. `docs/SHARED_RULES.md`
 2. 代码中的真实实现
 3. `README.md`
-4. `AGENTS.md` / `CLAUDE.md` / `.claude/rules/`
+4. `AGENTS.md` / `ZCODE.md` / `.zcode/rules/`

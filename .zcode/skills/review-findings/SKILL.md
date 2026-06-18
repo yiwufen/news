@@ -1,8 +1,6 @@
 ---
 name: review-findings
 description: Review user testing findings from the user-tester agent. Use when you are about to modify retrieval, search, or output-related code, or when the user asks about known issues or quality status.
-allowed-tools: Read, Grep, Glob
-argument-hint: [optional: severity filter like HIGH or CRITICAL, or category like retrieval-accuracy]
 ---
 
 # Review User Testing Findings
