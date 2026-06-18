@@ -130,3 +130,134 @@ curl -s -m 15 https://182-61-1-77.nip.io/mcp \
 | Neo4j 图数据 | Docker named volume `neo4j-data` | 不影响 |
 
 部署只重建镜像和替换容器，数据卷不受影响。
+
+## EDD 数据流：本地与远程的职责分工
+
+> EDD（Eval-Driven Development）的回归门禁在本地跑，但 fixture DB 产物必须在远程真实库上生成。这一节固化两者的分工、产物生命周期、以及远程执行的具体方法。
+
+### 核心分工
+
+| 职责 | 在哪 | 依赖什么 | 频率 |
+|------|------|---------|------|
+| **回归检测**（代码改动后检索是否退化） | 本地 | `tests/fixtures/eval_snapshot.db` + `eval/golden_dataset_v3.json`（都在 Git 里） | 每次改检索相关代码 |
+| **真实召回评估**（绝对召回水平） | 远程全量库 | `/home/deployer/knowledge/data/news.db`（189MB，31543 KU） | 部署后按需 |
+| **fixture 产物生成**（snapshot） | 远程 | 真实库 + golden 集 | golden 失效时才重跑 |
+
+**关键约束**：本地 `data/news.db`（80MB）**不能用于 EDD**——它与 golden 集的 KU id 严重失配（仅 2/1163 命中），因为爬虫持续灌新数据、本地库严重滞后。EDD 的所有真实数据依赖必须走远程。
+
+### 产物生命周期
+
+```
+远程真实库 (189MB)
+    │
+    │  snapshot_eval_pair.py（远程跑一次）
+    ▼
+tests/fixtures/eval_snapshot.db (0.89MB) ──┐
+eval/golden_dataset_v3.json (380KB)        ├─ 入 Git，hash 锁定成对
+eval/baseline.json (metrics)               ┘
+    │
+    │  拉回本地，提交
+    ▼
+本地：eval_run.py → eval_guard.py（日常回归门禁）
+```
+
+三个产物**成对绑定**，由 sha256 hash 锁定（见 `eval/baseline.json`）。任何一方单独更新都会被 `eval_guard.py` 判为漂移硬失败。
+
+### 何时重生成 fixture 产物
+
+golden 集 KU id 会随抽取逻辑演进而失效（历史教训：v2 用 `em_` 前缀，后改语义化命名 `regulatory_action_*`，导致 1162/1163 失配）。**重生成信号**：
+
+- `eval_run.py` 首跑 Recall 异常低（接近 0）→ 大概率 golden id 失效
+- `snapshot_eval_pair.py` 打印"⚠ N 个目标 KU 在源库中不存在"，N 占比高
+- 库经历重建（`data/news.db` 被清空重灌）
+
+### 远程执行方法（重要：避坑指南）
+
+远程宿主 **没有 `uv`、没装 pydantic**，必须在容器内跑。但容器有多个挂载/PATH 陷阱，必须按下面方式执行。
+
+#### 陷阱与正确做法
+
+| 陷阱 | 原因 | 正确做法 |
+|------|------|---------|
+| `-v $(pwd):/app` 覆盖容器 `.venv` | 镜像把依赖装在 `/app/.venv`，挂载整个 `/app` 会盖掉 | 挂到 **`/repo`**，不碰 `/app` |
+| `PATH=/app/.venv/bin:$PATH` 被 SSH 展开 | 多层嵌套引号下 `$PATH` 被本地 shell 提前展开成 Windows 路径 | 用 `--entrypoint /app/.venv/bin/python` 直接指定解释器，**不碰 PATH 变量** |
+| `uv: command not found` | 远程宿主无 uv | 进容器用镜像自带的 `/app/.venv/bin/python` |
+| SSH 频繁断连 | 远程 SSH 稳定性差 | **后台执行**：`nohup script &` + 轮询 `.tmp/*.done` |
+| scp 传空文件 | 本地文件在传输前被其他命令清空 | scp 前先 `ls -la` 确认本地文件非空，scp 后校验远程字节数 |
+
+#### 可直接复用的执行模板
+
+把要跑的命令写成独立 `.sh` 脚本（避免 SSH 嵌套转义），scp 到远程，后台执行。核心模式：
+
+```bash
+# 1. 本地写脚本（用绝对路径参数，不依赖工作目录，不碰 PATH 变量）
+cat > /tmp/remote_job.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+cd /home/deployer/knowledge/repo
+rm -f .tmp/job.log .tmp/job.done
+mkdir -p .tmp
+docker compose run --rm --no-deps \
+  -v "$(pwd):/repo" \
+  -e PYTHONIOENCODING=utf-8 \
+  --entrypoint /app/.venv/bin/python \
+  mcp /repo/scripts/<script>.py \
+  --db /app/data/news.db \
+  --output /repo/<output> \
+  > .tmp/job.log 2>&1
+echo "EXIT=$?" > .tmp/job.done
+EOF
+
+# 2. scp 到远程（前后校验大小）
+scp /tmp/remote_job.sh baidu:/home/deployer/knowledge/repo/remote_job.sh
+ssh baidu "ls -la /home/deployer/knowledge/repo/remote_job.sh"  # 确认非 0 字节
+
+# 3. 后台执行（立即返回，不卡 SSH）
+ssh baidu "cd /home/deployer/knowledge/repo && nohup bash remote_job.sh > .tmp/wrapper.log 2>&1 & echo pid=\$!"
+
+# 4. 轮询完成标志（不依赖 SSH 保持连接）
+ssh baidu "cat /home/deployer/knowledge/repo/.tmp/job.done 2>/dev/null || echo RUNNING; tail -15 /home/deployer/knowledge/repo/.tmp/job.log"
+
+# 5. 产物拉回本地
+scp baidu:/home/deployer/knowledge/repo/<output> <local_path>
+
+# 6. 清理远程临时脚本
+ssh baidu "rm /home/deployer/knowledge/repo/remote_job.sh"
+```
+
+**关键三原则**：
+1. repo 挂到 `/repo`（绝不挂 `/app`，会毁掉容器 venv）
+2. 用 `--entrypoint /app/.venv/bin/python`（绝不靠 PATH 变量）
+3. 后台 `nohup &` + 轮询 `.done`（绝不指望 SSH 保持连接）
+
+### 完整 fixture 重生成流程
+
+当 golden 集失效需要从头重建时，远程两步合一（生成 golden + snapshot fixture）：
+
+```bash
+# Step 1: rule-based 重生成 golden 集（基于当前库采样 + 跑检索算 rank）
+docker compose run --rm --no-deps -v "$(pwd):/repo" \
+  --entrypoint /app/.venv/bin/python \
+  mcp /repo/scripts/eval_generate.py \
+  --db /app/data/news.db \
+  --output /repo/eval/golden_dataset_v3.json \
+  --rule-based --target 80 --seed 42 --top-k 20
+
+# Step 2: 基于 v3 snapshot fixture DB + baseline 骨架
+docker compose run --rm --no-deps -v "$(pwd):/repo" \
+  --entrypoint /app/.venv/bin/python \
+  mcp /repo/scripts/snapshot_eval_pair.py \
+  --golden /repo/eval/golden_dataset_v3.json \
+  --source-db /app/data/news.db \
+  --fixture /repo/tests/fixtures/eval_snapshot.db \
+  --baseline /repo/eval/baseline.json
+
+# Step 3: 拉回本地，首跑写入基线 metrics
+scp baidu:/home/deployer/knowledge/repo/{eval/golden_dataset_v3.json,eval/baseline.json,tests/fixtures/eval_snapshot.db} ./
+uv run python scripts/eval_run.py --init-baseline   # 填 baseline.json 的 metrics
+
+# Step 4: 提交三个产物（成对，hash 锁定）
+git add eval/golden_dataset_v3.json eval/baseline.json tests/fixtures/eval_snapshot.db
+```
+
+> golden 版本号递增（v3 → v4...），同步更新 `retrieval-code.md` 和 `SHARED_RULES.md` 里的路径引用。
