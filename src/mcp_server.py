@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from anyio import CapacityLimiter
+from anyio.to_thread import run_sync as run_sync_in_thread
 from mcp.server.fastmcp import FastMCP
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -12,6 +14,11 @@ from starlette.responses import JSONResponse
 
 from src.paths import DEFAULT_DB_PATH
 from src.schemas.query import IntentType, make_query
+
+# to_thread 并发上限。anyio 默认 limiter=40，但部署宿主机仅 4GB 内存；
+# 共享单例已经把每请求内存压到一份索引，这里限制并发线程数可避免极端并发
+# 下线程/连接开销失控。可通过环境变量覆盖。
+_DEFAULT_THREAD_LIMIT = 16
 
 
 class MCPApiKeyMiddleware(BaseHTTPMiddleware):
@@ -39,7 +46,12 @@ def create_server(
     port: int = 8000,
     db_path: str = DEFAULT_DB_PATH,
 ) -> FastMCP:
-    """Create a configured FastMCP server with all tools registered."""
+    """Create a configured FastMCP server with all tools registered.
+
+    Tools are ``async def`` and offload the blocking retrieval work to a
+    bounded thread pool (``anyio.to_thread.run_sync``) so the event loop is
+    never blocked and multiple MCP requests can be served concurrently.
+    """
 
     mcp = FastMCP(
         name="knowledge-cli",
@@ -60,12 +72,16 @@ def create_server(
         stateless_http=True,
     )
 
+    # Shared capacity limiter bounds concurrent blocking work across all tools.
+    thread_limit = int(os.environ.get("MCP_THREAD_LIMIT", _DEFAULT_THREAD_LIMIT))
+    limiter: CapacityLimiter = CapacityLimiter(thread_limit)
+
     # ------------------------------------------------------------------
     # Tools
     # ------------------------------------------------------------------
 
     @mcp.tool()
-    def search_knowledge(
+    async def search_knowledge(
         entities: list[str],
         intent: str = "ENTITY_OVERVIEW",
         time_range: str | None = None,
@@ -131,6 +147,7 @@ def create_server(
         """
         from src.orchestration.graph import run_pipeline
 
+        # Cheap validation on the event loop before occupying a worker thread.
         try:
             parsed_intent = IntentType(intent)
         except ValueError:
@@ -153,17 +170,20 @@ def create_server(
             target_entity=target_entity,
         )
 
-        result = run_pipeline(
-            structured_query=structured_query,
-            top_k=top_k,
-            hops=hops,
-            db_path=db_path,
+        # Offload the blocking retrieval to a bounded worker thread so the
+        # event loop stays free for concurrent requests.
+        return await run_sync_in_thread(
+            lambda: run_pipeline(
+                structured_query=structured_query,
+                top_k=top_k,
+                hops=hops,
+                db_path=db_path,
+            ).to_dict(),
+            limiter=limiter,
         )
 
-        return result.to_dict()
-
     @mcp.tool()
-    def expand_graph_detail(
+    async def expand_graph_detail(
         cluster_ids: list[str],
     ) -> dict[str, Any]:
         """展开图谱聚类的完整节点、边和路径详情。
@@ -191,6 +211,9 @@ def create_server(
         """
         from src.orchestration.graph import expand_graph_detail as _expand
 
-        return _expand(cluster_ids=cluster_ids, db_path=db_path)
+        return await run_sync_in_thread(
+            lambda: _expand(cluster_ids=cluster_ids, db_path=db_path),
+            limiter=limiter,
+        )
 
     return mcp

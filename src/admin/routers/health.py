@@ -25,10 +25,10 @@ def health_check(settings: AdminSettings = Depends(get_settings)) -> HealthRespo
     neo4j_connected = None
     if settings.neo4j_password:
         try:
-            from src.graph.connection import Neo4jConnection
+            # 统一走加锁工厂，避免绕过 get_connection 的并发构造 race。
+            from src.graph.connection import get_connection
 
-            neo4j_conn = Neo4jConnection()
-            neo4j_connected = neo4j_conn.health_check()
+            neo4j_connected = get_connection().health_check()
         except Exception:
             neo4j_connected = False
 

@@ -9,6 +9,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Windows 保留设备名误生成的空文件（来自 shell 重定向）
+nul
+
 # 虚拟环境
 .venv/
 venv/

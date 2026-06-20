@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import threading
 from pathlib import Path
 
 import faiss
@@ -40,6 +42,14 @@ class VectorIndex:
 
     Cosine similarity via inner product on unit vectors.  No server required.
     Index and ID map are persisted to disk after each write operation.
+
+    并发说明：
+    - 只读路径（``search``/``is_available``/``indexed_count``）在 serve 进程中
+      被多线程共享调用，``_load`` 使用 double-checked locking 保证首次加载只
+      读盘一次，并记录索引文件 mtime；检测到离线 ingestion 写出新索引时
+      惰性 reload，避免长期读到陈旧数据。
+    - 写路径（``index_units``/``rebuild``）只在离线进程调用，与 serve 的共享
+      实例进程隔离，不受读路径加锁影响。
     """
 
     def __init__(self, db_path: str, provider: EmbeddingProvider) -> None:
@@ -53,6 +63,10 @@ class VectorIndex:
         self._reverse_map: dict[str, int] = {}  # ku_id → int64
         self._next_id: int = 0
 
+        # Concurrency: protect lazy load + mtime-driven reload.
+        self._lock = threading.Lock()
+        self._loaded_index_mtime: float | None = None
+
     # ------------------------------------------------------------------
     # Persistence helpers
     # ------------------------------------------------------------------
@@ -63,10 +77,31 @@ class VectorIndex:
     def _id_map_path(self) -> Path:
         return self._vec_dir / _ID_MAP_FILE
 
+    def _index_mtime(self) -> float | None:
+        """Current on-disk index file mtime, or None if file is absent."""
+        path = self._index_path()
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return None
+
     def _load(self) -> None:
-        """Load existing index and ID map from disk (if present)."""
+        """Load existing index and ID map from disk (if present).
+
+        Thread-safe double-checked locking. Records the on-disk index mtime so
+        the caller can detect subsequent updates and trigger a reload.
+        """
         if self._index is not None:
             return
+
+        with self._lock:
+            if self._index is not None:
+                return
+            self._load_locked()
+
+    def _load_locked(self) -> None:
+        """Perform the actual disk read. Caller must hold ``self._lock``."""
+        current_mtime = self._index_mtime()
 
         if self._index_path().exists():
             idx = faiss.read_index(str(self._index_path()))
@@ -88,11 +123,46 @@ class VectorIndex:
             self._reverse_map = {}
             self._next_id = 0
 
+        self._loaded_index_mtime = current_mtime
+
+    def _maybe_reload_locked(self) -> None:
+        """Reload if the on-disk index changed since the last load.
+
+        Caller must hold ``self._lock``. Cheap mtime check; only does an actual
+        reload when the file was updated (e.g. offline ingestion rebuilt it).
+        """
+        if self._loaded_index_mtime is None and self._index is None:
+            self._load_locked()
+            return
+
+        current_mtime = self._index_mtime()
+        if current_mtime != self._loaded_index_mtime:
+            logger.info(
+                "FAISS index changed on disk (mtime %s → %s), reloading",
+                self._loaded_index_mtime,
+                current_mtime,
+            )
+            self._index = None
+            self._load_locked()
+
+    def _ensure_fresh(self) -> None:
+        """Ensure the in-memory index reflects the latest on-disk file.
+
+        Entry point for read paths: cheap when the file is unchanged (one
+        ``stat`` + lock-free early return), reloads only when mtime changes.
+        """
+        if self._index is None:
+            self._load()
+            return
+        if self._index_mtime() == self._loaded_index_mtime:
+            return
+        with self._lock:
+            self._maybe_reload_locked()
+
     def _save(self) -> None:
         """Persist current index and ID map to disk atomically."""
         if self._index is None:
             return
-        import os
         self._vec_dir.mkdir(parents=True, exist_ok=True)
         # Write to temp files, then atomic rename
         idx_tmp = str(self._index_path()) + ".tmp"
@@ -111,6 +181,8 @@ class VectorIndex:
                 except OSError:
                     pass
             raise
+        # Refresh mtime after write so subsequent _ensure_fresh doesn't reload.
+        self._loaded_index_mtime = self._index_mtime()
 
     def _create_index(self, dim: int) -> faiss.Index:
         """Create a new FAISS IndexIDMap wrapping IndexFlatIP."""
@@ -167,7 +239,7 @@ class VectorIndex:
 
     def search(self, query_text: str, *, top_k: int = 20) -> list[tuple[str, float]]:
         """Cosine similarity search. Returns (ku_id, similarity) sorted desc."""
-        self._load()
+        self._ensure_fresh()
         if self._index is None or self._index.ntotal == 0:
             return []
 
@@ -191,11 +263,11 @@ class VectorIndex:
         return results
 
     def is_available(self) -> bool:
-        self._load()
+        self._ensure_fresh()
         return self._index is not None and self._index.ntotal > 0
 
     def indexed_count(self) -> int:
-        self._load()
+        self._ensure_fresh()
         if self._index is None:
             return 0
         return self._index.ntotal
@@ -209,9 +281,11 @@ class VectorIndex:
             self._id_map_path().unlink()
 
         # Reset in-memory state
-        self._index = None
-        self._id_map = {}
-        self._reverse_map = {}
-        self._next_id = 0
+        with self._lock:
+            self._index = None
+            self._id_map = {}
+            self._reverse_map = {}
+            self._next_id = 0
+            self._loaded_index_mtime = None
 
         return self.index_units(units)

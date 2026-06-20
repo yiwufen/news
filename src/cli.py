@@ -15,6 +15,7 @@ import argparse
 import io
 import json
 import logging
+import os
 import sys
 import time
 from dataclasses import asdict, is_dataclass
@@ -122,11 +123,18 @@ def cmd_graph_expand(args: argparse.Namespace) -> None:
 
 def cmd_serve(args: argparse.Namespace) -> None:
     """Start the knowledge-cli MCP server for remote access."""
+    import atexit
+
     import uvicorn
 
     from src.admin.mcp_logger import MCPCallLogger
     from src.admin.mcp_middleware import MCPCallTrackingMiddleware
+    from src.graph.connection import close_connection
     from src.mcp_server import MCPApiKeyMiddleware, create_server
+
+    # Mark this process as the serve process so retrieval paths use shared
+    # read-only singletons (one FAISS index, one set of repos in memory).
+    os.environ["KNOWLEDGE_SERVE_MODE"] = "1"
 
     server = create_server(
         host=args.host,
@@ -138,6 +146,10 @@ def cmd_serve(args: argparse.Namespace) -> None:
     call_logger = MCPCallLogger(args.db)
     starlette_app.add_middleware(MCPCallTrackingMiddleware, logger=call_logger)
     starlette_app.add_middleware(MCPApiKeyMiddleware)
+
+    # Ensure the shared Neo4j driver is closed on exit (replaces the removed
+    # __del__ shutdown path).
+    atexit.register(close_connection)
 
     transport: str = "streamable-http"
     print(

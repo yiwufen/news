@@ -5,19 +5,71 @@ Knowledge-graph retrieval over Entity -> INVOLVED_IN -> EventCluster.
 from __future__ import annotations
 
 import json
+import logging
+import time
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any, ContextManager, Iterable, Protocol, cast
+from typing import Any, Callable, ContextManager, Iterable, Protocol, TypeVar, cast
+
+from neo4j.exceptions import (
+    ServiceUnavailable,
+    SessionExpired,
+    ReadServiceUnavailable,
+    ConnectionAcquisitionTimeoutError,
+    DatabaseUnavailable,
+)
 
 from src.entities import Entity, EntityRepository
 from src.event_merging import EventCluster, EventClusterRepository
 from src.graph.connection import get_connection
 from src.schemas.query import StructuredQuery
 
+logger = logging.getLogger(__name__)
 
 DEFAULT_HOPS = 1
 MAX_HOPS = 5
 MAX_PATH_RESULTS = 50
+
+# 瞬时连接异常：并发下偶发的服务抖动，短重试 1 次通常可恢复。
+_TRANSIENT_EXC: tuple[type[BaseException], ...] = (
+    ServiceUnavailable,
+    SessionExpired,
+    ReadServiceUnavailable,
+    ConnectionAcquisitionTimeoutError,
+    DatabaseUnavailable,
+)
+_TRANSIENT_RETRY_DELAY = 0.2
+_TRANSIENT_MAX_RETRIES = 1
+
+T = TypeVar("T")
+
+
+def _run_with_transient_retry(
+    session_ctx: ContextManager[Any],
+    fn: Callable[[Any], T],
+) -> T:
+    """Run a Cypher read with one short retry on transient connection errors.
+
+    Keeps existing degrading behavior for non-transient failures: callers wrap
+    the whole call in try/except and produce a degraded result.
+    """
+    last_exc: BaseException | None = None
+    for attempt in range(_TRANSIENT_MAX_RETRIES + 1):
+        try:
+            with session_ctx as session:
+                return fn(session)
+        except _TRANSIENT_EXC as exc:
+            last_exc = exc
+            if attempt < _TRANSIENT_MAX_RETRIES:
+                logger.warning(
+                    "Neo4j transient error (%s), retrying once", type(exc).__name__
+                )
+                time.sleep(_TRANSIENT_RETRY_DELAY)
+                continue
+            raise
+    # Unreachable: loop either returns or raises; satisfy type checker.
+    assert last_exc is not None
+    raise last_exc
 
 
 class GraphSessionLike(Protocol):
@@ -197,32 +249,40 @@ class KnowledgeGraphRetriever:
         max_edges = 2 * effective_hops - 1  # N Entity-hops = 2N-1 max edges to farthest EC
 
         try:
-            with self.connection.session() as session:
-                raw_records = session.run(
-                    f"""
-                    MATCH path = (start:Entity)-[:INVOLVED_IN*1..{max_edges}]-(cluster:EventCluster)
-                    WHERE start.id IN $start_entity_ids
-                    WITH start, cluster
-                    OPTIONAL MATCH (cluster)<-[:INVOLVED_IN]-(neighbor:Entity)
-                    RETURN
-                        start.id AS start_entity_id,
-                        cluster.id AS cluster_id,
-                        cluster.cluster_type AS cluster_type,
-                        cluster.title AS cluster_title,
-                        cluster.summary AS cluster_summary,
-                        cluster.primary_entity_id AS cluster_primary_entity_id,
-                        cluster.member_ku_ids AS member_ku_ids,
-                        cluster.source_doc_ids AS source_doc_ids,
-                        cluster.conflict_status AS conflict_status,
-                        cluster.representative_ku_id AS representative_ku_id,
-                        cluster.member_count AS member_count,
-                        cluster.source_count AS source_count,
-                        cluster.time_range_json AS time_range_json,
-                        neighbor.id AS neighbor_entity_id
-                    """,
-                    start_entity_ids=[entity.entity_id for entity in start_entities],
-                )
-                records = list(cast(Iterable[Any], raw_records))
+            records = _run_with_transient_retry(
+                self.connection.session(),
+                lambda session: list(
+                    cast(
+                        Iterable[Any],
+                        session.run(
+                            f"""
+                            MATCH path = (start:Entity)-[:INVOLVED_IN*1..{max_edges}]-(cluster:EventCluster)
+                            WHERE start.id IN $start_entity_ids
+                            WITH start, cluster
+                            OPTIONAL MATCH (cluster)<-[:INVOLVED_IN]-(neighbor:Entity)
+                            RETURN
+                                start.id AS start_entity_id,
+                                cluster.id AS cluster_id,
+                                cluster.cluster_type AS cluster_type,
+                                cluster.title AS cluster_title,
+                                cluster.summary AS cluster_summary,
+                                cluster.primary_entity_id AS cluster_primary_entity_id,
+                                cluster.member_ku_ids AS member_ku_ids,
+                                cluster.source_doc_ids AS source_doc_ids,
+                                cluster.conflict_status AS conflict_status,
+                                cluster.representative_ku_id AS representative_ku_id,
+                                cluster.member_count AS member_count,
+                                cluster.source_count AS source_count,
+                                cluster.time_range_json AS time_range_json,
+                                neighbor.id AS neighbor_entity_id
+                            """,
+                            start_entity_ids=[
+                                entity.entity_id for entity in start_entities
+                            ],
+                        ),
+                    )
+                ),
+            )
         except Exception as exc:
             return GraphRetrievalResult(
                 used=False,
@@ -661,28 +721,34 @@ class KnowledgeGraphRetriever:
         max_edges = 2 * effective_hops  # N Entity-hops = 2N max edges for A-to-B path
 
         try:
-            with self.connection.session() as session:
-                raw_records = session.run(
-                    f"""
-                    MATCH path = (a:Entity {{id: $entity_a_id}})-[:INVOLVED_IN*1..{max_edges}]-(b:Entity {{id: $entity_b_id}})
-                    WHERE a.id <> b.id
-                    RETURN
-                        [n IN nodes(path) | {{
-                            id: n.id,
-                            type: CASE WHEN n:Entity THEN 'Entity' ELSE 'EventCluster' END,
-                            name: coalesce(n.name, n.title),
-                            entity_type: n.entity_type,
-                            cluster_type: n.cluster_type
-                        }}] AS path_nodes,
-                        [r IN relationships(path) | type(r)] AS path_rels,
-                        length(path) AS path_length
-                    ORDER BY path_length
-                    LIMIT {MAX_PATH_RESULTS}
-                    """,
-                    entity_a_id=entity_a.entity_id,
-                    entity_b_id=entity_b.entity_id,
-                )
-                records = list(cast(Iterable[Any], raw_records))
+            records = _run_with_transient_retry(
+                self.connection.session(),
+                lambda session: list(
+                    cast(
+                        Iterable[Any],
+                        session.run(
+                            f"""
+                            MATCH path = (a:Entity {{id: $entity_a_id}})-[:INVOLVED_IN*1..{max_edges}]-(b:Entity {{id: $entity_b_id}})
+                            WHERE a.id <> b.id
+                            RETURN
+                                [n IN nodes(path) | {{
+                                    id: n.id,
+                                    type: CASE WHEN n:Entity THEN 'Entity' ELSE 'EventCluster' END,
+                                    name: coalesce(n.name, n.title),
+                                    entity_type: n.entity_type,
+                                    cluster_type: n.cluster_type
+                                }}] AS path_nodes,
+                                [r IN relationships(path) | type(r)] AS path_rels,
+                                length(path) AS path_length
+                            ORDER BY path_length
+                            LIMIT {MAX_PATH_RESULTS}
+                            """,
+                            entity_a_id=entity_a.entity_id,
+                            entity_b_id=entity_b.entity_id,
+                        ),
+                    )
+                ),
+            )
         except Exception as exc:
             return GraphRetrievalResult(
                 used=False,

@@ -14,6 +14,33 @@ from src.paths import DEFAULT_DB_PATH
 from src.schemas.query import IntentType, StructuredQuery
 from src.orchestration.result import GraphMeta, PipelineResult, RetrievalMeta
 from src.retrieval.knowledge_search import KnowledgeSearchRequest, KnowledgeSearcher
+from src.retrieval.serve_singletons import (
+    get_entity_repository,
+    get_graph_retriever,
+    get_searcher,
+    is_serve_mode,
+)
+
+
+def _resolve_searcher(db_path: str) -> KnowledgeSearcher:
+    """Shared singleton in serve mode; fresh instance otherwise."""
+    if is_serve_mode():
+        return get_searcher(db_path)
+    return KnowledgeSearcher(db_path)
+
+
+def _resolve_entity_repo(db_path: str) -> EntityRepository:
+    """Shared singleton in serve mode; fresh instance otherwise."""
+    if is_serve_mode():
+        return get_entity_repository(db_path)
+    return EntityRepository(db_path)
+
+
+def _resolve_graph_retriever(db_path: str) -> KnowledgeGraphRetriever:
+    """Shared singleton in serve mode; fresh instance otherwise."""
+    if is_serve_mode():
+        return get_graph_retriever(db_path)
+    return KnowledgeGraphRetriever(db_path=db_path)
 
 
 @dataclass
@@ -46,7 +73,7 @@ def _enhance_with_graph(
             errors=[],
         )
 
-    entity_repo = EntityRepository(db_path)
+    entity_repo = _resolve_entity_repo(db_path)
     start_entities = entity_repo.find_by_names(structured_query.entities)
     if not start_entities:
         return _GraphEnhancement(
@@ -56,7 +83,7 @@ def _enhance_with_graph(
             errors=[],
         )
 
-    retriever = KnowledgeGraphRetriever(db_path=db_path, entity_repo=entity_repo)
+    retriever = _resolve_graph_retriever(db_path)
 
     # Handle A-B relationship path queries
     if (
@@ -100,8 +127,7 @@ def expand_graph_detail(
 
     Called by the ``graph-expand`` CLI subcommand.
     """
-    entity_repo = EntityRepository(db_path)
-    retriever = KnowledgeGraphRetriever(db_path=db_path, entity_repo=entity_repo)
+    retriever = _resolve_graph_retriever(db_path)
     result = retriever.expand_clusters(cluster_ids)
     return result.to_graph_dict(enabled=True)
 
@@ -155,7 +181,7 @@ def run_pipeline(
     if hops is not None:
         effective_query = replace(structured_query, hops=hops)
 
-    searcher = KnowledgeSearcher(db_path)
+    searcher = _resolve_searcher(db_path)
 
     request = KnowledgeSearchRequest(
         structured_query=effective_query,
@@ -216,8 +242,8 @@ def run_pipeline(
 
     # Structured warnings for empty results
     if search_result.total_count == 0 and effective_query.entities:
-        entity_repo = EntityRepository(db_path)
-        matched = entity_repo.find_by_names(effective_query.entities)
+        # Reuse the searcher's entity repo rather than constructing a new one.
+        matched = searcher.entities.find_by_names(effective_query.entities)
         if not matched:
             entity_names = ", ".join(effective_query.entities)
             warnings.append({
