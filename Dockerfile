@@ -29,6 +29,7 @@ COPY --from=builder /app/.venv /app/.venv
 # Copy application code
 COPY --from=builder /app/src /app/src
 COPY --from=builder /app/collectors /app/collectors
+COPY docker/healthcheck.py /app/healthcheck.py
 
 # Ensure venv is on PATH
 ENV PATH="/app/.venv/bin:$PATH"
