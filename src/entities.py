@@ -886,6 +886,23 @@ class EntityResolver:
                     unit_evidence=[e.text for e in unit.evidence],
                 )
                 if matched is None:
+                    # Write-time dedup guard: log when we are about to create a
+                    # new entity whose normalized name already exists in the
+                    # index. _find_candidates consults name_index, so matched
+                    # being None while name_index has the normalized form signals
+                    # a cache/index gap or a resolver regression. Non-blocking —
+                    # surfaces recurrence in logs without changing write semantics.
+                    norm_mention = normalize_entity_name(entity_ref.mention)
+                    if norm_mention and name_index.get(norm_mention):
+                        logger.warning(
+                            "Entity guard: creating new entity for mention %r "
+                            "(normalized=%r) while %d existing entities share "
+                            "that normalized_name; possible cache/index gap. "
+                            "existing_ids=%s",
+                            entity_ref.mention, norm_mention,
+                            len(name_index[norm_mention]),
+                            name_index[norm_mention][:5],
+                        )
                     # Use cross-lingual Chinese name as canonical when available
                     cross_lingual_name = EntityRepository._CROSS_LINGUAL_ALIASES.get(
                         entity_ref.mention.strip().lower()

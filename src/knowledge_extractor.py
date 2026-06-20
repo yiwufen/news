@@ -112,6 +112,26 @@ entities 只能包含具名实体——现实世界中具有特定专有名称�
 原文："美伊协议达成后，国际油价大幅下跌"
 → entities: []
   "美伊协议"是协议名，不是具名实体，通过 summary 表达即可。
+
+identifiers 字段填写规范（严格）：
+- identifiers 只填机器可匹配的稳定唯一标识。键名固定为标识类型，值填标识符本身。
+- 允许的键：ticker（证券代码，如 300750.SZ、0981.HK、AAPL）、isin（国际证券识别码）、uscc（统一社会信用代码）、cusip、wkn。
+- Company/Product 类实体：仅当原文明确出现上述标识时才填入；未出现则留空 {}。
+- Person/Organization：通常无稳定标识，留空 {}。
+- 禁止填入角色、职位、国籍、代表团名、部门、行业描述等自然语言（如 "美国总统"、"伊朗谈判代表团"、"科技公司"）。
+- 宁可不填，也不要填入语义描述。键名必须从允许列表中选择，不得自造。
+
+示例：
+原文："宁德时代（300750.SZ）发布2025年Q1财报"
+→ entities: [{"mention": "宁德时代", "entity_type": "Company", "identifiers": {"ticker": "300750.SZ"}}]
+
+原文："比亚迪股份（1211.HK）获南向资金增持"
+→ entities: [{"mention": "比亚迪股份", "entity_type": "Company", "identifiers": {"ticker": "1211.HK"}}]
+
+原文："美联储主席鲍威尔表示将继续关注通胀数据"
+→ entities: [{"mention": "美联储", "entity_type": "Organization", "identifiers": {}},
+              {"mention": "鲍威尔", "entity_type": "Person", "identifiers": {}}]
+  "美联储主席"是角色描述，不是标识符。
 # 关系抽取规范（严格）
 如果陈述中包含实体间的明确互动或关联，请在 relation_hints 中提取：
 1. subject_mention 与 object_mention 必须是你在 entities 列表中提取的精确 mention（一字不差）。
@@ -205,6 +225,16 @@ def _build_extraction_tool_schema() -> dict[str, Any]:
     defs["EntityRef"]["properties"]["entity_type"]["enum"] = entity_type_enum
     defs["EntityRef"]["properties"]["mention"]["minLength"] = 2
     defs["RelationHint"]["properties"]["relation_type"]["enum"] = relation_type_enum
+
+    # Inject identifiers field description: constrain to stable machine-matchable
+    # identifiers (ticker/isin/uscc), forbid natural-language role descriptions.
+    entity_ref_props = defs["EntityRef"]["properties"]
+    entity_ref_props.setdefault("identifiers", {})
+    entity_ref_props["identifiers"]["description"] = (
+        "机器可匹配的稳定唯一标识。键名为标识类型，仅允许 ticker/isin/uscc/cusip/wkn，"
+        "值为标识符本身（如 ticker=300750.SZ）。仅填证券代码、ISIN、统一社会信用代码等；"
+        "禁止填角色、职位、国籍、部门等自然语言描述。原文未明确出现时留空 {}。"
+    )
 
     # Inject time field descriptions into TimeRef schema
     time_ref = defs.get("TimeRef", {})
