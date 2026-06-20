@@ -10,7 +10,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from collectors.database import Database
+from src.alias_generator import AliasGenerator
 from src.entities import Entity, EntityRepository
+from src.entity_description import EntityDescriptionGenerator
 from src.event_merging import EventCluster
 from src.schemas.query import IntentType, QueryFilters, StructuredQuery
 from src.knowledge_base import (
@@ -26,6 +28,14 @@ from src.knowledge_graph_sync import KnowledgeGraphSync
 from src.orchestration import run_pipeline
 from src.pipeline import ContinuousPipeline
 from src.retrieval.indexing import KnowledgeIndexBuilder
+
+# Disabled enhancement generators for integration tests. Tests use
+# StubExtractor (no real LLM) and must not call the real description/alias
+# APIs either — doing so would make them flaky and dependent on quota/network.
+# EntityEnhancementError fail-fast now propagates these failures instead of
+# silently degrading, so injecting disabled generators keeps tests deterministic.
+_DISABLED_DESC_GEN = EntityDescriptionGenerator(enable=False)
+_DISABLED_ALIAS_GEN = AliasGenerator(enable=False)
 
 
 def seed_articles(db_path: str) -> None:
@@ -121,6 +131,8 @@ def test_run_continuous_builds_knowledge_tables_without_legacy_backfill(tmp_path
         db_path=str(db_path),
         extractor=StubExtractor(),
         index_builder=build_index_builder(str(db_path)),
+        description_generator=_DISABLED_DESC_GEN,
+        alias_generator=_DISABLED_ALIAS_GEN,
     )
     result = pipeline.run()
 
@@ -177,6 +189,8 @@ def test_run_pipeline_queries_new_knowledge_store(tmp_path, monkeypatch) -> None
         db_path=str(db_path),
         extractor=StubExtractor(),
         index_builder=build_index_builder(str(db_path)),
+        description_generator=_DISABLED_DESC_GEN,
+        alias_generator=_DISABLED_ALIAS_GEN,
     )
     pipeline.run()
     entity_repo = EntityRepository(str(db_path))
@@ -344,6 +358,8 @@ def test_run_continuous_reuses_stable_knowledge_ids_on_rebuild(tmp_path) -> None
         db_path=str(db_path),
         extractor=StubExtractor(),
         index_builder=build_index_builder(str(db_path)),
+        description_generator=_DISABLED_DESC_GEN,
+        alias_generator=_DISABLED_ALIAS_GEN,
     )
 
     first = pipeline.run()
@@ -388,6 +404,8 @@ def test_graph_sync_failure_keeps_documents_retryable(tmp_path) -> None:
         db_path=str(db_path),
         extractor=StubExtractor(),
         index_builder=build_index_builder(str(db_path)),
+        description_generator=_DISABLED_DESC_GEN,
+        alias_generator=_DISABLED_ALIAS_GEN,
     )
     pipeline.graph_sync = KnowledgeGraphSync(connection=FailingConnection())
 
@@ -424,6 +442,8 @@ def test_index_failure_does_not_make_persisted_documents_retryable(tmp_path) -> 
         db_path=str(db_path),
         extractor=StubExtractor(),
         index_builder=cast(Any, FailingIndexBuilder()),
+        description_generator=_DISABLED_DESC_GEN,
+        alias_generator=_DISABLED_ALIAS_GEN,
     )
 
     first = pipeline.run()
@@ -479,6 +499,8 @@ def test_run_continuous_graph_sync_serializes_entity_identifiers(tmp_path) -> No
         db_path=str(db_path),
         extractor=StubExtractor(),
         index_builder=build_index_builder(str(db_path)),
+        description_generator=_DISABLED_DESC_GEN,
+        alias_generator=_DISABLED_ALIAS_GEN,
     )
     pipeline.graph_sync = KnowledgeGraphSync(connection=RecordingConnection(session))
 
@@ -506,6 +528,8 @@ def test_run_pipeline_repairs_legacy_event_cluster_payloads(tmp_path, monkeypatc
         db_path=str(db_path),
         extractor=StubExtractor(),
         index_builder=build_index_builder(str(db_path)),
+        description_generator=_DISABLED_DESC_GEN,
+        alias_generator=_DISABLED_ALIAS_GEN,
     )
     pipeline.run()
 
@@ -581,6 +605,8 @@ def test_run_pipeline_relationship_query_returns_formal_graph_results(tmp_path, 
         db_path=str(db_path),
         extractor=StubExtractor(),
         index_builder=build_index_builder(str(db_path)),
+        description_generator=_DISABLED_DESC_GEN,
+        alias_generator=_DISABLED_ALIAS_GEN,
     )
     pipeline.run()
 

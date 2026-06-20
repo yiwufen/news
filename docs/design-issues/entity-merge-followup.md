@@ -42,15 +42,22 @@
 - LLM 产出不一致的 mention 形态
 - 异常未被 fail-fast 拦截,静默降级导致每个 mention 新建实体
 
-### 需要的加固(对应 SHARED_RULES §5/§7 的 fail-fast 要求)
-当前 `EntityResolver` 和抽取链路对 API 失败的处理是 `try/except + logger.warning` 静默降级。应改为:
-- LLM 抽取失败 / 返回不满足契约 → fail-fast 报错(SHARED_RULES §5 已要求,需核查 `knowledge_extractor.py` 是否全面落地)
-- embedding provider 失败 → 区分"可选消歧"和"必需依赖",必需依赖失败应阻断而非静默
-- 增加结构化日志:记录 API 调用失败事件,便于事后定位类似爆发
+### 加固已完成(2026-06-20)
 
-### 验证方法
-- 模拟 API 限流(返回 429),确认 pipeline 行为是"报错暂停"而非"静默降级继续跑"
-- 检查 `data/logs/` 是否有 05-25~30 的错误日志(可能已被轮转)
+已针对重复实体的级联根因实施 **严格 fail-fast + 熔断器** 加固:
+
+- **`src/pipeline/circuit_breaker.py`(新增)**:`CircuitBreaker` 跟踪连续增强失败次数,达阈值(默认 5)抛 `CircuitOpenError` 中断当前 run,防止 API 故障期间持续制造脏数据。
+- **`src/entities.py`**:新增 `EntityEnhancementError`;`EntityResolver` 注入熔断器,mention 循环顶部 `check()`;description / alias / embedding 三处静默降级改为抛异常(fail-fast)。成功时 `record_success()` 重置计数。
+- **`src/entity_description.py` + `src/alias_generator.py`**:`generate()` 移除 `except → 返回空值` 的静默降级,API 失败时异常向上传播。
+- **`src/pipeline/continuous.py`**:装配熔断器;`run()` 主循环捕获 `CircuitOpenError` 并中断 run;Stage 2 区分 `EntityEnhancementError`(记录熔断失败 + 文档 failed)、`CircuitOpenError`(向上传播中断)和其他异常。新增 `embedding_provider` / `description_generator` / `alias_generator` 注入参数(便于测试隔离 API)。
+
+**熔断恢复路径**:熔断后 run 提前结束 → systemd `Restart=always` 重启 ingestion → 新进程 = 新熔断器实例(重置)→ 失败文档增量模式重试。
+
+回归验证:pytest 198 passed、pyright 改动文件 0 错误、eval_guard PASS、实体解析 F1=1.000。
+
+### 后续可选增强(未做)
+- 熔断器半开状态(half-open):tripped 后定时试探,成功则恢复 —— 当前用进程重启重置简化
+- 按异常类型区分:429(额度耗尽,需人工)vs 瞬时网络错误(应重试不熔断)—— 当前统一处理
 
 ## 待办 3:历史悬挂清理(低优先级)
 

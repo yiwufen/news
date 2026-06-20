@@ -91,20 +91,18 @@ class AliasGenerator:
     ) -> list[str]:
         """Generate common aliases for an entity.
 
-        Returns a list of alias strings, or empty list on failure.
-        Aliases that fail is_valid_entity_mention are silently dropped.
+        Returns a list of alias strings. Aliases that fail
+        is_valid_entity_mention are dropped. API-level failures (quota
+        exhausted, timeout, ...) propagate as exceptions so the caller can
+        fail-fast rather than silently degrade — an alias-less entity is
+        unmatchable by later documents using a different surface form, which
+        is a root cause of duplicate entities.
         """
         if not self.enable:
             return []
 
         prompt = self._build_prompt(entity_name, entity_type, identifiers)
-        try:
-            raw = self._call_llm(prompt)
-        except Exception as exc:
-            logger.warning(
-                "Alias generation failed for '%s': %s", entity_name, exc
-            )
-            return []
+        raw = self._call_llm(prompt)
 
         # Post-filter: reject aliases that are invalid entity mentions
         # (e.g. country names, abstract concepts, generic role words).

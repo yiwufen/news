@@ -41,14 +41,20 @@ class TestEntityDescriptionGenerator:
         result = gen.generate("比亚迪", "Company")
         assert result is None
 
-    def test_generate_failure_returns_none(self):
+    def test_generate_failure_raises(self):
+        """API failures now propagate (fail-fast) instead of returning None.
+
+        Silently returning None on API failure was a root cause of the
+        duplicate-entity outbreak: an entity created without a description
+        weakens disambiguation signal and cascades into mismatches.
+        """
         gen = EntityDescriptionGenerator(enable=True)
         gen.client = MagicMock()
         gen.model = "test-model"
         gen.client.messages.create.side_effect = Exception("API error")
 
-        result = gen.generate("比亚迪", "Company")
-        assert result is None
+        with pytest.raises(Exception, match="API error"):
+            gen.generate("比亚迪", "Company")
 
     def test_generate_empty_response_returns_none(self):
         gen = EntityDescriptionGenerator(enable=True)

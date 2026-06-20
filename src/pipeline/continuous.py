@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable, Literal
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 if TYPE_CHECKING:
     from src.retrieval.vector_index import VectorIndex
 
-from src.entities import Entity, EntityRepository, EntityResolver, is_valid_entity_mention
+from src.entities import (
+    Entity,
+    EntityEnhancementError,
+    EntityRepository,
+    EntityResolver,
+    is_valid_entity_mention,
+)
 from src.alias_generator import AliasGenerator
 from src.entity_context_filter import filter_relevant_entities
 from src.event_merging import EventCluster, EventClusterRepository, EventMerger
@@ -23,6 +29,7 @@ from src.knowledge_base import (
 )
 from src.knowledge_extractor import KnowledgeExtractor
 from src.knowledge_graph_sync import KnowledgeGraphSync
+from src.pipeline.circuit_breaker import CircuitBreaker, CircuitOpenError
 from src.retrieval.indexing import KnowledgeIndexBuilder
 
 logger = logging.getLogger(__name__)
@@ -90,6 +97,9 @@ class ContinuousPipeline:
         extractor: KnowledgeExtractor | None = None,
         index_builder: KnowledgeIndexBuilder | None = None,
         vector_index: VectorIndex | None = None,
+        embedding_provider: Any | None = None,
+        description_generator: Any | None = None,
+        alias_generator: Any | None = None,
     ):
         self.batch_size = batch_size
         self.graph_enabled = graph_enabled
@@ -103,15 +113,24 @@ class ContinuousPipeline:
         )
         self.log_repo = KnowledgeProcessingLogRepository(db_path)
         self.extractor = extractor or KnowledgeExtractor()
-        self._embedding_provider = self._try_create_embedding_provider()
-        self._description_generator = self._try_create_description_generator()
+        self._embedding_provider = embedding_provider or self._try_create_embedding_provider()
+        self._description_generator = (
+            description_generator if description_generator is not None
+            else self._try_create_description_generator()
+        )
         # Shared vector index — same instance for clusterer and index_builder
         self._vector_index = vector_index or self._try_create_vector_index()
+        # Circuit breaker shared with the entity resolver: trips after N
+        # consecutive enhancement-API failures (e.g. offline-LLM quota
+        # exhausted) to stop a cascading outage from producing half-baked,
+        # unmatchable entities — the 2026-05 duplicate-entity root cause.
+        self._circuit_breaker = CircuitBreaker(failure_threshold=5)
         self.entity_resolver = EntityResolver(
             self.entity_repo,
             embedding_provider=self._embedding_provider,
             description_generator=self._description_generator,
-            alias_generator=AliasGenerator(),
+            alias_generator=alias_generator or AliasGenerator(),
+            circuit_breaker=self._circuit_breaker,
         )
         self.clusterer = EventMerger(
             self.cluster_repo,
@@ -183,6 +202,12 @@ class ContinuousPipeline:
             time_window=time_window,
             incremental=self.incremental,
         ):
+            # If the circuit breaker tripped on a previous batch, stop
+            # processing further batches — the enhancement API is down and
+            # continuing would only produce half-baked, unmatchable entities.
+            if self._circuit_breaker.is_tripped:
+                break
+
             batch_count += 1
             logger.debug(f"Processing batch {batch_count} with {len(batch)} documents")
 
@@ -193,11 +218,29 @@ class ContinuousPipeline:
 
             # 文档级独立处理
             for document in batch:
-                result = self._process_single_document(
-                    document=document,
-                    context=context,
-                    dry_run=dry_run,
-                )
+                try:
+                    result = self._process_single_document(
+                        document=document,
+                        context=context,
+                        dry_run=dry_run,
+                    )
+                except CircuitOpenError:
+                    # Breaker tripped mid-document: stop this run to avoid
+                    # cascading dirty data. Failed docs remain pending and are
+                    # retried on the next run after the API recovers.
+                    logger.error(
+                        "Circuit breaker tripped after %d consecutive "
+                        "enhancement failures; aborting run to prevent "
+                        "cascading dirty data. Check enhancement API "
+                        "(LLM quota / embedding service) and restart after "
+                        "recovery.",
+                        self._circuit_breaker.consecutive_failures,
+                    )
+                    all_errors.append(
+                        "[circuit_breaker] consecutive enhancement failures "
+                        "exceeded threshold; run aborted"
+                    )
+                    break
                 context.results.append(result)
 
                 # 收集成功的产出
@@ -360,6 +403,21 @@ class ContinuousPipeline:
             # 更新缓存，使后续文档可见新实体
             for entity in resolved_entities:
                 context.entities_cache[entity.entity_id] = entity
+        except CircuitOpenError:
+            # Breaker already tripped: propagate so run() aborts this run.
+            raise
+        except EntityEnhancementError as exc:
+            # An enhancement dependency (description/alias/embedding) failed.
+            # Fail-fast: mark the document failed and count towards the
+            # circuit breaker so a sustained outage trips it.
+            self._circuit_breaker.record_failure(str(exc))
+            result.failed_stage = "resolve"
+            result.error_message = f"entity enhancement failed (fail-fast): {exc}"
+            logger.error(
+                f"[{document.doc_id}] Enhancement fail-fast: {exc} "
+                f"(consecutive failures: {self._circuit_breaker.consecutive_failures})"
+            )
+            return result
         except Exception as exc:
             result.failed_stage = "resolve"
             result.error_message = f"resolve failed: {exc}"

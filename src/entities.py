@@ -18,10 +18,23 @@ from uuid import uuid4
 
 if TYPE_CHECKING:
     from src.retrieval.embedding import EmbeddingProvider
+    from src.pipeline.circuit_breaker import CircuitBreaker
 
 logger = logging.getLogger(__name__)
 
 _DISAMBIGUATION_THRESHOLD = 0.5
+
+
+class EntityEnhancementError(RuntimeError):
+    """An entity enhancement dependency (description / alias / embedding
+    generation) failed.
+
+    The entity resolver treats this as fail-fast rather than silently
+    degrading: producing an entity without aliases/description is what causes
+    downstream documents to miss the match and create duplicates. Let the
+    caller (pipeline) decide whether to record a circuit-breaker failure or
+    retry.
+    """
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -823,11 +836,17 @@ class EntityResolver:
         embedding_provider: EmbeddingProvider | None = None,
         description_generator: Any | None = None,
         alias_generator: Any | None = None,
+        circuit_breaker: CircuitBreaker | None = None,
     ):
         self.repository = repository
         self._embedding_provider = embedding_provider
         self._description_generator = description_generator
         self._alias_generator = alias_generator
+        # Optional circuit breaker shared with the pipeline. When enhancement
+        # dependencies (description/alias/embedding) fail, we fail-fast instead
+        # of silently degrading; the breaker trips after N consecutive failures
+        # to stop a cascading outage from producing duplicate entities.
+        self._circuit_breaker = circuit_breaker
 
     def resolve_units(
         self,
@@ -872,6 +891,10 @@ class EntityResolver:
 
         for unit in units:
             for entity_ref in unit.entities:
+                # If the breaker has tripped on prior enhancement failures, stop
+                # resolving immediately so the pipeline can abort the run.
+                if self._circuit_breaker is not None:
+                    self._circuit_breaker.check()
                 candidates = self._find_candidates(
                     entity_ref.mention,
                     entity_ref.identifiers,
@@ -932,45 +955,44 @@ class EntityResolver:
                         ak = normalize_entity_name(alias)
                         if ak and ak != nk:
                             alias_index.setdefault(ak, []).append(matched.entity_id)
-                    # Generate description for new entity
+                    # Generate description for new entity.
+                    # Fail-fast: a missing description weakens disambiguation
+                    # signal; letting it silently degrade is what produced the
+                    # 2026-05 duplicate-entity outbreak when the LLM quota ran
+                    # out. Surface the failure so the pipeline can record it.
                     if self._description_generator and not matched.description:
-                        try:
-                            desc = self._description_generator.generate(
-                                matched.canonical_name,
-                                matched.entity_type or "",
-                                matched.identifiers,
-                                [unit.summary],
-                            )
-                            if desc:
-                                matched.description = desc
-                        except Exception as exc:
-                            logger.warning(
-                                "Description generation failed for '%s': %s",
-                                matched.canonical_name, exc,
-                            )
-                    # Generate aliases for new entity
+                        desc = self._description_generator.generate(
+                            matched.canonical_name,
+                            matched.entity_type or "",
+                            matched.identifiers,
+                            [unit.summary],
+                        )
+                        if desc:
+                            matched.description = desc
+                        if self._circuit_breaker is not None:
+                            self._circuit_breaker.record_success()
+                    # Generate aliases for new entity.
+                    # Fail-fast for the same reason: a canonical-name-only
+                    # entity is unmatchable by later documents that use a
+                    # different surface form, which cascades into duplicates.
                     if self._alias_generator:
-                        try:
-                            generated = self._alias_generator.generate(
-                                matched.canonical_name,
-                                matched.entity_type or "",
-                                matched.identifiers,
-                            )
-                            for alias in generated:
-                                norm_alias = normalize_entity_name(alias)
-                                if (
-                                    alias not in matched.aliases
-                                    and norm_alias not in {normalize_entity_name(a) for a in matched.aliases}
-                                    and len(matched.aliases) < _MAX_ALIASES
-                                ):
-                                    matched.aliases.append(alias)
-                                    if norm_alias and norm_alias != nk:
-                                        alias_index.setdefault(norm_alias, []).append(matched.entity_id)
-                        except Exception as exc:
-                            logger.warning(
-                                "Alias generation failed for '%s': %s",
-                                matched.canonical_name, exc,
-                            )
+                        generated = self._alias_generator.generate(
+                            matched.canonical_name,
+                            matched.entity_type or "",
+                            matched.identifiers,
+                        )
+                        for alias in generated:
+                            norm_alias = normalize_entity_name(alias)
+                            if (
+                                alias not in matched.aliases
+                                and norm_alias not in {normalize_entity_name(a) for a in matched.aliases}
+                                and len(matched.aliases) < _MAX_ALIASES
+                            ):
+                                matched.aliases.append(alias)
+                                if norm_alias and norm_alias != nk:
+                                    alias_index.setdefault(norm_alias, []).append(matched.entity_id)
+                        if self._circuit_breaker is not None:
+                            self._circuit_breaker.record_success()
                 else:
                     # Alias dedup: skip if normalized form already present
                     # Also skip if the mention is not a valid entity name
@@ -1051,13 +1073,20 @@ class EntityResolver:
             for c in candidates
         ]
 
-        # Compute embeddings
+        # Compute embeddings.
+        # Fail-fast: the embedding provider already retries internally; if it
+        # still fails (e.g. quota exhausted) we surface an
+        # EntityEnhancementError instead of silently picking candidates[0].
+        # Picking the first candidate on every embedding outage is what lets
+        # wrong merges accumulate.
         all_texts = [ku_context] + candidate_texts
         try:
             embeddings = self._embedding_provider.embed(all_texts)  # type: ignore[union-attr]
-        except Exception:
-            logger.warning("Embedding failed during disambiguation, falling back")
-            return candidates[0]
+        except Exception as exc:
+            raise EntityEnhancementError(
+                f"Embedding failed during disambiguation for "
+                f"{candidates[0].canonical_name!r}: {exc}"
+            ) from exc
 
         ku_embedding = embeddings[0]
 

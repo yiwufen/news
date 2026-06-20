@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import json
-import logging
 from typing import Any
 
 from anthropic.types import Message, ToolUseBlock
 
 from src.llm import create_offline_llm_client, get_offline_max_tokens
-
-logger = logging.getLogger(__name__)
 
 _DESCRIPTION_SYSTEM_PROMPT = """你是一名金融实体描述生成器。
 给定实体名称、类型、标识符和来源摘要，生成一句简洁的实体描述（50字以内）。
@@ -56,17 +53,17 @@ class EntityDescriptionGenerator:
     ) -> str | None:
         """Generate a description for an entity.
 
-        Returns the description string, or None on failure.
+        Returns the description string, or None when generation is disabled
+        or the LLM returns no usable content. API-level failures (quota
+        exhausted, timeout, ...) propagate as exceptions so the caller can
+        fail-fast rather than silently degrade — a missing description
+        weakens disambiguation and is a root cause of duplicate entities.
         """
         if not self.enable:
             return None
 
         prompt = self._build_prompt(entity_name, entity_type, identifiers, source_summaries)
-        try:
-            return self._call_llm(prompt)
-        except Exception as exc:
-            logger.warning("Description generation failed for '%s': %s", entity_name, exc)
-            return None
+        return self._call_llm(prompt)
 
     def _build_prompt(
         self,
