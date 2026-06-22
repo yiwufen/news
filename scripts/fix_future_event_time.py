@@ -231,19 +231,28 @@ def run(db_path: str, *, dry_run: bool = True) -> dict[str, Any]:
 
     # --- Layer 2: find affected clusters --------------------------------
     # Two disjoint ways a cluster can be affected:
-    #   (a) one of its member KUs had a future event_time (caught via the
-    #       affected_ku_ids set — payload LIKE scan);
+    #   (a) one of its member KUs had a future event_time;
     #   (b) its own time_anchor is already in the future but no member KU is
     #       (e.g. a previous partial fix, or a stale anchor left behind).
-    # Catching both makes the backfill idempotent. Identify clusters by
-    # cluster_id and union the two sources.
+    # Catching both makes the backfill idempotent.
     affected_cluster_ids: set[str] = set()
     if affected_ku_ids:
-        like_clauses = " OR ".join(["payload LIKE ?" for _ in affected_ku_ids])
-        like_params = [f'%"{kuid}"%' for kuid in affected_ku_ids]
+        # Stage affected ku_ids into a temp table and match via json_each on
+        # each cluster's payload — avoids building an N-way OR expression
+        # (SQLite caps expression-tree depth at 1000; the remote prod DB has
+        # 1200+ future KUs which blew up the OR approach).
+        conn.execute("DROP TABLE IF EXISTS _tmp_future_ku_ids")
+        conn.execute("CREATE TEMP TABLE _tmp_future_ku_ids (ku_id TEXT PRIMARY KEY)")
+        conn.executemany(
+            "INSERT OR IGNORE INTO _tmp_future_ku_ids (ku_id) VALUES (?)",
+            [(kuid,) for kuid in affected_ku_ids],
+        )
         for row in conn.execute(
-            f"SELECT cluster_id FROM event_clusters WHERE {like_clauses}",
-            like_params,
+            """
+            SELECT DISTINCT ec.cluster_id
+            FROM event_clusters ec, json_each(ec.payload, '$.member_ku_ids') je
+            WHERE je.value IN (SELECT ku_id FROM _tmp_future_ku_ids)
+            """
         ).fetchall():
             affected_cluster_ids.add(row["cluster_id"])
     for row in conn.execute(
