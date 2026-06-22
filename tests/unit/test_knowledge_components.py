@@ -194,6 +194,74 @@ def test_knowledge_extractor_normalizes_relative_event_time_before_validation() 
     assert units[0].time.time_grain == "day"
 
 
+def test_knowledge_extractor_falls_back_to_published_at_for_future_event_time() -> None:
+    """A future event_time (forecast target year) must fall back to published_at.
+
+    The LLM extracted ``2030-01-01`` as event_time for a prediction statement.
+    ``TimeNormalizer`` hard-clamps it to None; ``KnowledgeExtractor`` then
+    resets event_time to the document's published_at so the KU keeps a valid
+    temporal anchor.
+    """
+    extractor = KnowledgeExtractor(enable_llm=True)
+    extractor_any = cast(Any, extractor)
+    # Real TimeNormalizer — we want the actual clamp behavior to be exercised.
+    extractor_any.client = SimpleNamespace(
+        messages=SimpleNamespace(
+            create=lambda **_: SimpleNamespace(
+                content=[
+                    ToolUseBlock(
+                        id="toolu_test",
+                        type="tool_use",
+                        name="extract_knowledge_units",
+                        input={
+                            "knowledge_units": [
+                                {
+                                    "unit_kind": "event",
+                                    "unit_type": "market_analysis",
+                                    "summary": "美银预计到2030年半导体市场规模达2万亿美元",
+                                    "entities": [{"mention": "美银"}],
+                                    "source": {
+                                        "doc_id": "doc-future",
+                                        "source_name": "test-source",
+                                    },
+                                    "evidence": [{"text": "美银预计到2030年半导体市场规模达2万亿美元。"}],
+                                    "time": {
+                                        "event_time": "2030-12-31T00:00:00Z",
+                                        "published_at": "2026-04-05T09:00:00+00:00",
+                                        "extracted_at": "2026-04-05T09:05:00+00:00",
+                                        "event_time_resolution": "explicit",
+                                        "time_grain": "year",
+                                    },
+                                    "confidence": 0.8,
+                                }
+                            ]
+                        },
+                    )
+                ]
+            )
+        )
+    )
+    extractor_any.model = "test-model"
+    document = RawDocument(
+        doc_id="doc-future",
+        source_type="news",
+        title="半导体市场预测",
+        content="美银预计到2030年半导体市场规模达2万亿美元。",
+        source_name="test-source",
+        published_at=datetime(2026, 4, 5, 9, 0, tzinfo=UTC),
+        ingested_at=datetime(2026, 4, 5, 9, 5, tzinfo=UTC),
+    )
+
+    units = extractor.extract(document)
+
+    assert len(units) == 1
+    # event_time was reset to published_at (not the forecast target year).
+    assert units[0].time.event_time == datetime(2026, 4, 5, 9, 0, tzinfo=UTC)
+    assert units[0].time.event_time_resolution == "contextual"
+    # time_grain is preserved from the original extraction.
+    assert units[0].time.time_grain == "year"
+
+
 def test_entity_resolver_matches_stable_identifier_and_keeps_uncertain_separate(tmp_path) -> None:
     db_path = tmp_path / "entities.db"
     repo = EntityRepository(str(db_path))

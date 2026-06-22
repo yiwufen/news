@@ -66,11 +66,26 @@ class TestTimeValidation:
     def test_future_time_flagged(
         self, normalizer: TimeNormalizer, context: TimeNormalizationContext
     ) -> None:
+        # Future event_time (e.g. a forecast target year) is hard-clamped to
+        # None so the extractor can fall back to published_at. It is NOT
+        # preserved as normalized_time — that was the original bug.
         result = normalizer.normalize_event_time("2030-01-01T00:00:00Z", context)
 
-        assert result.normalized_time is not None
-        assert result.normalized_time.year == 2030
-        assert result.validation_error == "event_time is in the future"
+        assert result.normalized_time is None
+        assert result.resolution_type == "unresolved"
+        assert result.validation_error is not None
+        assert "future" in result.validation_error
+
+    def test_future_time_fallback_documented(
+        self, normalizer: TimeNormalizer, context: TimeNormalizationContext
+    ) -> None:
+        # The validation_error explicitly references published_at so callers
+        # know to fall back to it (see KnowledgeExtractor._normalize_unit_payload_time).
+        result = normalizer.normalize_event_time("2100-01-01T00:00:00Z", context)
+
+        assert result.normalized_time is None
+        assert result.validation_error is not None
+        assert "published_at" in result.validation_error
 
     def test_implausibly_old_time_flagged(
         self, normalizer: TimeNormalizer, context: TimeNormalizationContext

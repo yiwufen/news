@@ -97,16 +97,23 @@ class TimeNormalizer:
 
         resolution = resolution_type or "explicit"
 
-        # event_time should not be far in the future
+        # event_time must not be in the future: prediction/forecast target years
+        # (e.g. "by 2030", "to 2100") are not event occurrence times. Clamp to None
+        # so the caller can fall back to published_at. This is a hard rejection,
+        # not a soft flag — see SHARED_RULES.md §7 (no silent degradation).
         if dt > context.extracted_at + timedelta(days=1):
             return TimeNormalizationResult(
-                normalized_time=dt,
-                resolution_type=resolution,
+                normalized_time=None,
+                resolution_type="unresolved",
                 time_grain=time_grain,
-                validation_error="event_time is in the future",
+                validation_error=(
+                    "event_time is in the future; falling back to published_at"
+                ),
             )
 
-        # event_time should not be implausibly far before published_at
+        # event_time should not be implausibly far before published_at.
+        # Past times are legitimate (historical events reported retroactively),
+        # so this stays a soft flag rather than a hard clamp.
         if dt < context.published_at - timedelta(days=self._MAX_PAST_DAYS):
             return TimeNormalizationResult(
                 normalized_time=dt,

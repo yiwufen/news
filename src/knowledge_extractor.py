@@ -42,6 +42,7 @@ event_time 是事件发生的绝对时间，不是报道发布时间。
    - "季度"级模糊（"本季度"、"Q1"）→ time_grain = "quarter"，日期取季度末日
    - "年"级模糊（"今年初"、"去年"）→ time_grain = "year"，日期取年份首日
 4. 原文无时间表达 → event_time = published_at，event_time_resolution = "contextual"（报道行为本身就是事件）
+5. 陈述是预测/展望/规划目标时（如"预计2030年…"、"到2100年…"、"2025~2035年累计"）→ event_time 必须取 published_at（报道时间），不得取目标年份。预测/规划的目标时间不属于事件发生时间。
 
 正例：
 原文："宁德时代4月3日发布财报" + published_at: 2026-04-05
@@ -71,6 +72,10 @@ event_time 是事件发生的绝对时间，不是报道发布时间。
 
 原文："Q1业绩超预期" + published_at: 2026-04-05
 → event_time: "2026-03-31T00:00:00Z", time_grain: "day" ✗（季度表达式应标记 time_grain = "quarter"）
+
+原文："美银预计到2030年半导体市场规模达2万亿美元" + published_at: 2026-04-05
+→ event_time: "2026-04-05T00:00:00Z", event_time_resolution: "contextual" ✓（预测目标年不是事件发生时间，应取报道时间）
+→ event_time: "2030-12-31T00:00:00Z" ✗（这是预测目标年，不是事件发生时间）
 # 实体抽取规范
 entities 只能包含具名实体——现实世界中具有特定专有名称的对象。
 - Company：具体企业（腾讯控股、比亚迪、锦鸡股份）
@@ -474,15 +479,36 @@ class KnowledgeExtractor:
         )
 
         normalized_time_payload = dict(time_payload)
-        normalized_time_payload["event_time"] = result.normalized_time
-        normalized_time_payload["event_time_resolution"] = result.resolution_type
+        # Future event_time was hard-clamped to None by TimeNormalizer (e.g. a
+        # forecast target year like "by 2030"). Fall back to published_at so the
+        # KU keeps a valid temporal anchor — the report publication is the
+        # closest legitimate event time for a forward-looking statement.
+        is_future_clamp = (
+            result.normalized_time is None
+            and result.resolution_type == "unresolved"
+            and result.validation_error is not None
+            and "future" in result.validation_error
+        )
+        if is_future_clamp:
+            normalized_time_payload["event_time"] = context.published_at
+            normalized_time_payload["event_time_resolution"] = "contextual"
+        else:
+            normalized_time_payload["event_time"] = result.normalized_time
+            normalized_time_payload["event_time_resolution"] = result.resolution_type
         normalized_time_payload["time_grain"] = result.time_grain
         if result.validation_error:
-            logger.warning(
-                "Time validation error for doc %s: %s",
-                unit_payload.get("source", {}).get("doc_id", "?"),
-                result.validation_error,
-            )
+            if is_future_clamp:
+                logger.info(
+                    "Future event_time for doc %s reset to published_at (%s)",
+                    unit_payload.get("source", {}).get("doc_id", "?"),
+                    context.published_at.isoformat(),
+                )
+            else:
+                logger.warning(
+                    "Time validation error for doc %s: %s",
+                    unit_payload.get("source", {}).get("doc_id", "?"),
+                    result.validation_error,
+                )
 
         normalized_unit_payload = dict(unit_payload)
         normalized_unit_payload["time"] = normalized_time_payload
