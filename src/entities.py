@@ -642,6 +642,19 @@ class EntityRepository:
             ).fetchall()
         return [Entity.model_validate(json.loads(row["payload"])) for row in rows]
 
+    def get_all_ids(self) -> list[str]:
+        """Return all entity_ids without loading payloads.
+
+        Lightweight source-of-truth for graph prune: callers compare this set
+        against Neo4j Entity node ids to detect orphan nodes left behind by
+        SQLite-side entity merges.
+        """
+        with self._connect() as connection:
+            return [
+                row["entity_id"]
+                for row in connection.execute("SELECT entity_id FROM entities")
+            ]
+
     def get_by_ids(self, entity_ids: Iterable[str]) -> list[Entity]:
         ids = list(dict.fromkeys(entity_ids))
         if not ids:

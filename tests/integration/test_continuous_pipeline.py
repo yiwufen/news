@@ -467,6 +467,13 @@ def test_index_failure_does_not_make_persisted_documents_retryable(tmp_path) -> 
 
 
 def test_run_continuous_graph_sync_serializes_entity_identifiers(tmp_path) -> None:
+    class _Result:
+        def __init__(self, rows: list) -> None:
+            self._rows = rows
+
+        def data(self):
+            return self._rows
+
     class RecordingSession:
         def __init__(self) -> None:
             self.calls: list[tuple[str, dict]] = []
@@ -479,6 +486,11 @@ def test_run_continuous_graph_sync_serializes_entity_identifiers(tmp_path) -> No
 
         def run(self, query: str, **params):
             self.calls.append((query, params))
+            # The pipeline's new prune step reads results via .data(). Return
+            # empty rows for the prune discovery query so prune finds no
+            # orphans and is a no-op; write-only queries stay None-returning.
+            if "NOT o.id IN $live_ids" in query:
+                return _Result([])
             return None
 
     class RecordingConnection:
