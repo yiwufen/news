@@ -275,6 +275,11 @@ def run(db_path: str, *, dry_run: bool = True) -> dict[str, Any]:
         return stats
 
     # --- Apply Layer 1 --------------------------------------------------
+    # Python's sqlite3 driver opens an implicit transaction on the SELECTs
+    # above. Commit to close that read transaction before starting a write
+    # transaction, otherwise BEGIN IMMEDIATE raises "cannot start a
+    # transaction within a transaction".
+    conn.commit()
     conn.execute("BEGIN IMMEDIATE")
     try:
         for row in future_rows:
