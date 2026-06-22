@@ -262,6 +262,71 @@ def test_knowledge_extractor_falls_back_to_published_at_for_future_event_time() 
     assert units[0].time.time_grain == "year"
 
 
+def test_knowledge_extractor_overwrites_system_time_fields_from_llm() -> None:
+    """published_at and extracted_at must come from the pipeline, not the LLM.
+
+    The LLM historically hallucinated these (e.g. extracted_at=2025-01-18 for a
+    2026-06 article), which broke TimeNormalizer's future-check baseline.
+    The extractor must overwrite them unconditionally with system-owned values.
+    """
+    extractor = KnowledgeExtractor(enable_llm=True)
+    extractor_any = cast(Any, extractor)
+    extractor_any.client = SimpleNamespace(
+        messages=SimpleNamespace(
+            create=lambda **_: SimpleNamespace(
+                content=[
+                    ToolUseBlock(
+                        id="toolu_test",
+                        type="tool_use",
+                        name="extract_knowledge_units",
+                        input={
+                            "knowledge_units": [
+                                {
+                                    "unit_kind": "event",
+                                    "unit_type": "product_launch",
+                                    "summary": "Xiaomi launched a product",
+                                    "entities": [{"mention": "Xiaomi Group"}],
+                                    "source": {
+                                        "doc_id": "doc-systime",
+                                        "source_name": "test-source",
+                                    },
+                                    "evidence": [{"text": "Xiaomi launched a product."}],
+                                    "time": {
+                                        "event_time": "2026-04-05T09:00:00Z",
+                                        # LLM hallucinates these — must be overwritten:
+                                        "published_at": "2099-01-01T00:00:00Z",
+                                        "extracted_at": "2025-01-18T00:00:00Z",
+                                    },
+                                    "confidence": 0.8,
+                                }
+                            ]
+                        },
+                    )
+                ]
+            )
+        )
+    )
+    extractor_any.model = "test-model"
+    document = RawDocument(
+        doc_id="doc-systime",
+        source_type="news",
+        title="Xiaomi launch",
+        content="Xiaomi launched a product.",
+        source_name="test-source",
+        published_at=datetime(2026, 4, 5, 9, 0, tzinfo=UTC),
+        ingested_at=datetime(2026, 4, 5, 9, 5, tzinfo=UTC),
+    )
+
+    units = extractor.extract(document)
+
+    assert len(units) == 1
+    # System-owned values overwrite LLM hallucinations.
+    assert units[0].time.published_at == datetime(2026, 4, 5, 9, 0, tzinfo=UTC)
+    # extracted_at is the pipeline run time (now), NOT 2025-01-18.
+    assert units[0].time.extracted_at != datetime(2025, 1, 18, tzinfo=UTC)
+    assert units[0].time.extracted_at > datetime(2026, 4, 5, 9, 0, tzinfo=UTC)
+
+
 def test_entity_resolver_matches_stable_identifier_and_keeps_uncertain_separate(tmp_path) -> None:
     db_path = tmp_path / "entities.db"
     repo = EntityRepository(str(db_path))

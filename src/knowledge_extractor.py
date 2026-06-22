@@ -24,7 +24,7 @@ SYSTEM_PROMPT = """你是一名金融知识工程助手，负责从新闻文档�
 # 核心要求
 1. 每个 KnowledgeUnit 表示来源中的一次明确陈述，不要把多个事件强行合并。
 2. evidence 至少保留 1 条可读证据片段。
-3. source.doc_id、time.published_at、time.extracted_at 必填。time.event_time 必须解析为 ISO 8601 绝对日期时间（参照下方「时间解析规范」）。
+3. source.doc_id、time.published_at、time.extracted_at 由系统自动填入，LLM 只需提供 time.event_time（必须解析为 ISO 8601 绝对日期时间，参照下方「时间解析规范」）。
 4. 发现不确定或冲突信息时，不要裁决对错，只标记 conflict_status。
 # 提取优先级（遇到边界 case 时按此顺序裁决）
 1. 准确性 > 召回率（宁缺毋滥）
@@ -466,10 +466,20 @@ class KnowledgeExtractor:
         if not isinstance(time_payload, dict):
             return unit_payload
 
+        normalized_time_payload = dict(time_payload)
+        # System-owned fields: published_at and extracted_at must come from the
+        # pipeline, never from the LLM. The LLM historically hallucinated these
+        # (e.g. extracted_at=2025-01-18 for a 2026-06 article), which broke
+        # TimeNormalizer's future-check baseline. Overwrite unconditionally.
+        normalized_time_payload["published_at"] = context.published_at.isoformat()
+        normalized_time_payload["extracted_at"] = context.extracted_at.isoformat()
+
         raw_time = time_payload.get("event_time")
         if raw_time is None:
             # No event_time from LLM — leave as-is for KnowledgeUnit validation
-            return unit_payload
+            normalized_unit_payload = dict(unit_payload)
+            normalized_unit_payload["time"] = normalized_time_payload
+            return normalized_unit_payload
 
         result = self._time_normalizer.normalize_event_time(
             raw_time,
@@ -478,7 +488,6 @@ class KnowledgeExtractor:
             time_grain=time_payload.get("time_grain", "day"),
         )
 
-        normalized_time_payload = dict(time_payload)
         # Future event_time was hard-clamped to None by TimeNormalizer (e.g. a
         # forecast target year like "by 2030"). Fall back to published_at so the
         # KU keeps a valid temporal anchor — the report publication is the

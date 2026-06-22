@@ -13,6 +13,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import sys
 
@@ -24,6 +25,28 @@ from collectors.database import Database
 
 # 延迟初始化的日志器
 _logger: logging.Logger | None = None
+
+# 东方财富 showTime 是北京时间 (CST = UTC+8)。存储前转成 UTC，保证全库时区一致。
+_CST = timezone(timedelta(hours=8))
+
+
+def _cst_showtime_to_utc(show_time: str) -> str:
+    """Convert an EastMoney CST showTime string to ISO 8601 UTC.
+
+    showTime formats seen in the wild:
+      "2026-06-22 16:17:11"  → parsed as CST → "2026-06-22T08:17:11+00:00"
+      "2026-06-22"           → date-only CST → "2026-06-21T16:00:00+00:00"
+    Returns the original string on parse failure (lets downstream handle it).
+    """
+    s = show_time.strip()
+    if not s:
+        return show_time
+    fmt = "%Y-%m-%d %H:%M:%S" if " " in s else "%Y-%m-%d"
+    try:
+        dt = datetime.strptime(s, fmt).replace(tzinfo=_CST).astimezone(timezone.utc)
+        return dt.isoformat()
+    except ValueError:
+        return show_time
 
 
 def _get_logger() -> logging.Logger:
@@ -141,7 +164,7 @@ class EastMoneyCrawler:
                 "doc_id": doc_id,
                 "title": title,
                 "content": content,
-                "publish_time": show_time,
+                "publish_time": _cst_showtime_to_utc(show_time),
                 "source_name": "东方财富快讯",
                 "source_type": SourceType.FINANCIAL_MEDIA.value,
                 "credibility_tier": 2,
