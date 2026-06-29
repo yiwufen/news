@@ -77,3 +77,14 @@
 
     respond 404
 }
+
+# ------------------------------------------------------------------
+# fin-trace agent (Graph Explorer)
+# HTTPS via auto Let's Encrypt. Reverse proxy to fin-trace container.
+# flush_interval -1 禁用缓冲，保证 SSE 流式回复实时到达。
+# ------------------------------------------------------------------
+fin.182-61-1-77.nip.io {
+    reverse_proxy fin-trace:3001 {
+        flush_interval -1
+    }
+}

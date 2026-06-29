@@ -1,0 +1,95 @@
+# CI/CD pipeline for the knowledge-cli service.
+#
+# Two stages:
+#   1. test   — quality gate (pytest + pyright), runs on every push/PR.
+#   2. deploy — SSH into the production host and run deploy.sh, only on master
+#               and only after `test` passes. Zero sudo: deployer is in the
+#               docker group, deploy.sh is pure `docker compose`. systemd unit
+#               changes stay manual (they need root) and are intentionally NOT
+#               automated here.
+#
+# Secrets (repo → Settings → Secrets and variables → Actions):
+#   SERVER_SSH_KEY — ed25519 private key for the `deployer` user (see deploy/README)
+#   SERVER_HOST    — production host IP, e.g. 182.61.1.77
+#   SERVER_USER    — ssh user, e.g. deployer
+#
+# Failure notifications rely on GitHub's built-in email to the repo owner
+# (no extra notify step needed).
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+# Cancel a superseded run on the same ref so a rapid sequence of pushes
+# doesn't queue up overlapping deploys.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      # SHARED_RULES §8 requires both checks before every commit/deploy.
+      - name: Type check (pyright)
+        run: uv run pyright .
+
+      - name: Run tests (pytest)
+        run: uv run pytest
+
+  deploy:
+    name: Deploy to production
+    needs: test
+    # Only the default branch reaches production. PRs run `test` only.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure SSH
+        env:
+          SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SSH_HOST: ${{ secrets.SERVER_HOST }}
+          SSH_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Pin the host key so the first connection is non-interactive and
+          # free of host-key warnings.
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy via deploy.sh
+        env:
+          SSH_HOST: ${{ secrets.SERVER_HOST }}
+          SSH_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          # deploy.sh lives in the repo on the server (kept in sync by git pull
+          # inside the script itself). It runs `set -euo pipefail`, so any
+          # failed step (build error, unhealthy container) propagates a non-zero
+          # exit code back here and fails the job.
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes "$SSH_USER@$SSH_HOST" \
+            'bash /home/deployer/knowledge/repo/deploy.sh'
