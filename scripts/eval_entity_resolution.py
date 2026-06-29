@@ -174,7 +174,9 @@ def evaluate() -> EvalResult:
             time=TimeRef(published_at=now, extracted_at=now),
         )
         resolver.resolve_units_with_cache([unit], entities_cache, persist=False)
-        mention_to_entity[mention] = unit.entities[0].entity_id
+        entity_id = unit.entities[0].entity_id
+        assert entity_id is not None  # resolve 后必已填充
+        mention_to_entity[mention] = entity_id
 
     # Build mention → group mapping for correct group lookups
     mention_to_group: dict[str, str] = {}

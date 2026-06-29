@@ -14,6 +14,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, cast
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PID_DIR = REPO_ROOT / "data" / ".pids"
@@ -71,7 +72,11 @@ if _IS_WINDOWS:
 
     _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
     _STILL_ACTIVE = 259
-    _kernel32 = ctypes.windll.kernel32
+    # ctypes.windll 只在 Windows 存在；pyright 在非 Windows 平台做静态分析时
+    # 不识别该属性（reportAttributeAccessIssue）。用 getattr 绕过属性访问检查，
+    # 运行时此处仅在 Windows 执行，getattr 必然命中真实 windll。
+    _windll = cast("Any", getattr(ctypes, "windll"))
+    _kernel32 = _windll.kernel32
 
     def is_process_alive(pid: int) -> bool:
         handle = _kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)

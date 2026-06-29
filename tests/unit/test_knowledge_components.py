@@ -1573,7 +1573,7 @@ def test_llm_conflict_detector_detects_factual_contradiction() -> None:
             "description": "A称'腾讯收购搜狗'，B称'搜狗收购腾讯'",
         }
     ])
-    detector._client = SimpleNamespace(messages=SimpleNamespace(create=lambda **kwargs: llm_response))
+    detector._client = cast(Any, SimpleNamespace(messages=SimpleNamespace(create=lambda **kwargs: llm_response)))
     detector._model = "test-model"
 
     unit_a = build_unit(summary="腾讯以425亿元收购搜狗", doc_id="doc-1")
@@ -1590,7 +1590,7 @@ def test_llm_conflict_detector_returns_empty_on_no_conflict() -> None:
 
     detector = LLMConflictDetector()
     llm_response = _make_llm_response([])
-    detector._client = SimpleNamespace(messages=SimpleNamespace(create=lambda **kwargs: llm_response))
+    detector._client = cast(Any, SimpleNamespace(messages=SimpleNamespace(create=lambda **kwargs: llm_response)))
     detector._model = "test-model"
 
     unit_a = build_unit(summary="苹果公司发布iPhone 16", doc_id="doc-1")
@@ -1608,7 +1608,7 @@ def test_llm_conflict_detector_falls_back_on_error() -> None:
         raise RuntimeError("LLM service unavailable")
 
     detector = LLMConflictDetector()
-    detector._client = SimpleNamespace(messages=SimpleNamespace(create=raise_error))
+    detector._client = cast(Any, SimpleNamespace(messages=SimpleNamespace(create=raise_error)))
     detector._model = "test-model"
 
     unit_a = build_unit(doc_id="doc-1")
@@ -1626,7 +1626,7 @@ def test_build_event_cluster_snapshot_handles_llm_error(monkeypatch: pytest.Monk
         raise RuntimeError("LLM service unavailable")
 
     mock_llm = LLMConflictDetector()
-    mock_llm._client = SimpleNamespace(messages=SimpleNamespace(create=raise_error))
+    mock_llm._client = cast(Any, SimpleNamespace(messages=SimpleNamespace(create=raise_error)))
     mock_llm._model = "test-model"
     monkeypatch.setattr("src.event_merging._LLM_DETECTOR", mock_llm)
 
@@ -1662,7 +1662,7 @@ def test_build_event_cluster_snapshot_integrates_llm_detection(monkeypatch: pyte
             "description": "A称'利好科技板块'，B称'对科技板块构成利空'",
         }
     ])
-    mock_llm._client = SimpleNamespace(messages=SimpleNamespace(create=lambda **kwargs: llm_response))
+    mock_llm._client = cast(Any, SimpleNamespace(messages=SimpleNamespace(create=lambda **kwargs: llm_response)))
     mock_llm._model = "test-model"
     monkeypatch.setattr("src.event_merging._LLM_DETECTOR", mock_llm)
 

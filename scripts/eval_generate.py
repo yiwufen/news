@@ -470,6 +470,7 @@ def build_golden_dataset(
         if rule_based:
             gen_queries = _generate_rule_queries(ku, ku_entity_names)
         else:
+            assert model is not None  # rule_based=False 时已在上方初始化
             gen_queries = generate_queries_for_ku(ku, ku_entity_names, client, model)
         if not gen_queries:
             logger.warning("跳过 ku=%s: 无法生成查询", ku.ku_id)

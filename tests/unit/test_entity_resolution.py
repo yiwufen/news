@@ -81,7 +81,9 @@ def _resolve_with_context(
         time=TimeRef(published_at=datetime.now(UTC), extracted_at=datetime.now(UTC)),
     )
     resolver.resolve_units_with_cache([unit], cache, persist=False)
-    return cache.get(unit.entities[0].entity_id)
+    entity_id = unit.entities[0].entity_id
+    assert entity_id is not None  # resolve 后必已填充
+    return cache.get(entity_id)
 
 
 def _make_mock_embedding_provider(
@@ -152,7 +154,9 @@ def _resolve_single(
         time=TimeRef(published_at=datetime.now(UTC), extracted_at=datetime.now(UTC)),
     )
     resolver.resolve_units_with_cache([unit], cache, persist=False)
-    return cache[unit.entities[0].entity_id]
+    entity_id = unit.entities[0].entity_id
+    assert entity_id is not None  # resolve 后必已填充
+    return cache[entity_id]
 
 
 # ===========================================================================
