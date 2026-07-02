@@ -12,17 +12,20 @@ from typing import Any
 
 
 class IntentType(Enum):
-    """High-level intent categories for retrieval requests."""
+    """High-level intent categories for retrieval requests.
+
+    Risk/guarantee/event-impact intents were removed: they relied on hardcoded
+    type-vocabulary bonus paths that did not match real relevance. To retrieve
+    risk/guarantee/impact content, callers pass ``event_types`` filters, which
+    apply at recall time (clean pool) instead of via post-hoc scoring hacks.
+    """
 
     ENTITY_TIMELINE = "ENTITY_TIMELINE"
     ENTITY_OVERVIEW = "ENTITY_OVERVIEW"
     RELATIONSHIP_QUERY = "RELATIONSHIP_QUERY"
     COMPARATIVE_ANALYSIS = "COMPARATIVE_ANALYSIS"
     EVENT_ANALYSIS = "EVENT_ANALYSIS"
-    RISK_ASSESSMENT = "RISK_ASSESSMENT"
-    GUARANTEE_ANALYSIS = "GUARANTEE_ANALYSIS"
     TOPIC_RESEARCH = "TOPIC_RESEARCH"
-    EVENT_IMPACT_ANALYSIS = "EVENT_IMPACT_ANALYSIS"
 
 
 @dataclass
@@ -98,6 +101,8 @@ def make_query(
     event_types: list[str] | None = None,
     hops: int = 1,
     target_entity: str | None = None,
+    *,
+    original_query: str | None = None,
 ) -> StructuredQuery:
     """Build a StructuredQuery without LLM parsing.
 
@@ -120,6 +125,12 @@ def make_query(
         Entity-to-Entity hop count for graph expansion (1-5, default: 1).
     target_entity:
         For A-B relationship path queries, the second entity name.
+    original_query:
+        Optional raw query text (e.g. a topic phrase like ``"半导体"`` when
+        ``entities`` is empty). Falls back to ``", ".join(entities)`` when
+        omitted, preserving the historical behaviour for entity-driven
+        queries. Required for topic-style queries that carry no entities —
+        otherwise the retrieval layer short-circuits on empty query text.
     """
     if isinstance(intent, str):
         intent = IntentType(intent)
@@ -129,12 +140,15 @@ def make_query(
             start=date.fromisoformat(time_range[0]),
             end=date.fromisoformat(time_range[1]),
         )
+    effective_query = (
+        original_query if original_query is not None else ", ".join(entities)
+    )
     return StructuredQuery(
         intent=intent,
         entities=entities,
         time_range=tr,
         filters=QueryFilters(event_types=event_types),
-        original_query=", ".join(entities),
+        original_query=effective_query,
         hops=hops,
         target_entity=target_entity,
     )

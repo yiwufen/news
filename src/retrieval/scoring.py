@@ -1,4 +1,15 @@
-"""Intent-aware scoring profiles for retrieval ranking."""
+"""Intent-aware scoring profiles for retrieval ranking.
+
+Risk / guarantee / event-impact intents were removed. The corresponding
+hardcoded ``RISK_UNIT_TYPES`` vocabulary and ``risk_type_bonus`` /
+``causal_chain_bonus`` bonus paths were deleted because the type-vocabulary
+mapping did not match real relevance (e.g. a risk query's relevant KUs were
+mostly ``stock_price_change``, which never hit the old risk vocabulary).
+
+To retrieve risk / guarantee / impact content now, callers pass
+``event_types`` filters, which constrain the candidate pool at recall time
+rather than nudging scores after the fact.
+"""
 
 from __future__ import annotations
 
@@ -17,36 +28,10 @@ class ScoringProfile:
     bm25_weight: float = 0.5
     bm25_cap: float = 3.0
     recency_scale: float = 1.0
-    risk_type_bonus: float = 0.0
-    causal_chain_bonus: float = 0.0
-    recency_boost_days: int = 0
 
-
-RISK_UNIT_TYPES = frozenset({
-    "debt_default", "equity_pledge", "legal_proceeding",
-    "regulatory_action", "sanction", "risk_warning",
-    "restructuring", "executive_change",
-})
 
 INTENT_PROFILES: dict[IntentType, ScoringProfile] = {
     IntentType.ENTITY_OVERVIEW: ScoringProfile(),
-    IntentType.RISK_ASSESSMENT: ScoringProfile(
-        entity_bonus=8.0,
-        dense_weight=6.0,
-        event_type_bonus=5.0,
-        bm25_weight=0.7,
-        bm25_cap=4.0,
-        risk_type_bonus=5.0,
-    ),
-    IntentType.EVENT_IMPACT_ANALYSIS: ScoringProfile(
-        entity_bonus=7.0,
-        dense_weight=6.0,
-        event_type_bonus=4.0,
-        bm25_weight=0.6,
-        bm25_cap=3.5,
-        causal_chain_bonus=4.0,
-        recency_boost_days=30,
-    ),
     IntentType.TOPIC_RESEARCH: ScoringProfile(
         entity_bonus=6.0,
         dense_weight=8.0,
@@ -60,11 +45,6 @@ INTENT_PROFILES: dict[IntentType, ScoringProfile] = {
         event_type_bonus=5.0,
         bm25_weight=0.6,
         bm25_cap=3.5,
-    ),
-    IntentType.GUARANTEE_ANALYSIS: ScoringProfile(
-        entity_bonus=10.0,
-        dense_weight=6.0,
-        event_type_bonus=4.0,
     ),
     IntentType.RELATIONSHIP_QUERY: ScoringProfile(
         entity_bonus=10.0,
