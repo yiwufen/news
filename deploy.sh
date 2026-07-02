@@ -40,6 +40,24 @@ export DOMAIN
 # --- 1. Pull latest code ---
 cd "${REPO_DIR}"
 echo "[1/4] Pulling latest code..."
+
+# Some repo-tracked files are routinely modified on the server before their
+# changes make it back into a commit (ops "live-first" workflow): Caddyfile
+# gets hand-tuned for routes, deploy/*.service units are created on the host
+# first and committed later. Their working-tree copy then diverges from HEAD
+# and breaks `git pull --ff-only`, stalling every subsequent deploy.
+#
+# We reconcile these known files to HEAD before pulling. The repository is the
+# source of truth for them; if the on-disk content already matches HEAD this
+# is a no-op, and if it differs the repo version wins (the live change was
+# either already committed back, or is being superseded by a newer commit).
+git checkout -- Caddyfile
+git checkout -- deploy/
+# Remove any untracked files under deploy/ (e.g. a .service created on the
+# host before being committed to the repo) that would otherwise collide with
+# files the pull needs to write.
+git clean -fd -- deploy/
+
 git pull --ff-only origin master
 
 # --- 2. Ensure data directory exists ---
