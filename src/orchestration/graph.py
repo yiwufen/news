@@ -56,23 +56,14 @@ class _GraphEnhancement:
 def _enhance_with_graph(
     *,
     structured_query: StructuredQuery,
-    source: str,
     db_path: str = DEFAULT_DB_PATH,
 ) -> _GraphEnhancement:
     """Run graph expansion from query entities.
 
     The graph always expands from the entities named in the query.
-    Intent-specific filtering (e.g. focus-cluster selection for
-    EVENT_IMPACT_ANALYSIS) is the responsibility of the Skills layer.
+    Intent-specific filtering (e.g. focus-cluster selection) is the
+    responsibility of the Skills layer.
     """
-    if source != "knowledge_base":
-        return _GraphEnhancement(
-            graph_result=GraphRetrievalResult.empty(start_entities=[]),
-            entities=[],
-            event_clusters=[],
-            errors=[],
-        )
-
     entity_repo = _resolve_entity_repo(db_path)
     start_entities = entity_repo.find_by_names(structured_query.entities)
     if not start_entities:
@@ -151,7 +142,6 @@ def _merge_by_id(
 
 
 def run_pipeline(
-    articles: list[dict] | None = None,
     graph_enabled: bool = True,
     structured_query: StructuredQuery | None = None,
     top_k: int = 20,
@@ -160,11 +150,10 @@ def run_pipeline(
 ) -> PipelineResult:
     """Run the knowledge retrieval pipeline over normalized evidence.
 
-    The supported mainline reads from the persisted knowledge base. Passing
-    ``articles`` is an ad-hoc/debug path that performs temporary online
-    extraction and in-memory retrieval; it does not participate in graph
-    enhancement and should not replace offline ingestion through
-    ``run_continuous``.
+    The mainline reads from the persisted knowledge base built by
+    ``run_continuous``. The former ``articles`` ad-hoc/debug bypass (online
+    extraction + in-memory retrieval) has been removed: it carried a second,
+    divergent scoring path with no production callers.
 
     ``graph_enabled=False`` is reserved for tests, debugging, and local
     operational triage. Product code should treat graph retrieval as enabled by
@@ -188,12 +177,8 @@ def run_pipeline(
         top_k=top_k,
     )
 
-    if articles:
-        search_result = searcher.search_articles(articles, request)
-        source: str = "direct_articles"
-    else:
-        search_result = searcher.search(request)
-        source = "knowledge_base"
+    search_result = searcher.search(request)
+    source: str = "knowledge_base"
 
     serialized: dict[str, Any] = search_result.to_dict()
 
@@ -201,7 +186,6 @@ def run_pipeline(
     if graph_enabled:
         graph_enhancement = _enhance_with_graph(
             structured_query=effective_query,
-            source=source,
             db_path=db_path,
         )
 
@@ -227,8 +211,6 @@ def run_pipeline(
 
     errors = list(graph_enhancement.errors) if graph_enhancement else []
     warnings: list[dict[str, str]] = []
-    if source == "direct_articles" and effective_query.intent == IntentType.RELATIONSHIP_QUERY:
-        errors.append("关系查询当前仅支持 knowledge_base 检索源，不支持 direct articles 输入")
 
     # Detect graph-dependent intents that degraded silently.
     if (

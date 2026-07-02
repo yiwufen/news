@@ -47,21 +47,18 @@ class TimeRange:
 
 @dataclass
 class QueryFilters:
-    """Structured metadata filters for retrieval."""
+    """Structured metadata filters for retrieval.
+
+    Only ``event_types`` is consumed by the retrieval and graph layers;
+    risk-centric filters were removed together with the risk intents (the
+    type-vocabulary bonus paths did not match real relevance).
+    """
 
     event_types: list[str] | None = None
-    risk_levels: list[str] | None = None
-    sources: list[str] | None = None
-    min_credibility: float = 0.5
-    categories: list[str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "event_types": self.event_types,
-            "risk_levels": self.risk_levels,
-            "sources": self.sources,
-            "min_credibility": self.min_credibility,
-            "categories": self.categories,
         }
 
 

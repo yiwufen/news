@@ -26,9 +26,6 @@ from src.schemas.query import IntentType, StructuredQuery
 from src.knowledge_base import (
     KnowledgeUnit,
     KnowledgeUnitRepository,
-    RawDocument,
-    adapt_article_to_raw_document,
-    build_knowledge_unit_search_text,
 )
 from src.knowledge_extractor import KnowledgeExtractor
 from src.retrieval.scoring import INTENT_PROFILES, ScoringProfile
@@ -354,8 +351,17 @@ class KnowledgeSearcher:
     ) -> KnowledgeSearchResult:
         """Balanced retrieval for A vs B comparison.
 
-        Strategy: per-entity recall → union of candidates → coverage-aware rerank.
-        KUs that mention multiple entities get a co-occurrence bonus.
+        First-principles: a comparison query carries only entity names — no
+        comparison axis (financials? market share? technology?). The retrieval
+        layer therefore cannot judge which KU is "more comparative"; that is the
+        agent's job. Its sole responsibility here is *fair recall*: every named
+        entity gets an equal share of the result slots, so neither side buries
+        the other.
+
+        Strategy: per-entity recall → co-occurrence first → round-robin by
+        entity bucket → recency within each bucket. No coverage bonus, no
+        semantic comparison scoring — those need information the query does
+        not carry.
         """
         query = request.structured_query
         if len(query.entities) < 2:
@@ -365,9 +371,11 @@ class KnowledgeSearcher:
         time_range = self._serialize_time_range(query)
         event_types = self._expand_event_types(query)
 
-        # Per-entity recall — track which entities each KU mentions
-        coverage: dict[str, set[int]] = {}  # ku_id -> entity indices
-        bm25_scores: dict[str, float] = {}  # ku_id -> best (most-negative) bm25
+        # Per-entity recall — keep each entity's candidate pool SEPARATE so the
+        # merge step can enforce balance. ku_ownership[ku_id] = {entity indices
+        # that recalled this KU}; a KU recalled by >1 entity is a co-occurrence.
+        ku_ownership: dict[str, set[int]] = {}
+        bm25_scores: dict[str, float] = {}
         all_matched: list[Entity] = []
 
         for idx, entity_name in enumerate(query.entities):
@@ -375,7 +383,6 @@ class KnowledgeSearcher:
             all_matched.extend(matched)
             eids = [e.entity_id for e in matched]
             if eids:
-                # Entity resolved: use entity-id lookup (no bm25 score, use -1.0)
                 ku_ids = self.units.find_by_entity_ids(
                     eids,
                     time_range=time_range,
@@ -384,7 +391,6 @@ class KnowledgeSearcher:
                 )
                 hits = [(kid, -1.0) for kid in ku_ids]
             else:
-                # Entity not resolved: BM25 fallback with broader query
                 fts = self._build_fts_query_for_terms([entity_name, query.original_query])
                 hits = self.units.search_bm25(
                     fts, top_k=request.top_k * 3,
@@ -393,20 +399,17 @@ class KnowledgeSearcher:
                 ) if fts.strip() else []
 
             for kid, score in hits:
-                coverage.setdefault(kid, set()).add(idx)
-                # Keep most informative (lowest, most-negative) bm25 across entities
+                ku_ownership.setdefault(kid, set()).add(idx)
                 bm25_scores[kid] = min(bm25_scores.get(kid, 0.0), score)
 
-        if not coverage:
-            # No candidates at all — fall back to standard path
+        if not ku_ownership:
             return self._search_with_relaxation(request)
 
-        # Build hits list with coverage-aware scoring
-        hits = [(kid, bm25_scores[kid]) for kid in coverage]
+        hits = [(kid, bm25_scores[kid]) for kid in ku_ownership]
         result = self._build_ranked_result_comparative(
             request=request,
             bm25_hits=hits,
-            coverage=coverage,
+            ku_ownership=ku_ownership,
             matched_entities=all_matched,
             profile=profile,
         )
@@ -518,33 +521,6 @@ class KnowledgeSearcher:
             retrieval_path="timeline",
         )
 
-    def search_articles(
-        self,
-        articles: list[dict],
-        request: KnowledgeSearchRequest,
-    ) -> KnowledgeSearchResult:
-        raw_documents: list[RawDocument] = [
-            adapt_article_to_raw_document(article)
-            for article in articles
-        ]
-        extracted_units: list[KnowledgeUnit] = []
-        for document in raw_documents:
-            extracted_units.extend(self.extractor.extract(document))
-        resolved_units, transient_entities = self.entity_resolver.resolve_units(
-            extracted_units,
-            persist=False,
-        )
-        clustered_units, transient_clusters = self.clusterer.assign_clusters(
-            resolved_units,
-            persist=False,
-        )
-        return self._search_units_in_memory(
-            clustered_units,
-            request,
-            transient_entities=transient_entities,
-            transient_clusters=transient_clusters,
-        )
-
     def _empty_result(
         self,
         request: KnowledgeSearchRequest,
@@ -604,9 +580,6 @@ class KnowledgeSearcher:
             ),
             reverse=True,
         )
-        ranked_hits = self._apply_intent_reranking(
-            ranked_hits, request.structured_query.intent
-        )
         ranked_hits = self._diversify_by_cluster(ranked_hits)
         selected = ranked_hits[: request.top_k]
         selected_units = [unit for _, unit, _ in selected]
@@ -655,17 +628,28 @@ class KnowledgeSearcher:
         *,
         request: KnowledgeSearchRequest,
         bm25_hits: list[tuple[str, float]],
-        coverage: dict[str, set[int]],
+        ku_ownership: dict[str, set[int]],
         matched_entities: list[Entity],
         dense_scores: dict[str, float] | None = None,
         profile: ScoringProfile | None = None,
     ) -> KnowledgeSearchResult:
-        """Build ranked result for COMPARATIVE_ANALYSIS with coverage bonus.
+        """Build ranked result for COMPARATIVE_ANALYSIS via balanced recall.
 
-        KUs that mention multiple query entities get a co-occurrence bonus:
-        - 2 entities covered: +3.0
-        - 3 entities covered: +6.0
-        - etc.
+        A comparison query carries no comparison axis, so the layer does not
+        attempt to score "comparative relevance". Instead it enforces fair
+        coverage:
+
+          1. Co-occurrence KUs (recalled for >1 entity) go first — these are the
+             rare genuine "both sides in one statement" items.
+          2. Remaining slots are filled round-robin across the per-entity
+             buckets so each named entity keeps an equal share of the result,
+             preventing the entity with more KUs from burying the other.
+          3. Within each bucket, order by recency.
+
+        Scores from ``_score_final_hit`` are still computed for metadata
+        (component_scores), but they no longer drive the final order — that is
+        intentional: without a comparison axis in the query, score differences
+        across entities are not comparable.
         """
         candidate_ids = [ku_id for ku_id, _ in bm25_hits]
         if not candidate_ids:
@@ -675,49 +659,87 @@ class KnowledgeSearcher:
         filtered_units = self._filter_candidates(all_units, request.structured_query)
         unit_map = {unit.ku_id: unit for unit in filtered_units}
         bm25_lookup = dict(bm25_hits)
-        ranked_hits: list[tuple[float, KnowledgeUnit, dict[str, object]]] = []
-        matched_entity_ids = {entity.entity_id for entity in matched_entities}
-
         matched_entity_ids = {entity.entity_id for entity in matched_entities}
         dense = dense_scores or {}
+        profile = profile or ScoringProfile()
 
+        # Partition candidates: co-occurrence vs per-entity-exclusive.
+        co_occurrence: list[KnowledgeUnit] = []
+        per_entity: dict[int, list[KnowledgeUnit]] = defaultdict(list)
         for ku_id in candidate_ids:
             unit = unit_map.get(ku_id)
             if unit is None:
                 continue
-            final_score, metadata = self._score_final_hit(
+            owners = ku_ownership.get(ku_id, set())
+            if len(owners) > 1:
+                co_occurrence.append(unit)
+            else:
+                # Assign to the single entity that recalled it
+                idx = next(iter(owners)) if owners else -1
+                per_entity[idx].append(unit)
+
+        # Sort each bucket by recency (newest first)
+        co_occurrence.sort(key=lambda u: self._unit_anchor(u), reverse=True)
+        for idx in per_entity:
+            per_entity[idx].sort(key=lambda u: self._unit_anchor(u), reverse=True)
+
+        # Round-robin merge: co-occurrence first, then alternate entity buckets
+        # until top_k is reached. Once a bucket is exhausted, the others keep
+        # filling so no slot is wasted — but earlier slots are balanced.
+        n_entities = len(per_entity)
+        entity_order = sorted(per_entity.keys())
+        cursors: dict[int, int] = {idx: 0 for idx in entity_order}
+        co_cursor = 0
+        selected_units: list[KnowledgeUnit] = []
+        seen: set[str] = set()
+
+        # Pass 1: co-occurrence KUs first (genuine multi-entity statements)
+        for unit in co_occurrence:
+            if len(selected_units) >= request.top_k:
+                break
+            if unit.ku_id not in seen:
+                selected_units.append(unit)
+                seen.add(unit.ku_id)
+
+        # Pass 2: round-robin across entity buckets
+        while len(selected_units) < request.top_k:
+            progressed = False
+            for idx in entity_order:
+                if len(selected_units) >= request.top_k:
+                    break
+                bucket = per_entity[idx]
+                cur = cursors[idx]
+                if cur < len(bucket):
+                    unit = bucket[cur]
+                    if unit.ku_id not in seen:
+                        selected_units.append(unit)
+                        seen.add(unit.ku_id)
+                    cursors[idx] = cur + 1
+                    progressed = True
+            if not progressed:
+                break  # all buckets exhausted
+
+        # Cluster diversification still applies — comparisons benefit from not
+        # repeating the same event repeatedly for one side.
+        selected_tuples: list[tuple[float, KnowledgeUnit, dict[str, object]]] = []
+        for unit in selected_units:
+            score, metadata = self._score_final_hit(
                 unit,
                 request.structured_query,
-                bm25_lookup.get(ku_id, 0.0),
+                bm25_lookup.get(unit.ku_id, 0.0),
                 matched_entity_ids=matched_entity_ids,
-                dense_score=dense.get(ku_id, 0.0),
+                dense_score=dense.get(unit.ku_id, 0.0),
                 profile=profile,
             )
+            owners = ku_ownership.get(unit.ku_id, set())
+            if isinstance(metadata.get("component_scores"), dict) and len(owners) > 1:
+                metadata["component_scores"]["co_occurrence"] = True  # type: ignore[index]
+            metadata["entities_covered"] = sorted(owners)  # type: ignore[index]
+            selected_tuples.append((score, unit, metadata))
 
-            # Add coverage bonus for KUs mentioning multiple query entities
-            covered = len(coverage.get(ku_id, set()))
-            if covered > 1:
-                coverage_bonus = 3.0 * (covered - 1)
-                final_score += coverage_bonus
-                component_scores = metadata.get("component_scores", {})
-                if isinstance(component_scores, dict):
-                    component_scores["coverage_bonus"] = coverage_bonus  # type: ignore[index]
-                metadata["coverage"] = covered  # type: ignore[index]
+        selected_tuples = self._diversify_by_cluster(selected_tuples)
+        selected_units = [unit for _, unit, _ in selected_tuples]
 
-            ranked_hits.append((final_score, unit, metadata))
-
-        ranked_hits.sort(
-            key=lambda item: (
-                item[0],
-                self._unit_anchor(item[1]).timestamp(),
-                item[1].ku_id,
-            ),
-            reverse=True,
-        )
-        ranked_hits = self._diversify_by_cluster(ranked_hits)
-        selected = ranked_hits[: request.top_k]
-        selected_units = [unit for _, unit, _ in selected]
-        selected_unit_ids = [unit.ku_id for unit in selected_units]
         selected_entity_ids = {
             entity.entity_id
             for unit in selected_units
@@ -740,83 +762,19 @@ class KnowledgeSearcher:
 
         hit_scores = {
             unit.ku_id: metadata
-            for _, unit, metadata in selected
+            for _, unit, metadata in selected_tuples
         }
         return KnowledgeSearchResult(
             knowledge_units=selected_units,
             entities=selected_entities,
             event_clusters=selected_clusters,
-            total_count=len(ranked_hits),
+            total_count=len(selected_tuples),
             bm25_count=len(bm25_hits),
             applied_filters=self._build_applied_filters(
                 request.structured_query,
                 matched_entities,
             ),
             hit_scores=hit_scores,
-        )
-
-    def _search_units_in_memory(
-        self,
-        all_units: list[KnowledgeUnit],
-        request: KnowledgeSearchRequest,
-        transient_entities: list[Entity] | None = None,
-        transient_clusters: list[EventCluster] | None = None,
-    ) -> KnowledgeSearchResult:
-        all_entities = transient_entities or []
-        all_clusters = transient_clusters or []
-        entity_map = {entity.entity_id: entity for entity in all_entities}
-        ranked: list[tuple[float, KnowledgeUnit]] = []
-        for unit in all_units:
-            if not self._matches_time(unit, request.structured_query):
-                continue
-            if request.structured_query.entities and not self._matches_entities(
-                unit,
-                request.structured_query.entities,
-                entity_map,
-            ):
-                continue
-            score = self._score_in_memory_unit(unit, request.structured_query, entity_map)
-            ranked.append((score, unit))
-
-        ranked.sort(
-            key=lambda item: (
-                item[0],
-                self._unit_anchor(item[1]).timestamp(),
-                item[1].ku_id,
-            ),
-            reverse=True,
-        )
-        selected_units = [unit for _, unit in ranked[: request.top_k]]
-        selected_entity_ids = {
-            entity.entity_id
-            for unit in selected_units
-            for entity in unit.entities
-            if entity.entity_id
-        }
-        selected_cluster_ids = {
-            unit.cluster_id for unit in selected_units if unit.cluster_id
-        }
-        selected_entities = [
-            entity for entity in all_entities if entity.entity_id in selected_entity_ids
-        ]
-        selected_clusters = [
-            cluster for cluster in all_clusters if cluster.cluster_id in selected_cluster_ids
-        ]
-        return KnowledgeSearchResult(
-            knowledge_units=selected_units,
-            entities=selected_entities,
-            event_clusters=selected_clusters,
-            total_count=len(ranked),
-            bm25_count=len(selected_units),
-            applied_filters=self._build_applied_filters(request.structured_query, selected_entities),
-            hit_scores={
-                unit.ku_id: {
-                    "score": score,
-                    "sources": ["memory"],
-                    "component_scores": {"memory": score},
-                }
-                for score, unit in ranked[: request.top_k]
-            },
         )
 
     def _build_fts_query(
@@ -880,8 +838,6 @@ class KnowledgeSearcher:
         dense_score: float = 0.0,
         profile: ScoringProfile | None = None,
     ) -> tuple[float, dict[str, object]]:
-        from src.retrieval.scoring import RISK_UNIT_TYPES
-
         p = profile or ScoringProfile()
         component_scores: dict[str, float] = {
             "bm25_score": bm25_score,
@@ -920,27 +876,6 @@ class KnowledgeSearcher:
         component_scores["recency_bonus"] = recency_bonus
         final_score += recency_bonus
 
-        # Risk-type boost (RISK_ASSESSMENT intent)
-        if p.risk_type_bonus > 0 and unit.unit_type in RISK_UNIT_TYPES:
-            component_scores["risk_type_bonus"] = p.risk_type_bonus
-            final_score += p.risk_type_bonus
-
-        # Causal-chain boost (EVENT_IMPACT_ANALYSIS intent)
-        if p.causal_chain_bonus > 0 and unit.relation_hints:
-            component_scores["causal_chain_bonus"] = p.causal_chain_bonus
-            final_score += p.causal_chain_bonus
-
-        # Recency boost for recent events
-        if p.recency_boost_days > 0:
-            from datetime import UTC, datetime
-
-            anchor = self._unit_anchor(unit)
-            days_ago = (datetime.now(UTC) - anchor).days
-            if 0 <= days_ago <= p.recency_boost_days:
-                boost = (p.recency_boost_days - days_ago) / p.recency_boost_days * 2.0
-                component_scores["recency_boost"] = boost
-                final_score += boost
-
         metadata = {
             "score": final_score,
             "sources": ["dense" if dense_score > 0 else "bm25"],
@@ -965,79 +900,6 @@ class KnowledgeSearcher:
             return True
         anchor = self._unit_anchor(unit).date()
         return query.time_range.start <= anchor <= query.time_range.end
-
-    def _matches_entities(
-        self,
-        unit: KnowledgeUnit,
-        query_entities: list[str],
-        entity_map: dict[str, Entity],
-    ) -> bool:
-        unit_variants = self._unit_entity_variants(unit, entity_map)
-        if not unit_variants:
-            return False
-        return any(self._query_entity_variants(entity) & unit_variants for entity in query_entities)
-
-    def _score_in_memory_unit(
-        self,
-        unit: KnowledgeUnit,
-        query: StructuredQuery,
-        entity_map: dict[str, Entity],
-    ) -> float:
-        unit_variants = self._unit_entity_variants(unit, entity_map)
-        haystack = self._unit_search_text(unit, entity_map)
-        score = 0.0
-
-        if query.entities:
-            for entity in query.entities:
-                if self._query_entity_variants(entity) & unit_variants:
-                    score += 5.0
-
-        if query.filters.event_types and unit.unit_type in query.filters.event_types:
-            score += 2.0
-
-        raw_query = query.original_query.strip().lower()
-        if raw_query:
-            if raw_query in haystack:
-                score += 3.0
-            else:
-                for token in self._tokenize_query(raw_query):
-                    if token in haystack:
-                        score += 0.5
-
-        score += self._unit_anchor(unit).timestamp() / 10_000_000_000
-        return score
-
-    def _unit_search_text(
-        self,
-        unit: KnowledgeUnit,
-        entity_map: dict[str, Entity],
-    ) -> str:
-        entity_names: list[str] = []
-        for entity_ref in unit.entities:
-            entity_names.append(entity_ref.mention)
-            if not entity_ref.entity_id:
-                continue
-            entity = entity_map.get(entity_ref.entity_id)
-            if entity:
-                entity_names.append(entity.canonical_name)
-                entity_names.extend(entity.aliases)
-        return build_knowledge_unit_search_text(unit, entity_names=entity_names).lower()
-
-    def _unit_entity_variants(
-        self,
-        unit: KnowledgeUnit,
-        entity_map: dict[str, Entity],
-    ) -> set[str]:
-        variants: set[str] = set()
-        for entity_ref in unit.entities:
-            variants |= build_entity_name_variants(entity_ref.mention)
-            if entity_ref.entity_id and entity_ref.entity_id in entity_map:
-                entity = entity_map[entity_ref.entity_id]
-                variants |= build_entity_name_variants(entity.canonical_name, *entity.aliases)
-        return variants
-
-    def _query_entity_variants(self, entity_name: str) -> set[str]:
-        return build_entity_name_variants(entity_name)
 
     def _serialize_time_range(self, query: StructuredQuery) -> tuple[str, str] | None:
         if query.time_range is None:
@@ -1076,25 +938,6 @@ class KnowledgeSearcher:
             cluster_counts[cid] += 1
             diversified.append((score, unit, meta))
         return diversified
-
-    def _apply_intent_reranking(
-        self,
-        ranked_hits: list[tuple[float, KnowledgeUnit, dict[str, object]]],
-        intent: IntentType,
-    ) -> list[tuple[float, KnowledgeUnit, dict[str, object]]]:
-        """Boost scores based on intent-specific semantic signals."""
-        from src.retrieval.scoring import RISK_UNIT_TYPES
-
-        if intent == IntentType.RISK_ASSESSMENT:
-            for i, (score, unit, meta) in enumerate(ranked_hits):
-                if unit.unit_type in RISK_UNIT_TYPES:
-                    ranked_hits[i] = (score + 5.0, unit, meta)
-        elif intent == IntentType.EVENT_IMPACT_ANALYSIS:
-            for i, (score, unit, meta) in enumerate(ranked_hits):
-                if unit.relation_hints:
-                    ranked_hits[i] = (score + 3.0, unit, meta)
-        ranked_hits.sort(key=lambda x: x[0], reverse=True)
-        return ranked_hits
 
     def _filter_candidates(
         self,

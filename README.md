@@ -115,10 +115,11 @@ https://182-61-1-77.nip.io/mcp
 | `RELATIONSHIP_QUERY` | 查两个实体间关系路径（需配合 `target_entity`） |
 | `COMPARATIVE_ANALYSIS` | 多实体对比分析 |
 | `EVENT_ANALYSIS` | 按事件类型筛选 |
-| `RISK_ASSESSMENT` | 风险因素评估 |
-| `EVENT_IMPACT_ANALYSIS` | 事件影响范围分析 |
 | `TOPIC_RESEARCH` | 主题/产业链研究 |
-| `GUARANTEE_ANALYSIS` | 担保关系分析 |
+
+> 风险/担保/事件影响场景不再设专用意图，改用上表意图叠加 `event_types` 过滤。
+> 例如查「恒大集团的债务风险」用 `ENTITY_OVERVIEW` + `event_types=["债务违约","监管处罚/合规调查"]`；
+> 查担保关系用 `RELATIONSHIP_QUERY`（图谱 expand 接口仍提供担保链/循环担保分析）。
 
 ### 注意事项
 
@@ -167,7 +168,7 @@ flowchart TB
         EID["Entity-ID Lookup"]
         DENSE["Dense Retrieval<br/>Vector Similarity"]
         BM25["BM25 Full-text<br/>+ Structured Filters"]
-        RRF["Reciprocal Rank Fusion"]
+        FUSION["Weighted Score Fusion"]
     end
 
     subgraph Interface["Agent Interface"]
@@ -183,10 +184,10 @@ flowchart TB
     SQL --> FTS
     SQL --> LDB
 
-    EID --> RRF
-    DENSE --> RRF
-    BM25 --> RRF
-    RRF --> MCP
+    EID --> FUSION
+    DENSE --> FUSION
+    BM25 --> FUSION
+    FUSION --> MCP
     NEO -->|"Graph Traversal"| MCP
 
     style Sources fill:#e1f5fe,stroke:#0288d1

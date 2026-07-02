@@ -21,27 +21,6 @@ for _var in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"):
         del os.environ[_var]
 
 
-def create_llm_client() -> tuple[Anthropic, str]:
-    """
-    创建统一的 LLM 客户端（向后兼容接口）。
-
-    推荐使用 create_online_llm_client() 或 create_offline_llm_client()
-    """
-    config = get_llm_config()
-    return _create_client(config.default_model)
-
-
-def create_online_llm_client() -> tuple[Anthropic, str]:
-    """
-    创建在线处理模块使用的 LLM 客户端。
-
-    用于：意图解析等实时服务
-    """
-    config = get_llm_config()
-    model = config.get_online_model()
-    return _create_client(model)
-
-
 def create_offline_llm_client() -> tuple[Anthropic, str]:
     """
     创建离线处理模块使用的 LLM 客户端。
@@ -62,11 +41,6 @@ def _create_client(model: str) -> tuple[Anthropic, str]:
 
     client = Anthropic(api_key=config.api_key, base_url=config.base_url)
     return client, model
-
-
-def get_online_max_tokens() -> int:
-    """获取在线处理的 max_tokens 配置。"""
-    return get_llm_config().get_online_max_tokens()
 
 
 def get_offline_max_tokens() -> int:
