@@ -41,22 +41,25 @@ export DOMAIN
 cd "${REPO_DIR}"
 echo "[1/4] Pulling latest code..."
 
-# Some repo-tracked files are routinely modified on the server before their
-# changes make it back into a commit (ops "live-first" workflow): Caddyfile
-# gets hand-tuned for routes, deploy/*.service units are created on the host
-# first and committed later. Their working-tree copy then diverges from HEAD
-# and breaks `git pull --ff-only`, stalling every subsequent deploy.
+# The deploy host is a read-only mirror of origin/master: it must not carry
+# any working-tree state that diverges from git. In practice the tree gets
+# dirty through the normal ops rhythm — Caddyfile hand-tuned for a route,
+# deploy/*.service created on the host before being committed, deploy.sh
+# itself edited in place. Any of these breaks `git pull --ff-only` and stalls
+# every subsequent deploy until someone logs in to clean up.
 #
-# We reconcile these known files to HEAD before pulling. The repository is the
-# source of truth for them; if the on-disk content already matches HEAD this
-# is a no-op, and if it differs the repo version wins (the live change was
-# either already committed back, or is being superseded by a newer commit).
-git checkout -- Caddyfile
-git checkout -- deploy/
-# Remove any untracked files under deploy/ (e.g. a .service created on the
-# host before being committed to the repo) that would otherwise collide with
-# files the pull needs to write.
-git clean -fd -- deploy/
+# So before pulling we force the working tree back to a pristine state:
+#   git reset --hard  — discard ALL tracked modifications (repo is truth)
+#   git clean -fd     — remove untracked files/dirs, but RESPECT .gitignore
+#                       so server-only assets stay safe: .env (API keys),
+#                       data/ (the SQLite knowledge base), .venv/, caches.
+#
+# This makes the "which files can drift?" question moot — the answer is
+# "all of them, and they all get reconciled to the repo". --ff-only is kept
+# so a genuine non-fast-forward (e.g. a force-push rewriting history) still
+# fails loudly instead of silently merging.
+git reset --hard HEAD
+git clean -fd
 
 git pull --ff-only origin master
 
