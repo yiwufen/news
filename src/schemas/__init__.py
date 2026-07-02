@@ -6,10 +6,7 @@ Schema 模块
 
 from src.schemas.enums import (
     EntityType,
-    EventType,
     RelationType,
-    RiskLevel,
-    classify_risk_score,
 )
 from src.schemas.graph import GraphEdge, GraphNode, GraphUpdates
 from src.schemas.query import (
@@ -22,11 +19,8 @@ from src.schemas.query import (
 
 __all__ = [
     # 枚举
-    "EventType",
     "RelationType",
     "EntityType",
-    "RiskLevel",
-    "classify_risk_score",
     # 图谱模型
     "GraphNode",
     "GraphEdge",

@@ -1401,7 +1401,13 @@ def test_comparative_analysis_unresolved_entities_falls_back_gracefully(tmp_path
 
 
 def test_comparative_analysis_co_occurrence_ranks_higher(tmp_path) -> None:
-    """KUs mentioning multiple entities get coverage bonus in scoring."""
+    """Co-occurrence KUs rank first; per-entity KUs get balanced coverage.
+
+    First-principles for comparative: the query carries no comparison axis, so
+    the layer cannot judge "comparative relevance". Its job is fair recall —
+    co-occurrence statements go first (rare genuine multi-entity items), then
+    the two sides alternate so neither buries the other.
+    """
     now = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
     searcher, _ = _setup_searcher_with_entities(
         tmp_path,
@@ -1429,7 +1435,8 @@ def test_comparative_analysis_co_occurrence_ranks_higher(tmp_path) -> None:
 
     assert result.total_count >= 3
 
-    # Find the co-occurrence KU
+    # Co-occurrence KU should rank FIRST — it is the rare genuine multi-entity
+    # statement and is placed ahead of per-entity-exclusive KUs.
     co_occurrence_ku = None
     for ku in result.knowledge_units:
         if "Apple" in ku.summary and "Tesla" in ku.summary:
@@ -1437,13 +1444,24 @@ def test_comparative_analysis_co_occurrence_ranks_higher(tmp_path) -> None:
             break
 
     assert co_occurrence_ku is not None, "Co-occurrence KU should be in results"
+    assert result.knowledge_units[0].ku_id == co_occurrence_ku.ku_id, (
+        "Co-occurrence KU should rank first"
+    )
 
-    # The co-occurrence KU should have coverage_bonus in its score components
+    # Co-occurrence KU is flagged in component_scores (behavior contract, not
+    # a specific bonus mechanism).
     score_info = result.hit_scores.get(co_occurrence_ku.ku_id, {})
     component_scores = score_info.get("component_scores", {}) if isinstance(score_info, dict) else {}
     assert isinstance(component_scores, dict), "component_scores should be a dict"
-    assert "coverage_bonus" in component_scores, "Co-occurrence KU should have coverage_bonus"
-    assert component_scores["coverage_bonus"] > 0, "coverage_bonus should be positive"
+    assert component_scores.get("co_occurrence") is True, (
+        "Co-occurrence KU should be flagged in component_scores"
+    )
+
+    # Both entities must appear in the result set — balanced coverage is the
+    # core contract of comparative retrieval.
+    summaries = " ".join(ku.summary for ku in result.knowledge_units)
+    assert "Apple" in summaries, "Apple-exclusive KU should be in results"
+    assert "Tesla" in summaries, "Tesla-exclusive KU should be in results"
 
 
 def test_topic_research_fallback_to_text_search(tmp_path) -> None:

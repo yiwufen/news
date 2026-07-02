@@ -213,9 +213,6 @@ def test_run_pipeline_queries_new_knowledge_store(tmp_path, monkeypatch) -> None
         def search(self, request):
             return self._searcher.search(request)
 
-        def search_articles(self, articles, request):
-            return self._searcher.search_articles(articles, request)
-
     class FakeKnowledgeGraphRetriever:
         def __init__(self, *args, **kwargs) -> None:
             pass
@@ -255,95 +252,47 @@ def test_run_pipeline_queries_new_knowledge_store(tmp_path, monkeypatch) -> None
     assert not hasattr(result, "particles_count")
 
 
-def test_run_pipeline_returns_transient_entities_for_direct_articles(monkeypatch) -> None:
-    import src.orchestration.graph as graph_module
+def test_run_pipeline_omits_graph_edges_when_disabled(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "data" / "news.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    seed_articles(str(db_path))
 
-    original_searcher_cls = graph_module.KnowledgeSearcher
-
-    class FakeKnowledgeSearcher:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            self._searcher = original_searcher_cls(
-                extractor=StubExtractor(),
-            )
-
-        def search(self, request):
-            return self._searcher.search(request)
-
-        def search_articles(self, articles, request):
-            return self._searcher.search_articles(articles, request)
-
-    monkeypatch.setattr(graph_module, "KnowledgeSearcher", FakeKnowledgeSearcher)
-
-    result = run_pipeline(
-        structured_query=_xiaomi_timeline_query(),
-        articles=[
-            {
-                "doc_id": "doc-1",
-                "title": "Xiaomi Group receives a regulatory penalty",
-                "content": "Xiaomi Group received a regulatory penalty and started remediation.",
-                "publish_time": "2026-04-01T09:00:00+00:00",
-                "source_name": "test-source",
-                "source_type": "news",
-                "category": "company",
-                "raw_tags": [],
-            }
-        ],
+    pipeline = ContinuousPipeline(
+        batch_size=10,
+        graph_enabled=False,
+        incremental=True,
+        db_path=str(db_path),
+        extractor=StubExtractor(),
+        index_builder=build_index_builder(str(db_path)),
+        description_generator=_DISABLED_DESC_GEN,
+        alias_generator=_DISABLED_ALIAS_GEN,
     )
+    pipeline.run()
 
-    assert result.source == "direct_articles"
-    assert len(result.knowledge_units) == 1
-    assert len(result.entities) == 1
-    assert len(result.event_clusters) == 1
-    assert result.retrieval.retrieval_mode == "bm25"
-    assert result.graph.graph_used is False
-    assert result.entities[0]["entity_id"] == result.knowledge_units[0]["entities"][0]["entity_id"]
-    assert result.event_clusters[0]["cluster_id"] == result.knowledge_units[0]["cluster_id"]
-    assert not hasattr(result, "event_impact")
-
-
-def test_run_pipeline_omits_graph_edges_when_disabled(monkeypatch) -> None:
     import src.orchestration.graph as graph_module
 
     original_searcher_cls = graph_module.KnowledgeSearcher
 
     class FakeKnowledgeSearcher:
         def __init__(self, *args: object, **kwargs: object) -> None:
-            self._searcher = original_searcher_cls(
-                extractor=StubExtractor(),
-            )
+            self._searcher = original_searcher_cls(db_path=str(db_path))
 
         def search(self, request):
             return self._searcher.search(request)
-
-        def search_articles(self, articles, request):
-            return self._searcher.search_articles(articles, request)
 
     monkeypatch.setattr(graph_module, "KnowledgeSearcher", FakeKnowledgeSearcher)
 
     result = run_pipeline(
         structured_query=_xiaomi_timeline_query(),
-        articles=[
-            {
-                "doc_id": "doc-1",
-                "title": "Xiaomi Group receives a regulatory penalty",
-                "content": "Xiaomi Group received a regulatory penalty and started remediation.",
-                "publish_time": "2026-04-01T09:00:00+00:00",
-                "source_name": "test-source",
-                "source_type": "news",
-                "category": "company",
-                "raw_tags": [],
-            }
-        ],
         graph_enabled=False,
     )
 
     assert result.graph.graph_enabled is False
     assert result.graph.graph_used is False
     assert result.graph_result is None
-    assert result.graph.graph_used is False
-    assert len(result.knowledge_units) == 1
-    assert len(result.entities) == 1
-    assert len(result.event_clusters) == 1
+    assert len(result.knowledge_units) >= 1
+    assert len(result.entities) >= 1
+    assert len(result.event_clusters) >= 1
     assert not hasattr(result, "comparison_report")
 
 
@@ -581,9 +530,6 @@ def test_run_pipeline_repairs_legacy_event_cluster_payloads(tmp_path, monkeypatc
         def search(self, request):
             return self._searcher.search(request)
 
-        def search_articles(self, articles, request):
-            return self._searcher.search_articles(articles, request)
-
     class FakeKnowledgeGraphRetriever:
         def __init__(self, *args, **kwargs) -> None:
             pass
@@ -634,9 +580,6 @@ def test_run_pipeline_relationship_query_returns_formal_graph_results(tmp_path, 
 
         def search(self, request):
             return self._searcher.search(request)
-
-        def search_articles(self, articles, request):
-            return self._searcher.search_articles(articles, request)
 
     class FakeKnowledgeGraphRetriever:
         def __init__(self, *args, **kwargs) -> None:
@@ -690,48 +633,3 @@ def test_run_pipeline_relationship_query_returns_formal_graph_results(tmp_path, 
     assert result.graph_result.paths[0]["path_type"] == "Entity->EventCluster->Entity"
     assert result.graph.candidate_count == 1
     assert result.graph.hit_reasons == {"ent_partner": ["co_involved_via:clu_1"]}
-
-
-def test_run_pipeline_rejects_relationship_query_for_direct_articles(monkeypatch) -> None:
-    import src.orchestration.graph as graph_module
-
-    original_searcher_cls = graph_module.KnowledgeSearcher
-
-    class FakeKnowledgeSearcher:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            self._searcher = original_searcher_cls(
-                extractor=StubExtractor(),
-            )
-
-        def search(self, request):
-            return self._searcher.search(request)
-
-        def search_articles(self, articles, request):
-            return self._searcher.search_articles(articles, request)
-
-    monkeypatch.setattr(graph_module, "KnowledgeSearcher", FakeKnowledgeSearcher)
-
-    result = run_pipeline(
-        structured_query=_xiaomi_relationship_query(),
-        articles=[
-            {
-                "doc_id": "doc-1",
-                "title": "Xiaomi Group receives a regulatory penalty",
-                "content": "Xiaomi Group received a regulatory penalty and started remediation.",
-                "publish_time": "2026-04-01T09:00:00+00:00",
-                "source_name": "test-source",
-                "source_type": "news",
-                "category": "company",
-                "raw_tags": [],
-            }
-        ],
-        graph_enabled=True,
-    )
-
-    assert result.source == "direct_articles"
-    assert result.graph.graph_enabled is True
-    assert result.graph.graph_used is False
-    assert result.graph_result is not None
-    assert result.graph_result.nodes == []
-    assert result.graph_result.edges == []
-    assert result.graph_result.paths == []

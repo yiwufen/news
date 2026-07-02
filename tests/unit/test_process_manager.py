@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+_IS_WINDOWS = sys.platform == "win32"
 
 from src.process_manager import (
     PID_DIR,
@@ -75,6 +78,7 @@ class TestIsProcessAlive:
 class TestSpawnStopProcess:
     """Subprocess spawn and stop."""
 
+    @pytest.mark.skipif(not _IS_WINDOWS, reason="creationflags (CREATE_NO_WINDOW) is Windows-only")
     def test_spawn_process_calls_popen(self, monkeypatch: pytest.MonkeyPatch) -> None:
         mock_proc = MagicMock()
         mock_proc.pid = 54321
@@ -86,6 +90,7 @@ class TestSpawnStopProcess:
         call_kwargs = mock_popen.call_args[1]
         assert call_kwargs.get("creationflags") == 0x08000000
 
+    @pytest.mark.skipif(not _IS_WINDOWS, reason="taskkill is Windows-only; Linux uses os.kill")
     def test_stop_process_calls_taskkill(self, monkeypatch: pytest.MonkeyPatch) -> None:
         mock_run = MagicMock()
         monkeypatch.setattr("src.process_manager.subprocess.run", mock_run)

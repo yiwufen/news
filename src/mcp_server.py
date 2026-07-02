@@ -90,7 +90,7 @@ def create_server(
         hops: int = 1,
         top_k: int = 20,
     ) -> dict[str, Any]:
-        """从金融知识库中检索实体、事件和关系。支持9种查询意图，返回知识单元、实体画像、事件聚类和图谱概览。
+        """从金融知识库中检索实体、事件和关系。支持6种查询意图，返回知识单元、实体画像、事件聚类和图谱概览。
 
         何时调用 / 意图选择指南：
         - 用户问某公司/人物的概况或最新动态 → ENTITY_OVERVIEW（默认）
@@ -98,10 +98,12 @@ def create_server(
         - 用户问两个实体之间的关系（如"比亚迪和特斯拉的合作"）→ RELATIONSHIP_QUERY（必须同时设置 target_entity）
         - 用户要求比较多个实体（如"比亚迪和特斯拉的业绩对比"）→ COMPARATIVE_ANALYSIS
         - 用户问某类事件（如"最近的并购事件"）→ EVENT_ANALYSIS
-        - 用户问风险因素（如"恒大集团的债务风险"）→ RISK_ASSESSMENT
         - 用户研究某个主题/产业链（如"新能源车产业链"）→ TOPIC_RESEARCH
-        - 用户问某事件的影响范围 → EVENT_IMPACT_ANALYSIS
-        - 用户问担保关系 → GUARANTEE_ANALYSIS
+
+        注：风险/担保/事件影响场景不再使用专用意图，改为在上述意图基础上叠加
+        event_types 过滤。例如查"恒大集团的债务风险"用
+        intent=ENTITY_OVERVIEW + entities=["恒大"] + event_types=["债务违约","监管处罚/合规调查"]；
+        查担保关系用 RELATIONSHIP_QUERY（图谱 expand 接口仍提供担保链/循环担保分析）。
 
         输出结构：
         - knowledge_units: 匹配的知识单元列表（含 text、entity_mentions、event_type 等）
@@ -127,10 +129,8 @@ def create_server(
                 - "RELATIONSHIP_QUERY"：两实体间关系路径，必须配合 target_entity
                 - "COMPARATIVE_ANALYSIS"：多实体对比分析
                 - "EVENT_ANALYSIS"：按事件类型筛选分析
-                - "RISK_ASSESSMENT"：风险因素评估
                 - "TOPIC_RESEARCH"：主题/产业链研究
-                - "EVENT_IMPACT_ANALYSIS"：事件影响范围分析
-                - "GUARANTEE_ANALYSIS"：担保关系分析
+                风险/担保/事件影响等场景不设专用意图，改用上述意图配合 event_types 过滤。
             time_range: 时间范围，格式 "START:END"（ISO日期）。
                 例如 "2025-04-01:2026-05-24"。不传则不限时间。
             event_types: 按事件类型过滤。可选值：

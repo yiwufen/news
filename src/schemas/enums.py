@@ -12,18 +12,8 @@ from enum import Enum
 
 
 # ---------------------------------------------------------------------------
-# EventType / RelationType / EntityType (legacy risk-centric enums, kept for
-# backward compatibility with graph and existing code)
+# RelationType / EntityType — graph model canonical enums
 # ---------------------------------------------------------------------------
-
-
-class EventType(Enum):
-    DEBT_DEFAULT = "债务违约"
-    EQUITY_PLEDGE = "股权质押"
-    LEGAL_SUIT = "重大诉讼"
-    REAL_CONTROL_CHANGE = "实控人变动"
-    RESTRUCTURING = "资产重组"
-    POLICY_SANCTION = "政策制裁"
 
 
 class RelationType(Enum):
@@ -40,24 +30,6 @@ class EntityType(Enum):
     PERSON = "自然人"
     ASSET = "资产"
     FINANCIAL_PRODUCT = "金融产品"
-
-
-class RiskLevel(Enum):
-    CRITICAL = "立即预警"
-    HIGH = "当日处理"
-    MEDIUM = "周报汇总"
-    LOW = "归档记录"
-
-
-def classify_risk_score(score: float) -> RiskLevel:
-    if score >= 0.8:
-        return RiskLevel.CRITICAL
-    elif score >= 0.6:
-        return RiskLevel.HIGH
-    elif score >= 0.4:
-        return RiskLevel.MEDIUM
-    else:
-        return RiskLevel.LOW
 
 
 # ---------------------------------------------------------------------------
