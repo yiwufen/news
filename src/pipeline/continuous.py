@@ -271,34 +271,6 @@ class ContinuousPipeline:
                         all_errors.append(f"[graph_sync] {exc}")
                         logger.error(f"Graph sync failed: {exc}")
 
-                # Prune orphan Entity nodes: SQLite-side entity merges delete
-                # duplicate rows but the graph kept the old entity_id nodes,
-                # still wired to EventClusters. Those stale edges pollute
-                # GraphRAG. Reconcile the graph against the SQLite source of
-                # truth once per run (orphans only accrue from merges, so a
-                # per-run cadence is sufficient and cheap).
-                try:
-                    live_ids = self.entity_repo.get_all_ids()
-                    name_to_live_id = {
-                        e.canonical_name: e.entity_id
-                        for e in self.entity_repo.get_all()
-                    }
-                    prune_result = self.graph_sync.prune_orphans(
-                        live_ids, name_to_live_id=name_to_live_id
-                    )
-                    if prune_result["nodes_deleted"]:
-                        logger.info(
-                            "Graph prune: removed %d orphan entity nodes "
-                            "(%d edges migrated, %d edges merged)",
-                            prune_result["nodes_deleted"],
-                            prune_result["edges_migrated"],
-                            prune_result["edges_merged"],
-                        )
-                    all_errors.extend(prune_result["errors"])
-                except Exception as exc:
-                    all_errors.append(f"[graph_prune] {exc}")
-                    logger.error(f"Graph prune failed: {exc}")
-
             # 记录日志
             if not dry_run:
                 log_records = [
@@ -317,6 +289,33 @@ class ContinuousPipeline:
             docs_done += len(batch)
             if on_progress:
                 on_progress(docs_done, total)
+
+        # Prune orphan Entity nodes: SQLite-side entity merges delete
+        # duplicate rows but the graph kept the old entity_id nodes,
+        # still wired to EventClusters. Those stale edges pollute
+        # GraphRAG. Reconcile the graph against the SQLite source of
+        # truth once per run (orphans only accrue from merges, so a
+        # per-run cadence is sufficient and cheap). Note this runs
+        # after all batches so live_ids reflect the final DB state.
+        if not dry_run and self.graph_enabled and self.graph_sync:
+            try:
+                live_ids = self.entity_repo.get_all_ids()
+                name_to_live_id = self.entity_repo.get_name_to_id()
+                prune_result = self.graph_sync.prune_orphans(
+                    live_ids, name_to_live_id=name_to_live_id
+                )
+                if prune_result["nodes_deleted"]:
+                    logger.info(
+                        "Graph prune: removed %d orphan entity nodes "
+                        "(%d edges migrated, %d edges merged)",
+                        prune_result["nodes_deleted"],
+                        prune_result["edges_migrated"],
+                        prune_result["edges_merged"],
+                    )
+                all_errors.extend(prune_result["errors"])
+            except Exception as exc:
+                all_errors.append(f"[graph_prune] {exc}")
+                logger.error(f"Graph prune failed: {exc}")
 
         result = ContinuousRunResult(
             nodes_created=total_nodes,

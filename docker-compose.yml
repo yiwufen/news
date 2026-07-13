@@ -86,6 +86,12 @@ services:
     container_name: knowledge-neo4j
     environment:
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-test1234}
+      # Cap JVM memory on small (≤4G) hosts. Without these Neo4j's default
+      # heuristic pre-reserves a large heap + page cache that never returns
+      # to the OS, pushing the whole box into global OOM (exit 137).
+      NEO4J_server_memory_heap_max__size: 512m
+      NEO4J_server_memory_heap_initial__size: 512m
+      NEO4J_server_memory_pagecache_size: 512m
     volumes:
       - neo4j-data:/data
       - neo4j-logs:/logs

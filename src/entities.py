@@ -655,6 +655,18 @@ class EntityRepository:
                 for row in connection.execute("SELECT entity_id FROM entities")
             ]
 
+    def get_name_to_id(self) -> dict[str, str]:
+        """Return ``{canonical_name: entity_id}`` without loading payloads.
+
+        Lightweight source for graph prune's name→live-id map: avoids the
+        full ``get_all()`` deserialization (19021+ rows × payload JSON) when
+        only two text columns are needed.
+        """
+        with self._connect() as connection:
+            return dict(connection.execute(
+                "SELECT canonical_name, entity_id FROM entities"
+            ).fetchall())
+
     def get_by_ids(self, entity_ids: Iterable[str]) -> list[Entity]:
         ids = list(dict.fromkeys(entity_ids))
         if not ids:

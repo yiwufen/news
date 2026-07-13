@@ -477,6 +477,87 @@ def test_run_continuous_graph_sync_serializes_entity_identifiers(tmp_path) -> No
     assert "representative_ku_id" in cluster_write
 
 
+def test_graph_prune_runs_once_per_run_not_per_batch(tmp_path) -> None:
+    """Prune reconciles the whole graph once after all batches, not per batch.
+
+    Regression guard: the prune block was once indented inside the batch loop
+    (running N times for N batches) and used the heavyweight ``get_all()``.
+    With batch_size=1 and 3 documents this forces 3 batches — prune's
+    discovery query must appear exactly once.
+    """
+    class _Result:
+        def __init__(self, rows: list) -> None:
+            self._rows = rows
+
+        def data(self):
+            return self._rows
+
+    class RecordingSession:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict]] = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def run(self, query: str, **params):
+            self.calls.append((query, params))
+            if "NOT o.id IN $live_ids" in query:
+                return _Result([])
+            return None
+
+    class RecordingConnection:
+        def __init__(self, session: RecordingSession) -> None:
+            self._session = session
+
+        def session(self):
+            return self._session
+
+    db_path = tmp_path / "news.db"
+    # Seed 3 documents to force 3 batches under batch_size=1.
+    db = Database(str(db_path))
+    db.insert_articles_batch(
+        [
+            {
+                "doc_id": f"doc-{i}",
+                "title": f"Xiaomi Group event {i}",
+                "content": f"Xiaomi Group did something {i}.",
+                "publish_time": f"2026-04-0{i}T09:00:00+00:00",
+                "source_name": "test-source",
+                "source_type": "news",
+                "category": "company",
+                "raw_tags": [],
+            }
+            for i in range(1, 4)
+        ]
+    )
+
+    session = RecordingSession()
+    pipeline = ContinuousPipeline(
+        batch_size=1,
+        graph_enabled=True,
+        incremental=True,
+        db_path=str(db_path),
+        extractor=StubExtractor(),
+        index_builder=build_index_builder(str(db_path)),
+        description_generator=_DISABLED_DESC_GEN,
+        alias_generator=_DISABLED_ALIAS_GEN,
+    )
+    pipeline.graph_sync = KnowledgeGraphSync(connection=RecordingConnection(session))
+
+    pipeline.run()
+
+    prune_discovery_calls = sum(
+        1 for query, _ in session.calls if "NOT o.id IN $live_ids" in query
+    )
+    assert prune_discovery_calls == 1, (
+        f"prune should run once per run, ran {prune_discovery_calls} times "
+        f"(batch_size=1 × 3 docs = 3 batches)"
+    )
+
+
 def test_run_pipeline_repairs_legacy_event_cluster_payloads(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "data" / "news.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
