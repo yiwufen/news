@@ -171,13 +171,17 @@ def collect_relabel_candidates(conn: sqlite3.Connection) -> list[dict]:
 
 
 def relabel_with_llm(
-    candidates: list[dict], log_path: Path
+    candidates: list[dict], log_path: Path, progress_path: Path
 ) -> tuple[dict[str, object], dict[str, str]]:
     """Re-classify bucket/noisy KUs via the extraction LLM.
 
     Each candidate's summary + entities + evidence is sent to the LLM with the
     32-type closed-set prompt (reusing the extraction prompt's unit_type spec).
     Results and raw inputs/outputs are logged to ``log_path`` for traceability.
+
+    Progress (ku_id -> new_type) is persisted to ``progress_path`` after every
+    candidate, enabling resumable batch runs: a re-run skips ku_ids already in
+    the progress file.
 
     Returns ``(stats, results)`` where results maps ku_id -> new_type. Failures
     raise (fail-fast) per SHARED_RULES §7.
@@ -187,62 +191,97 @@ def relabel_with_llm(
     from src.knowledge_extractor import SYSTEM_PROMPT
     from src.llm import create_offline_llm_client, get_offline_max_tokens
 
+    # --- Resume: load already-processed ku_ids from progress file ---
+    done: dict[str, str] = {}
+    if progress_path.exists():
+        for line in progress_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            entry = json.loads(line)
+            done[entry["ku_id"]] = entry["new_type"]
+    pending = [c for c in candidates if c["ku_id"] not in done]
+    if done:
+        print(f"  resume: {len(done)} already processed, {len(pending)} pending")
+
     valid_types = {t.value for t in UnitType if t != UnitType.NON_FINANCIAL}
     client, model = create_offline_llm_client()
     max_tokens = get_offline_max_tokens()
 
     type_dist: Counter = Counter()
-    log_entries: list[dict] = []
-    results: dict[str, str] = {}  # ku_id -> new_type
+    results: dict[str, str] = dict(done)  # carry over resumed results
 
     relabel_prompt = (
         SYSTEM_PROMPT.split("# unit_type 分类规范")[1].split("# 输出前自检")[0]
     )
 
-    for cand in candidates:
-        prompt = (
-            "根据以下分类规范，为这条陈述选择最准确的 unit_type。\n\n"
-            f"# unit_type 分类规范{relabel_prompt}\n\n"
-            f"陈述摘要：{cand['summary']}\n"
-            f"涉及实体：{cand['entities']}\n"
-            f"证据原文：{cand['evidence']}\n"
-            f"旧分类（可能错误）：{cand['old_type']}\n\n"
-            "只输出一个 unit_type 值，不要输出其他内容。"
-        )
-        try:
-            resp = client.messages.create(
-                model=model,
-                max_tokens=max_tokens,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            text = next(
-                b.text for b in resp.content if isinstance(b, TextBlock)
-            )
-            new_type = text.strip().strip('"').strip("'")
-            if new_type not in valid_types:
-                raise ValueError(f"LLM returned invalid unit_type: {new_type!r}")
-        except Exception as exc:  # noqa: BLE001 — surface, don't swallow
-            raise RuntimeError(
-                f"LLM relabel failed for ku_id={cand['ku_id']}: {exc}"
-            ) from exc
-
-        results[cand["ku_id"]] = new_type
-        type_dist[new_type] += 1
-        log_entries.append(
-            {
-                "ku_id": cand["ku_id"],
-                "old_type": cand["old_type"],
-                "new_type": new_type,
-                "summary": cand["summary"][:80],
-            }
-        )
-
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("w", encoding="utf-8") as f:
-        for entry in log_entries:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    progress_path.parent.mkdir(parents=True, exist_ok=True)
+    # Open both in append mode for resumability.
+    log_f = log_path.open("a", encoding="utf-8")
+    prog_f = progress_path.open("a", encoding="utf-8")
 
-    stats: dict[str, object] = {"relabelled": len(results), **dict(type_dist)}
+    try:
+        for i, cand in enumerate(pending, 1):
+            prompt = (
+                "根据以下分类规范，为这条陈述选择最准确的 unit_type。\n\n"
+                f"# unit_type 分类规范{relabel_prompt}\n\n"
+                f"陈述摘要：{cand['summary']}\n"
+                f"涉及实体：{cand['entities']}\n"
+                f"证据原文：{cand['evidence']}\n"
+                f"旧分类（可能错误）：{cand['old_type']}\n\n"
+                "只输出一个 unit_type 值，不要输出其他内容。"
+            )
+            try:
+                resp = client.messages.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                text = next(
+                    b.text for b in resp.content if isinstance(b, TextBlock)
+                )
+                new_type = text.strip().strip('"').strip("'")
+                if new_type not in valid_types:
+                    raise ValueError(f"LLM returned invalid unit_type: {new_type!r}")
+            except Exception as exc:  # noqa: BLE001 — surface, don't swallow
+                raise RuntimeError(
+                    f"LLM relabel failed for ku_id={cand['ku_id']} "
+                    f"(pending #{i}/{len(pending)}): {exc}"
+                ) from exc
+
+            results[cand["ku_id"]] = new_type
+            type_dist[new_type] += 1
+
+            # Persist progress + trace immediately (flush for crash safety).
+            prog_f.write(
+                json.dumps(
+                    {"ku_id": cand["ku_id"], "new_type": new_type},
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            prog_f.flush()
+            log_f.write(
+                json.dumps(
+                    {
+                        "ku_id": cand["ku_id"],
+                        "old_type": cand["old_type"],
+                        "new_type": new_type,
+                        "summary": cand["summary"][:80],
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            log_f.flush()
+
+            if i % 100 == 0:
+                print(f"  progress: {i}/{len(pending)} processed")
+    finally:
+        log_f.close()
+        prog_f.close()
+
+    stats: dict[str, object] = {"relabelled": len(results) - len(done), **dict(type_dist)}
     return stats, results
 
 
@@ -337,7 +376,18 @@ def main() -> None:
     parser.add_argument(
         "--llm-log",
         default=".tmp/reclassify_log.jsonl",
-        help="Path for the LLM relabel trace log",
+        help="Path for the LLM relabel trace log (append mode)",
+    )
+    parser.add_argument(
+        "--progress-file",
+        default=".tmp/reclassify_progress.jsonl",
+        help="Path for resume progress (ku_id -> new_type). Re-runs skip done.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="Max candidates to process in this run (0 = all). For batch runs.",
     )
     parser.add_argument("--skip-fts", action="store_true", help="Skip FTS5 rebuild")
     args = parser.parse_args()
@@ -367,12 +417,24 @@ def main() -> None:
     if args.llm_relabel:
         print("\n--- Pass 2: LLM relabelling ---")
         candidates = collect_relabel_candidates(conn)
-        print(f"  candidates: {len(candidates)}")
+        print(f"  candidates total: {len(candidates)}")
+        if args.limit > 0:
+            candidates = candidates[: args.limit]
+            print(f"  limited to: {len(candidates)} (--limit {args.limit})")
         if candidates:
-            relabel_stats, results = relabel_with_llm(candidates, Path(args.llm_log))
+            relabel_stats, results = relabel_with_llm(
+                candidates, Path(args.llm_log), Path(args.progress_file)
+            )
             relabelled = relabel_stats.pop("relabelled", 0)
-            print(f"  relabelled: {relabelled}")
-            print("  new type distribution:")
+            print(f"  relabelled this run: {relabelled}")
+            remaining = stats1["ku_bucket_skipped"] - (
+                len(results) if args.limit == 0 else 0
+            )
+            if args.limit > 0:
+                # How many bucket KUs still unprocessed
+                done_count = len(results)
+                print(f"  total done (incl. resumed): {done_count}")
+            print("  new type distribution (this run):")
             for ut, n in sorted(relabel_stats.items(), key=lambda x: -int(x[1])):  # type: ignore[arg-type]
                 print(f"    {n:5d}  {ut}")
             if not args.dry_run:
@@ -382,6 +444,7 @@ def main() -> None:
                     f"cluster={apply_stats['cluster_updated']}"
                 )
             print(f"  trace log: {args.llm_log}")
+            print(f"  progress file: {args.progress_file}")
 
     if not args.dry_run:
         conn.commit()
