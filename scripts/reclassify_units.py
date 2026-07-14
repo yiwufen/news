@@ -244,6 +244,7 @@ def relabel_with_llm(
     # Open both in append mode for resumability.
     log_f = log_path.open("a", encoding="utf-8")
     prog_f = progress_path.open("a", encoding="utf-8")
+    consecutive_invalid = 0  # guard against systemic LLM malfunction
 
     try:
         for i, cand in enumerate(pending, 1):
@@ -270,9 +271,22 @@ def relabel_with_llm(
                 # token that matches a valid canonical value.
                 new_type = _extract_unit_type(text, valid_types)
                 if new_type is None:
-                    raise ValueError(
-                        f"LLM returned invalid unit_type: {text.strip()!r}"
+                    # LLM fabricated a non-existent type name. Don't crash the
+                    # whole batch — fall back to disclosure and log a warning.
+                    new_type = "disclosure"
+                    consecutive_invalid += 1
+                    print(
+                        f"  WARN: ku_id={cand['ku_id']} LLM returned "
+                        f"invalid type {text.strip()!r}, fallback to disclosure "
+                        f"(consecutive={consecutive_invalid})"
                     )
+                    if consecutive_invalid >= 20:
+                        raise RuntimeError(
+                            "Aborting: 20 consecutive invalid LLM responses — "
+                            "likely systemic LLM malfunction, needs human review"
+                        )
+                else:
+                    consecutive_invalid = 0
             except Exception as exc:  # noqa: BLE001 — surface, don't swallow
                 raise RuntimeError(
                     f"LLM relabel failed for ku_id={cand['ku_id']} "
