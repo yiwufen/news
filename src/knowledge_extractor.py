@@ -155,37 +155,66 @@ identifiers 字段填写规范（严格）：
 原文："两家公司在供应链领域有长期合作"
 → 不要提取关系（"长期合作"是模糊描述，不是明确互动）
 # unit_type 分类规范（严格）
-unit_type 只能是以下类型之一，不要使用其他值：
-- financial_performance: 财务业绩、财报、营收、利润
-- stock_price_change: 股价变动、涨跌。重要：不要为纯粹的股价涨跌数字提取此类 KU。只有当陈述包含因果归因（如因...、受...影响、得益于、推动、带动）时才提取。例如：不要提取"比亚迪涨了3%"、"收盘跌2.1%"；应该提取"比亚迪涨停，因Q3净利超预期"、"受美联储降息影响，科技股集体上涨"。
-- price_change: 商品/资产价格变动
-- market_analysis: 市场分析、行情、趋势
-- dividend: 分红、派息
-- ipo: IPO、上市
-- restructuring: 资产重组、并购
-- investment: 投资、融资
-- product_launch: 产品发布、研发
-- business_strategy: 企业战略、经营范围
-- company_establishment: 企业设立
-- executive_change: 高管变动、实控人变动
-- legal_proceeding: 诉讼、法律
-- regulatory_action: 监管处罚、行政
-- policy_announcement: 政策发布、变动
-- sanction: 制裁、禁运
-- debt_default: 债务违约
-- equity_pledge: 股权质押
-- risk_warning: 风险提示、警告
-- economic_data: 经济数据、指标
-- trade_data: 贸易数据
-- sector_performance: 板块、行业表现
-- diplomatic_event: 外交声明、访问
-- military_action: 军事行动
-- political_statement: 政治声明
-- announcement: 声明、公告
-- meeting: 会议
-- industry_analysis: 行业分析、趋势
-- other: 无法归入以上类别
-如果不确定，归入 other。不要使用列表外的值。
+unit_type 只能是以下类型之一，不要使用其他值。不要使用 announcement 或 other（已取消）。无法确定具体类型时归 disclosure；内容明确非金融时归 non_financial。
+
+【公司资本类】判定优先级（从高到低，命中即停）：
+1. 股权/控制权结构变化？
+   - 重组/并购/分拆                              = restructuring
+   - 首次公开发行/借壳/借壳上市/增发/配股/定向增发  = ipo（增发视为融资上市行为）
+   - 股东增/减持、大宗交易、股权拍卖                = shareholding_change
+   - 股权质押/解除质押/冻结                        = equity_pledge
+2. 利润分配？分红/送股/转增/派息                   = dividend
+3. 新设主体？新公司成立/合资设立/子公司设立          = company_establishment
+4. 投资（不改变控制权）？股权投资/战略投资/融资/注资  = investment
+- 财务业绩/财报/营收/利润/业绩预告/销量等量化成果    = financial_performance
+
+【公司经营类】
+- 新产品/技术/服务发布，商标/研发进展（非纯学术）     = product_launch
+- 企业战略/经营范围/商业模式/产能变化               = business_strategy
+- 高管/董事/实控人/核心人员变动（任职/离职/聘任）     = executive_change
+
+【公司风险类】
+- 债务/债券违约、展期、兑付危机                    = debt_default
+- 诉讼/仲裁/裁决/判决（已进入法律程序）             = legal_proceeding（律师函/未起诉→disclosure）
+- 退市风险警示/*ST/重大经营风险                    = risk_warning
+
+【市场分析类】判定优先级（从高到低）：
+1. 有具体价格变动数字？
+   - 个股股价涨跌                                  = stock_price_change
+     重要：不要为纯粹的股价涨跌数字提取此类 KU。只有当陈述包含因果归因（如因...、受...影响、得益于、推动、带动）时才提取。
+     例如：不要提取"比亚迪涨了3%"、"收盘跌2.1%"；应该提取"比亚迪涨停，因Q3净利超预期"、"受美联储降息影响，科技股集体上涨"。
+   - 商品/资产/汇率价格变动                         = price_change
+   - 板块/概念/行业指数表现                         = sector_performance
+2. 机构评级/目标价/盈利预测的调整动作？              = rating_change（严格指"调整动作"；研报提及投资动作但无评级调整→industry_analysis）
+3. 分析观点/研报？
+   - 大盘/宏观市场行情分析                          = market_analysis
+   - 行业/产业链研究分析                            = industry_analysis
+
+【监管类】
+- 监管处罚/问询/警示/立案/行政处罚                  = regulatory_action
+- 国际制裁/禁运/出口管制/关税制裁                   = sanction
+- 政策/法规/规划/标准/通知的发布与变动               = policy_announcement
+
+【宏观类】
+- GDP/CPI/PMI/就业/社融等宏观经济指标              = economic_data
+- 进出口/贸易额/关税/海关数据                      = trade_data
+
+【金融影响因素类】（本身非金融，但影响市场）
+- 外交声明/访问/会谈/外交协议                      = diplomatic_event
+- 军事行动/冲突/袭击/部署                          = military_action
+- 政治/政府表态/立场表达                          = political_statement（外国无关选举结果→non_financial）
+
+【跨主体关系类】
+- 投资（见资本类优先级4）                          = investment
+- 战略合作/签署协议/达成合作/签约（非投资性）        = strategic_cooperation（含控股成分→restructuring）
+
+【信息披露与会议类】
+- 上市公司就特定事项的正式信息披露：澄清/回应/停复牌/减持计划公告 = disclosure（有具体类型如业绩/合作/风险的，优先归具体类型；disclosure 是兜底，不是垃圾桶）
+- 有明确金融/政策主题的会议/论坛/峰会/发布会         = meeting（学术会议/展会无金融实质→non_financial）
+
+【边界外】
+- non_financial: 内容明确不属于金融或金融影响因素（卫生/体育/气象/纯社会事件/外国无关政治/纯学术/非上市公司消费品召回）。拿不准禁止填 non_financial，必须落具体金融类型。
+
 示例：
 
 原文："比亚迪涨停，因Q3净利超预期"

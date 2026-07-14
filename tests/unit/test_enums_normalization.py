@@ -1,0 +1,155 @@
+"""Tests for UnitType closed-set normalization (32-class financial taxonomy).
+
+Covers the removal of the legacy ``announcement``/``other`` buckets and the
+addition of ``shareholding_change``/``rating_change``/``strategic_cooperation``/
+``disclosure``/``non_financial``. See ``docs/graph_edge_design.md`` §3.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from src.schemas.enums import (
+    UnitType,
+    _CANONICAL_VALUES,
+    is_known_unit_type,
+    normalize_unit_type,
+)
+
+
+class TestClosedSetShape:
+    """The closed set must be exactly 32 members, with no buckets."""
+
+    def test_member_count_is_32(self) -> None:
+        assert len(list(UnitType)) == 32
+
+    def test_no_announcement_member(self) -> None:
+        assert not hasattr(UnitType, "ANNOUNCEMENT")
+        assert "announcement" not in _CANONICAL_VALUES
+
+    def test_no_other_member(self) -> None:
+        assert not hasattr(UnitType, "OTHER")
+        assert "other" not in _CANONICAL_VALUES
+
+    @pytest.mark.parametrize(
+        "name,value",
+        [
+            ("SHAREHOLDING_CHANGE", "shareholding_change"),
+            ("RATING_CHANGE", "rating_change"),
+            ("STRATEGIC_COOPERATION", "strategic_cooperation"),
+            ("DISCLOSURE", "disclosure"),
+            ("NON_FINANCIAL", "non_financial"),
+        ],
+    )
+    def test_new_members_exist(self, name: str, value: str) -> None:
+        assert hasattr(UnitType, name)
+        assert UnitType[name].value == value
+
+
+class TestNormalizeExactCanonical:
+    """Every canonical value round-trips through normalize_unit_type."""
+
+    @pytest.mark.parametrize("ut", list(UnitType))
+    def test_canonical_round_trip(self, ut: UnitType) -> None:
+        assert normalize_unit_type(ut.value) is ut
+
+
+class TestNormalizeAliases:
+    """Aliases resolve to the right canonical type."""
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            # shareholding_change — the key correction from investment
+            ("减持", UnitType.SHAREHOLDING_CHANGE),
+            ("增持", UnitType.SHAREHOLDING_CHANGE),
+            ("大宗交易", UnitType.SHAREHOLDING_CHANGE),
+            ("配售", UnitType.SHAREHOLDING_CHANGE),
+            # legacy announcement aliases now route to disclosure
+            ("公告", UnitType.DISCLOSURE),
+            ("声明", UnitType.DISCLOSURE),
+            ("澄清", UnitType.DISCLOSURE),
+            ("停牌", UnitType.DISCLOSURE),
+            # rating_change
+            ("目标价", UnitType.RATING_CHANGE),
+            ("评级调整", UnitType.RATING_CHANGE),
+            ("首次覆盖", UnitType.RATING_CHANGE),
+            # strategic_cooperation
+            ("战略合作", UnitType.STRATEGIC_COOPERATION),
+            ("签署协议", UnitType.STRATEGIC_COOPERATION),
+            ("签约", UnitType.STRATEGIC_COOPERATION),
+            # legacy canonical strings still work
+            ("财务业绩", UnitType.FINANCIAL_PERFORMANCE),
+            ("资产重组", UnitType.RESTRUCTURING),
+            ("投资", UnitType.INVESTMENT),
+            ("股权质押", UnitType.EQUITY_PLEDGE),
+        ],
+    )
+    def test_alias_resolution(self, raw: str, expected: UnitType) -> None:
+        assert normalize_unit_type(raw) is expected
+
+    def test_legacy_announcement_string_routes_to_disclosure(self) -> None:
+        """The exact legacy canonical value 'announcement' must not raise and
+        must land on disclosure (its bucket role is gone)."""
+        assert normalize_unit_type("announcement") is UnitType.DISCLOSURE
+
+    def test_legacy_other_string_routes_to_disclosure(self) -> None:
+        assert normalize_unit_type("other") is UnitType.DISCLOSURE
+
+
+class TestNormalizeKeywordFallback:
+    """Substring keyword matching still works for noisy LLM output."""
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("某公司股东减持股份", UnitType.SHAREHOLDING_CHANGE),
+            ("机构下调评级", UnitType.RATING_CHANGE),
+            ("双方签署协议", UnitType.STRATEGIC_COOPERATION),
+            ("公司澄清传闻", UnitType.DISCLOSURE),
+        ],
+    )
+    def test_keyword_match(self, raw: str, expected: UnitType) -> None:
+        assert normalize_unit_type(raw) is expected
+
+
+class TestNormalizeUnrecognisedFallback:
+    """Unrecognised values fall back to disclosure, NOT to a removed bucket."""
+
+    def test_unknown_string_falls_back_to_disclosure(self) -> None:
+        assert normalize_unit_type("totally_unknown_xyz") is UnitType.DISCLOSURE
+
+    def test_empty_string_falls_back_to_disclosure(self) -> None:
+        assert normalize_unit_type("") is UnitType.DISCLOSURE
+
+    def test_whitespace_falls_back_to_disclosure(self) -> None:
+        assert normalize_unit_type("   ") is UnitType.DISCLOSURE
+
+
+class TestIsKnownUnitType:
+    """is_known_unit_type distinguishes real matches from the disclosure fallback."""
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "financial_performance",
+            "减持",
+            "目标价",
+            "投资",
+            "澄清",
+        ],
+    )
+    def test_known_terms_are_true(self, raw: str) -> None:
+        assert is_known_unit_type(raw) is True
+
+    @pytest.mark.parametrize("raw", ["", "   ", "totally_unknown_xyz", "胡乱词"])
+    def test_unknown_terms_are_false(self, raw: str) -> None:
+        assert is_known_unit_type(raw) is False
+
+
+class TestKeywordOrdering:
+    """shareholding_change keywords must take priority over investment's '持'."""
+
+    def test_zhichang_not_mismatched_to_investment(self) -> None:
+        # '减持' contains no '投资', but guard against future regressions
+        assert normalize_unit_type("减持计划公告") is UnitType.SHAREHOLDING_CHANGE

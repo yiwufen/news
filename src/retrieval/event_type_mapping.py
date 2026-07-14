@@ -8,25 +8,32 @@ from __future__ import annotations
 
 import logging
 
-from src.schemas.enums import UnitType, get_unit_type_synonyms, normalize_unit_type
+from src.schemas.enums import get_unit_type_synonyms, is_known_unit_type, normalize_unit_type
 
 logger = logging.getLogger(__name__)
 
 
 def expand_event_types(user_types: list[str]) -> list[str]:
-    """Expand user-facing event type terms to all known database variants.
+    """Expand user-facing event type terms to all known database unit_type values.
 
     Each input term is normalized to a canonical ``UnitType`` via
     ``normalize_unit_type`` (alias + keyword pattern matching).  Terms that
     cannot be resolved to a known type are **dropped** instead of passed
     through, because raw Chinese strings will never match the English
     ``unit_type`` values stored in the database.
+
+    Note: since the legacy ``other`` bucket was removed, an unrecognised term
+    normalises to ``disclosure`` by default. For *query expansion* that default
+    is wrong (it would silently match every disclosure), so unresolved terms are
+    detected here via ``is_known_unit_type`` and dropped.
     """
     expanded: list[str] = []
     seen: set[str] = set()
     for term in user_types:
         canonical = normalize_unit_type(term)
-        if canonical == UnitType.OTHER:
+        # Drop terms that only hit the disclosure fallback rather than a real
+        # match — see the module note about the removed ``other`` bucket.
+        if not is_known_unit_type(term):
             logger.debug("expand_event_types: unmapped term '%s' dropped", term)
             continue
         for synonym in get_unit_type_synonyms(canonical):

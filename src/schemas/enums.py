@@ -40,39 +40,58 @@ class EntityType(Enum):
 class UnitType(Enum):
     """Canonical unit_type values for KnowledgeUnit classification.
 
+    Closed set of 32 financial-event types (financial + financial-impact),
+    plus ``non_financial`` as the out-of-scope exit. The legacy ``announcement``
+    and ``other`` bucket types have been removed — see
+    ``docs/graph_edge_design.md`` §3 for the rationale and per-type
+    disambiguation priorities.
+
     The LLM is instructed to use these values.  Raw LLM output is
     normalized via ``normalize_unit_type()`` before persistence.
     """
 
+    # --- 公司资本类 ---
     FINANCIAL_PERFORMANCE = "financial_performance"
-    STOCK_PRICE_CHANGE = "stock_price_change"
-    PRICE_CHANGE = "price_change"
-    MARKET_ANALYSIS = "market_analysis"
-    DIVIDEND = "dividend"
-    IPO = "ipo"
     RESTRUCTURING = "restructuring"
+    IPO = "ipo"
+    SHAREHOLDING_CHANGE = "shareholding_change"
+    EQUITY_PLEDGE = "equity_pledge"
+    DIVIDEND = "dividend"
+    COMPANY_ESTABLISHMENT = "company_establishment"
     INVESTMENT = "investment"
+    # --- 公司经营类 ---
     PRODUCT_LAUNCH = "product_launch"
     BUSINESS_STRATEGY = "business_strategy"
-    COMPANY_ESTABLISHMENT = "company_establishment"
     EXECUTIVE_CHANGE = "executive_change"
-    LEGAL_PROCEEDING = "legal_proceeding"
-    REGULATORY_ACTION = "regulatory_action"
-    POLICY_ANNOUNCEMENT = "policy_announcement"
-    SANCTION = "sanction"
+    # --- 公司风险类 ---
     DEBT_DEFAULT = "debt_default"
-    EQUITY_PLEDGE = "equity_pledge"
+    LEGAL_PROCEEDING = "legal_proceeding"
     RISK_WARNING = "risk_warning"
+    # --- 市场分析类 ---
+    STOCK_PRICE_CHANGE = "stock_price_change"
+    PRICE_CHANGE = "price_change"
+    SECTOR_PERFORMANCE = "sector_performance"
+    MARKET_ANALYSIS = "market_analysis"
+    INDUSTRY_ANALYSIS = "industry_analysis"
+    RATING_CHANGE = "rating_change"
+    # --- 监管类 ---
+    REGULATORY_ACTION = "regulatory_action"
+    SANCTION = "sanction"
+    POLICY_ANNOUNCEMENT = "policy_announcement"
+    # --- 宏观类 ---
     ECONOMIC_DATA = "economic_data"
     TRADE_DATA = "trade_data"
-    SECTOR_PERFORMANCE = "sector_performance"
+    # --- 金融影响因素类 ---
     DIPLOMATIC_EVENT = "diplomatic_event"
     MILITARY_ACTION = "military_action"
     POLITICAL_STATEMENT = "political_statement"
-    ANNOUNCEMENT = "announcement"
+    # --- 跨主体关系类 ---
+    STRATEGIC_COOPERATION = "strategic_cooperation"
+    # --- 信息披露与会议类 ---
+    DISCLOSURE = "disclosure"
     MEETING = "meeting"
-    INDUSTRY_ANALYSIS = "industry_analysis"
-    OTHER = "other"
+    # --- 边界外（明确非金融，非垃圾桶）---
+    NON_FINANCIAL = "non_financial"
 
 
 # Canonical value set for fast membership testing
@@ -144,12 +163,21 @@ _UNIT_TYPE_ALIASES: dict[str, UnitType] = {
     "重组性质": UnitType.RESTRUCTURING,
     "并购": UnitType.RESTRUCTURING,
     "重组": UnitType.RESTRUCTURING,
-    # --- investment ---
+    # --- investment（不含控股性并购→restructuring；不含配股减持→shareholding_change）---
     "investment": UnitType.INVESTMENT,
     "投资": UnitType.INVESTMENT,
     "融资": UnitType.INVESTMENT,
     "股权投资": UnitType.INVESTMENT,
     "战略投资": UnitType.INVESTMENT,
+    # --- shareholding_change（股东增/减持、大宗交易、配售，非控制权变动）---
+    "shareholding_change": UnitType.SHAREHOLDING_CHANGE,
+    "减持": UnitType.SHAREHOLDING_CHANGE,
+    "增持": UnitType.SHAREHOLDING_CHANGE,
+    "股东减持": UnitType.SHAREHOLDING_CHANGE,
+    "股东增持": UnitType.SHAREHOLDING_CHANGE,
+    "大宗交易": UnitType.SHAREHOLDING_CHANGE,
+    "股份配售": UnitType.SHAREHOLDING_CHANGE,
+    "配售": UnitType.SHAREHOLDING_CHANGE,
     # --- product_launch ---
     "product_launch": UnitType.PRODUCT_LAUNCH,
     "product_release": UnitType.PRODUCT_LAUNCH,
@@ -242,11 +270,17 @@ _UNIT_TYPE_ALIASES: dict[str, UnitType] = {
     # --- political_statement ---
     "political_statement": UnitType.POLITICAL_STATEMENT,
     "政治声明": UnitType.POLITICAL_STATEMENT,
-    # --- announcement ---
-    "statement": UnitType.ANNOUNCEMENT,
-    "announcement": UnitType.ANNOUNCEMENT,
-    "声明": UnitType.ANNOUNCEMENT,
-    "公告": UnitType.ANNOUNCEMENT,
+    # --- disclosure（原 announcement 重定向；上市公司就特定事项的正式信息披露）---
+    "disclosure": UnitType.DISCLOSURE,
+    "statement": UnitType.DISCLOSURE,
+    "announcement": UnitType.DISCLOSURE,
+    "声明": UnitType.DISCLOSURE,
+    "公告": UnitType.DISCLOSURE,
+    "澄清": UnitType.DISCLOSURE,
+    "回应": UnitType.DISCLOSURE,
+    "停牌": UnitType.DISCLOSURE,
+    "复牌": UnitType.DISCLOSURE,
+    "减持计划": UnitType.DISCLOSURE,
     # --- meeting ---
     "meeting": UnitType.MEETING,
     "会议": UnitType.MEETING,
@@ -256,6 +290,22 @@ _UNIT_TYPE_ALIASES: dict[str, UnitType] = {
     "行业分析": UnitType.INDUSTRY_ANALYSIS,
     "行业趋势": UnitType.INDUSTRY_ANALYSIS,
     "analysis": UnitType.INDUSTRY_ANALYSIS,
+    # --- rating_change（机构评级/目标价/盈利预测的调整动作）---
+    "rating_change": UnitType.RATING_CHANGE,
+    "评级调整": UnitType.RATING_CHANGE,
+    "目标价": UnitType.RATING_CHANGE,
+    "上调评级": UnitType.RATING_CHANGE,
+    "下调评级": UnitType.RATING_CHANGE,
+    "维持评级": UnitType.RATING_CHANGE,
+    "首次覆盖": UnitType.RATING_CHANGE,
+    # --- strategic_cooperation（非投资性战略合作/签署协议）---
+    "strategic_cooperation": UnitType.STRATEGIC_COOPERATION,
+    "战略合作": UnitType.STRATEGIC_COOPERATION,
+    "签署协议": UnitType.STRATEGIC_COOPERATION,
+    "达成合作": UnitType.STRATEGIC_COOPERATION,
+    "签约": UnitType.STRATEGIC_COOPERATION,
+    # --- non_financial（明确非金融，非垃圾桶）---
+    "non_financial": UnitType.NON_FINANCIAL,
 }
 
 # Keyword patterns for fuzzy matching (substring → UnitType)
@@ -265,6 +315,11 @@ _KEYWORD_PATTERNS: list[tuple[str, UnitType]] = [
     ("涨跌", UnitType.STOCK_PRICE_CHANGE),
     ("重组", UnitType.RESTRUCTURING),
     ("并购", UnitType.RESTRUCTURING),
+    # shareholding_change 必须排在 investment 之前：减持/增持/配售含"持"易被误匹配
+    ("减持", UnitType.SHAREHOLDING_CHANGE),
+    ("增持", UnitType.SHAREHOLDING_CHANGE),
+    ("大宗交易", UnitType.SHAREHOLDING_CHANGE),
+    ("配售", UnitType.SHAREHOLDING_CHANGE),
     ("违约", UnitType.DEBT_DEFAULT),
     ("质押", UnitType.EQUITY_PLEDGE),
     ("诉讼", UnitType.LEGAL_PROCEEDING),
@@ -282,6 +337,13 @@ _KEYWORD_PATTERNS: list[tuple[str, UnitType]] = [
     ("风险提示", UnitType.RISK_WARNING),
     ("监管", UnitType.REGULATORY_ACTION),
     ("处罚", UnitType.REGULATORY_ACTION),
+    ("评级", UnitType.RATING_CHANGE),
+    ("目标价", UnitType.RATING_CHANGE),
+    ("战略合作", UnitType.STRATEGIC_COOPERATION),
+    ("签署协议", UnitType.STRATEGIC_COOPERATION),
+    ("签约", UnitType.STRATEGIC_COOPERATION),
+    ("澄清", UnitType.DISCLOSURE),
+    ("停牌", UnitType.DISCLOSURE),
     ("军事", UnitType.MILITARY_ACTION),
     ("外交", UnitType.DIPLOMATIC_EVENT),
     ("政策", UnitType.POLICY_ANNOUNCEMENT),
@@ -291,6 +353,23 @@ _KEYWORD_PATTERNS: list[tuple[str, UnitType]] = [
 ]
 
 
+def is_known_unit_type(raw_type: str) -> bool:
+    """Return True iff ``raw_type`` resolves to a *real* canonical value.
+
+    Unlike ``normalize_unit_type`` (which falls back to ``disclosure`` for
+    anything unrecognised), this never reports a fallback as a match.  Use it
+    when the caller must distinguish "genuinely recognised" from "defaulted".
+    """
+    if not raw_type or not raw_type.strip():
+        return False
+    stripped = raw_type.strip()
+    if stripped in _CANONICAL_VALUES:
+        return True
+    if stripped.lower() in _UNIT_TYPE_ALIASES:
+        return True
+    return any(keyword in stripped for keyword, _ in _KEYWORD_PATTERNS)
+
+
 def normalize_unit_type(raw_type: str) -> UnitType:
     """Map a raw LLM-extracted unit_type to the canonical UnitType.
 
@@ -298,10 +377,15 @@ def normalize_unit_type(raw_type: str) -> UnitType:
     1. Exact match against canonical values
     2. Case-insensitive alias lookup
     3. Substring keyword matching
-    4. Fallback to OTHER
+    4. Fallback to DISCLOSURE
+
+    The legacy ``other`` bucket type has been removed; an unrecognised value
+    is treated as an unspecified disclosure (the safest non-committal
+    financial-event type) rather than silently dropped into a catch-all.
+    See ``docs/graph_edge_design.md`` §3 for the rationale.
     """
     if not raw_type or not raw_type.strip():
-        return UnitType.OTHER
+        return UnitType.DISCLOSURE
 
     stripped = raw_type.strip()
 
@@ -319,7 +403,7 @@ def normalize_unit_type(raw_type: str) -> UnitType:
         if keyword in stripped:
             return unit_type
 
-    return UnitType.OTHER
+    return UnitType.DISCLOSURE
 
 
 def get_unit_type_synonyms(canonical: UnitType) -> list[str]:
@@ -338,3 +422,41 @@ def get_unit_type_synonyms(canonical: UnitType) -> list[str]:
             if val not in synonyms:
                 synonyms.append(val)
     return synonyms
+
+
+# ---------------------------------------------------------------------------
+# Legacy reclassification — map old 29-class canonicals to the new 32-class set
+# ---------------------------------------------------------------------------
+
+# Legacy values that were valid canonicals in the old taxonomy but no longer
+# exist. They cannot be mapped deterministically by rules alone — their
+# content must be re-read to pick the right new type.
+LEGACY_BUCKET_TYPES: frozenset[str] = frozenset({"announcement", "other"})
+
+# investment is kept as a canonical but pressure-testing showed ~50% of old
+# investment KUs were mis-classified (配股→shareholding_change, 研报→rating_change,
+# 设合伙企业→company_establishment). Rule-based mapping cannot tell these apart,
+# so the reclassification script re-reads investment KUs via LLM as well.
+LEGACY_NEEDS_RELABEL: frozenset[str] = frozenset({"announcement", "other", "investment"})
+
+
+def reclassify_legacy_unit_type(old: str) -> tuple[UnitType, bool]:
+    """Map an old-taxonomy canonical ``unit_type`` to the new closed set.
+
+    Returns ``(new_type, needs_relabel)``:
+
+    * ``needs_relabel=False`` — the rule mapping is certain; ``new_type`` is
+      the final value. Covers the 27 types that survived unchanged.
+    * ``needs_relabel=True`` — the old value is a removed bucket
+      (``announcement``/``other``) or a noisy type (``investment``); the
+      returned ``new_type`` is only a *placeholder* (``disclosure``) and the
+      caller MUST re-read the KU content (via LLM) to assign the real type.
+
+    Unknown inputs (not a legacy canonical) are treated as certain →
+    ``disclosure``, since ``normalize_unit_type`` already handles them.
+    """
+    if old in LEGACY_NEEDS_RELABEL:
+        return UnitType.DISCLOSURE, True
+    # Surviving canonical — normalise to guard against case drift, then return
+    # as-is. Anything unrecognised also lands on disclosure (certain).
+    return normalize_unit_type(old), False

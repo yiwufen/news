@@ -118,18 +118,17 @@ SYSTEM_PROMPT = """你是一名金融检索评估专家。你的任务是从给�
 def _build_system_prompt() -> str:
     """Append canonical UnitType values to SYSTEM_PROMPT so the LLM uses them."""
     from src.schemas.enums import UnitType
-    valid_types = [t.value for t in UnitType if t != UnitType.OTHER]
+    valid_types = [t.value for t in UnitType]
     return SYSTEM_PROMPT + "\n   " + ", ".join(valid_types)
 
 
 # ── 分层采样 ──────────────────────────────────────────────
 
 def _type_family(unit_type: str) -> str:
-    """Map unit_type to its canonical family name, or 'other'."""
-    from src.schemas.enums import UnitType, normalize_unit_type
+    """Map unit_type to its canonical family name."""
+    from src.schemas.enums import normalize_unit_type
 
-    canonical = normalize_unit_type(unit_type)
-    return canonical.value if canonical != UnitType.OTHER else "other"
+    return normalize_unit_type(unit_type).value
 
 
 def stratified_sample_kus(
