@@ -170,6 +170,29 @@ def collect_relabel_candidates(conn: sqlite3.Connection) -> list[dict]:
     return candidates
 
 
+def _extract_unit_type(raw: str, valid_types: set[str]) -> str | None:
+    """Extract a canonical unit_type from a possibly noisy LLM response.
+
+    Handles variants like ``"disclosure"``, ``unit_type: disclosure``,
+    ``类型：disclosure``, trailing punctuation, etc. Returns the last token
+    that matches a valid canonical value, or None.
+    """
+    import re
+
+    # Strip common wrappers: quotes, "unit_type:", "类型：", etc.
+    cleaned = raw.strip().strip('"').strip("'").strip("。").strip(".")
+    # Try the whole cleaned string first
+    if cleaned in valid_types:
+        return cleaned
+    # Split on any non-alphanumeric-underscore separator and find valid tokens
+    tokens = re.split(r"[\s:：,，、]+", cleaned)
+    for token in reversed(tokens):  # last match wins (answer usually at end)
+        token = token.strip().strip('"').strip("'")
+        if token in valid_types:
+            return token
+    return None
+
+
 def relabel_with_llm(
     candidates: list[dict], log_path: Path, progress_path: Path
 ) -> tuple[dict[str, object], dict[str, str]]:
@@ -242,9 +265,14 @@ def relabel_with_llm(
                 text = next(
                     b.text for b in resp.content if isinstance(b, TextBlock)
                 )
-                new_type = text.strip().strip('"').strip("'")
-                if new_type not in valid_types:
-                    raise ValueError(f"LLM returned invalid unit_type: {new_type!r}")
+                # LLM may wrap the answer in various ways ("unit_type: disclosure",
+                # '"disclosure"', "类型：disclosure", etc.). Extract the last
+                # token that matches a valid canonical value.
+                new_type = _extract_unit_type(text, valid_types)
+                if new_type is None:
+                    raise ValueError(
+                        f"LLM returned invalid unit_type: {text.strip()!r}"
+                    )
             except Exception as exc:  # noqa: BLE001 — surface, don't swallow
                 raise RuntimeError(
                     f"LLM relabel failed for ku_id={cand['ku_id']} "
