@@ -203,7 +203,9 @@ def relabel_with_llm(
     if done:
         print(f"  resume: {len(done)} already processed, {len(pending)} pending")
 
-    valid_types = {t.value for t in UnitType if t != UnitType.NON_FINANCIAL}
+    # non_financial is a valid relabel target: bucket KUs that are genuinely
+    # out of financial scope (health/sports/weather news) should land here.
+    valid_types = {t.value for t in UnitType}
     client, model = create_offline_llm_client()
     max_tokens = get_offline_max_tokens()
 
