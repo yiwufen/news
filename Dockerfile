@@ -15,6 +15,7 @@ RUN uv sync --no-dev --no-install-project
 # Copy application code
 COPY src/ src/
 COPY collectors/ collectors/
+COPY scripts/ scripts/
 
 # ============================================================
 # Stage 2: Runtime - minimal image
@@ -29,6 +30,7 @@ COPY --from=builder /app/.venv /app/.venv
 # Copy application code
 COPY --from=builder /app/src /app/src
 COPY --from=builder /app/collectors /app/collectors
+COPY --from=builder /app/scripts /app/scripts
 COPY docker/healthcheck.py /app/healthcheck.py
 
 # Ensure venv is on PATH
@@ -42,4 +44,6 @@ RUN mkdir -p /app/data
 # Override with other commands as needed:
 #   docker compose run --rm mcp python -m src.cli _run_offline --once --full
 #   docker compose run --rm mcp python -m collectors.eastmoney_crawler --limit 200 --db /app/data/news.db
+#   docker compose run --rm mcp python scripts/reclassify_units.py --db /app/data/news.db --dry-run
+#   docker compose run --rm mcp python scripts/reclassify_units.py --db /app/data/news.db --llm-relabel
 CMD ["python", "-m", "src.cli", "serve", "--host", "0.0.0.0", "--port", "8000"]
