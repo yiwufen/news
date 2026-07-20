@@ -508,3 +508,63 @@ def derive_edge_nature(cluster_type: str) -> str:
     if cluster_type in _REACTION_CLUSTER_TYPES:
         return "reaction"
     return "action"
+
+
+# ---------------------------------------------------------------------------
+# Direct edge (Entity → Entity) relation-type normalization
+# ---------------------------------------------------------------------------
+
+# The 19 relation_type values the extractor emits (knowledge_extractor.py
+# prompt). Each maps to one of the 4 direct-edge types with a subtype, OR to
+# None if it's a one-off event (those stay in EventCluster, never become a
+# direct edge — see docs/graph_edge_design.md §1.3 stability threshold).
+#
+# Tuple = (direct_edge_type, subtype). None = do not create a direct edge.
+_RELATION_TYPE_TO_DIRECT_EDGE: dict[str, tuple[str, str] | None] = {
+    # OWNERSHIP — equity / control changes
+    "控股": ("OWNERSHIP", "股权控制"),
+    "增持": ("OWNERSHIP", "股权变动"),
+    "减持": ("OWNERSHIP", "股权变动"),
+    # GOVERNANCE — governance / oversight
+    "高管任职": ("GOVERNANCE", "任职"),
+    "监管": ("GOVERNANCE", "监管"),
+    # COMMERCIAL — commercial cooperation
+    "合作": ("COMMERCIAL", "合作"),
+    "投资": ("COMMERCIAL", "投资"),
+    "供应": ("COMMERCIAL", "供应"),
+    "并购": ("COMMERCIAL", "并购"),
+    "收购": ("COMMERCIAL", "收购"),
+    # RISK — risk-linked / adversarial
+    "竞争": ("RISK", "竞争"),
+    "诉讼": ("RISK", "诉讼"),
+    "制裁": ("RISK", "制裁"),
+    "处罚": ("RISK", "处罚"),
+    # One-off events → no direct edge (stay in EventCluster)
+    "袭击": None,
+    "签署": None,
+    "谴责": None,
+    "威胁": None,
+    "反对": None,
+}
+
+
+def normalize_relation_type(raw: str) -> tuple[str | None, str | None]:
+    """Map a free-text ``relation_type`` to a direct-edge ``(type, subtype)``.
+
+    Returns ``(type, subtype)`` for stable structural relations that should
+    become an Entity→Entity direct edge, or ``(None, None)`` for one-off
+    events (袭击/签署/谴责/威胁/反对) that must stay in EventCluster.
+
+    The 19 canonical relation_types from the extraction prompt are mapped
+    explicitly. Unknown values (LLM drift, future extractor changes) return
+    ``(None, None)`` — conservative: when in doubt, don't create a direct
+    edge, let it live as an event.
+
+    See docs/graph_edge_design.md §1.3 (stability threshold) and §3.1.
+    """
+    if not raw or not raw.strip():
+        return (None, None)
+    mapped = _RELATION_TYPE_TO_DIRECT_EDGE.get(raw.strip())
+    if mapped is None:
+        return (None, None)
+    return mapped

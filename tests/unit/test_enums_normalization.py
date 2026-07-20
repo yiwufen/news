@@ -15,6 +15,7 @@ from src.schemas.enums import (
     derive_edge_nature,
     derive_edge_scope,
     is_known_unit_type,
+    normalize_relation_type,
     normalize_unit_type,
 )
 
@@ -209,3 +210,58 @@ class TestDeriveEdgeNature:
         # An unrecognised cluster_type is treated as an action (happened),
         # not silently dropped as a reaction.
         assert derive_edge_nature("totally_unknown") == "action"
+
+
+class TestNormalizeRelationType:
+    """normalize_relation_type — free-text relation_type → direct edge (type, subtype).
+
+    Stable structural relations map to one of OWNERSHIP/GOVERNANCE/COMMERCIAL/RISK;
+    one-off events return (None, None) and stay in EventCluster.
+    """
+
+    @pytest.mark.parametrize(
+        "raw,edge_type,subtype",
+        [
+            ("控股", "OWNERSHIP", "股权控制"),
+            ("增持", "OWNERSHIP", "股权变动"),
+            ("减持", "OWNERSHIP", "股权变动"),
+            ("高管任职", "GOVERNANCE", "任职"),
+            ("监管", "GOVERNANCE", "监管"),
+            ("合作", "COMMERCIAL", "合作"),
+            ("投资", "COMMERCIAL", "投资"),
+            ("供应", "COMMERCIAL", "供应"),
+            ("并购", "COMMERCIAL", "并购"),
+            ("收购", "COMMERCIAL", "收购"),
+            ("竞争", "RISK", "竞争"),
+            ("诉讼", "RISK", "诉讼"),
+            ("制裁", "RISK", "制裁"),
+            ("处罚", "RISK", "处罚"),
+        ],
+    )
+    def test_stable_relations_map_to_direct_edge(
+        self, raw: str, edge_type: str, subtype: str
+    ) -> None:
+        result = normalize_relation_type(raw)
+        assert result == (edge_type, subtype)
+
+    @pytest.mark.parametrize("raw", ["袭击", "签署", "谴责", "威胁", "反对"])
+    def test_one_off_events_return_none(self, raw: str) -> None:
+        # These must NOT become direct edges — they stay as events.
+        assert normalize_relation_type(raw) == (None, None)
+
+    @pytest.mark.parametrize("raw", ["", "   ", "未知关系", "totally_unknown"])
+    def test_unknown_or_empty_returns_none(self, raw: str) -> None:
+        # Conservative: when in doubt, don't create a direct edge.
+        assert normalize_relation_type(raw) == (None, None)
+
+    def test_whitespace_is_stripped(self) -> None:
+        assert normalize_relation_type(" 控股 ") == ("OWNERSHIP", "股权控制")
+
+    def test_all_four_edge_types_are_covered(self) -> None:
+        """Sanity: each of the 4 direct-edge types has at least one mapping."""
+        from src.schemas.enums import _RELATION_TYPE_TO_DIRECT_EDGE
+
+        covered = {
+            mapped[0] for mapped in _RELATION_TYPE_TO_DIRECT_EDGE.values() if mapped
+        }
+        assert covered == {"OWNERSHIP", "GOVERNANCE", "COMMERCIAL", "RISK"}
