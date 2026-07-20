@@ -233,9 +233,9 @@ class KnowledgeGraphSync:
                 if not s_id or not o_id:
                     continue  # unresolved mention — skip
                 mapped = normalize_relation_type(hint.relation_type)
-                if mapped[0] is None:
-                    continue  # one-off event, not a stable relation
                 edge_type, subtype = mapped
+                if edge_type is None or subtype is None:
+                    continue  # one-off event, not a stable relation
                 key = (s_id, o_id, edge_type, subtype)
                 bucket = agg.setdefault(
                     key,

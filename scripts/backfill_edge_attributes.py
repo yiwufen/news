@@ -25,7 +25,6 @@ Usage (run inside the container where Neo4j + .env are available):
 from __future__ import annotations
 
 import argparse
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -45,45 +44,10 @@ def load_corpus(
     cluster_repo = EventClusterRepository(db_path)
     unit_repo = KnowledgeUnitRepository(db_path)
 
-    entities = entity_repo.list_all() if hasattr(entity_repo, "list_all") else []
-    if not entities:
-        # Fallback: load via get_all / paginated if list_all missing
-        entities = _load_all_entities(db_path)
-    clusters = cluster_repo.list_all() if hasattr(cluster_repo, "list_all") else []
-    if not clusters:
-        clusters = _load_all_clusters(db_path)
-    units = unit_repo.list_all() if hasattr(unit_repo, "list_all") else []
-    if not units:
-        units = _load_all_units(db_path)
+    entities = entity_repo.get_all()
+    clusters = cluster_repo.get_all()
+    units = unit_repo.get_all()
     return entities, clusters, units
-
-
-def _load_all_entities(db_path: str) -> list[Entity]:
-    """Fallback bulk load via direct SQLite read."""
-    import json
-
-    conn = sqlite3.connect(db_path)
-    rows = conn.execute("SELECT payload FROM entities").fetchall()
-    conn.close()
-    return [Entity.model_validate(json.loads(p)) for (p,) in rows]
-
-
-def _load_all_clusters(db_path: str) -> list[EventCluster]:
-    import json
-
-    conn = sqlite3.connect(db_path)
-    rows = conn.execute("SELECT payload FROM event_clusters").fetchall()
-    conn.close()
-    return [EventCluster.model_validate(json.loads(p)) for (p,) in rows]
-
-
-def _load_all_units(db_path: str) -> list[KnowledgeUnit]:
-    import json
-
-    conn = sqlite3.connect(db_path)
-    rows = conn.execute("SELECT payload FROM knowledge_units").fetchall()
-    conn.close()
-    return [KnowledgeUnit.model_validate(json.loads(p)) for (p,) in rows]
 
 
 def main() -> None:
