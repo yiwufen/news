@@ -788,6 +788,106 @@ def test_knowledge_graph_sync_emits_entity_cluster_and_edge_queries() -> None:
     assert cluster_write["conflict_reasons"] == []
 
 
+def test_knowledge_graph_sync_writes_edge_role_scope_nature() -> None:
+    """INVOLVED_IN edges must carry role/scope/nature for multi-hop pruning.
+
+    role: primary entity → subject, other participants → object.
+    scope: Company/Product → corporate, else environment.
+    nature: reaction cluster_types → reaction, else action.
+    """
+    session = FakeSession()
+    graph_sync = KnowledgeGraphSync(connection=FakeConnection(session))
+    now = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
+    company = Entity(
+        entity_id="ent_xiaomi", entity_type="Company", canonical_name="Xiaomi",
+        aliases=[], identifiers={}, source_ku_ids=["ku_1"],
+        created_at=now, updated_at=now,
+    )
+    org = Entity(
+        entity_id="ent_csrc", entity_type="Organization", canonical_name="CSRC",
+        aliases=[], identifiers={}, source_ku_ids=["ku_1"],
+        created_at=now, updated_at=now,
+    )
+    # investment cluster: nature=action; primary=ent_xiaomi (subject),
+    # ent_csrc is a non-primary participant (object, environment scope).
+    cluster = EventCluster(
+        cluster_id="clu_1", cluster_type="investment",
+        title="Xiaomi investment", summary="Xiaomi investment",
+        entity_ids=["ent_xiaomi", "ent_csrc"],
+        primary_entity_id="ent_xiaomi",
+        time_anchor=now, time_range=None,
+        member_ku_ids=["ku_1"], source_doc_ids=["doc-1"], updated_at=now,
+    )
+    # reaction cluster: nature=reaction.
+    reaction_cluster = EventCluster(
+        cluster_id="clu_2", cluster_type="stock_price_change",
+        title="Xiaomi stock up", summary="Xiaomi stock up",
+        entity_ids=["ent_xiaomi"],
+        primary_entity_id="ent_xiaomi",
+        time_anchor=now, time_range=None,
+        member_ku_ids=["ku_2"], source_doc_ids=["doc-2"], updated_at=now,
+    )
+
+    graph_sync.sync([company, org], [cluster, reaction_cluster])
+
+    # Collect INVOLVED_IN edge writes keyed by (entity_id, cluster_id) — an
+    # entity appears once per cluster, and nature is per-edge (same entity in
+    # an action cluster vs a reaction cluster gets different nature).
+    edge_writes = {
+        (params["entity_id"], params["cluster_id"]): params
+        for query, params in session.calls
+        if "MERGE (e)-[r:INVOLVED_IN]->(c)" in query
+    }
+    # primary Company in the action (investment) cluster
+    primary = edge_writes[("ent_xiaomi", "clu_1")]
+    assert primary["role"] == "subject"
+    assert primary["scope"] == "corporate"
+    assert primary["nature"] == "action"
+    # non-primary Organization participant in the action cluster
+    participant = edge_writes[("ent_csrc", "clu_1")]
+    assert participant["role"] == "object"
+    assert participant["scope"] == "environment"
+    assert participant["nature"] == "action"
+    # same primary entity in the reaction (stock_price_change) cluster
+    reaction = edge_writes[("ent_xiaomi", "clu_2")]
+    assert reaction["role"] == "subject"
+    assert reaction["scope"] == "corporate"
+    assert reaction["nature"] == "reaction"
+
+
+def test_knowledge_graph_sync_missing_entity_falls_back_to_environment() -> None:
+    """admin path may pass a partial entity list; a participant whose Entity
+    object isn't passed must still get an edge (scope→environment fallback)."""
+    session = FakeSession()
+    graph_sync = KnowledgeGraphSync(connection=FakeConnection(session))
+    now = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
+    # Only pass the primary entity; cluster references a second id not in list.
+    company = Entity(
+        entity_id="ent_xiaomi", entity_type="Company", canonical_name="Xiaomi",
+        aliases=[], identifiers={}, source_ku_ids=["ku_1"],
+        created_at=now, updated_at=now,
+    )
+    cluster = EventCluster(
+        cluster_id="clu_1", cluster_type="investment",
+        title="t", summary="s",
+        entity_ids=["ent_xiaomi", "ent_missing"],
+        primary_entity_id="ent_xiaomi",
+        time_anchor=now, time_range=None,
+        member_ku_ids=["ku_1"], source_doc_ids=["doc-1"], updated_at=now,
+    )
+    graph_sync.sync([company], [cluster])
+    edge_writes = {
+        params["entity_id"]: params
+        for query, params in session.calls
+        if "MERGE (e)-[r:INVOLVED_IN]->(c)" in query
+    }
+    # ent_missing has no Entity passed → scope falls back to environment,
+    # role is object (not primary), nature from cluster_type.
+    missing = edge_writes["ent_missing"]
+    assert missing["scope"] == "environment"
+    assert missing["role"] == "object"
+
+
 def test_knowledge_graph_sync_serializes_identifiers_to_json() -> None:
     session = FakeSession()
     graph_sync = KnowledgeGraphSync(connection=FakeConnection(session))

@@ -10,6 +10,7 @@ from typing import Any, ContextManager, Protocol, TypedDict
 from src.entities import Entity
 from src.event_merging import EventCluster
 from src.graph.connection import get_connection
+from src.schemas.enums import derive_edge_nature, derive_edge_scope
 
 
 class GraphSessionLike(Protocol):
@@ -48,6 +49,12 @@ class KnowledgeGraphSync:
         clusters_created = 0
         edges_created = 0
         errors: list[str] = []
+
+        # Index entities by id so the INVOLVED_IN edge loop can look up each
+        # participant's entity_type (for scope derivation). IDs not in this
+        # index (e.g. admin path passing a partial entity list) fall back to
+        # environment scope via derive_edge_scope(None).
+        ent_by_id = {e.entity_id: e for e in entities}
 
         try:
             with self.connection.session() as session:
@@ -135,6 +142,14 @@ class KnowledgeGraphSync:
                     clusters_created += 1
 
                     for entity_id in cluster.entity_ids:
+                        # Derive edge attributes for multi-hop pruning.
+                        # role: the cluster's primary entity is the subject
+                        # (actor), other participants are objects. primary_entity_id
+                        # comes from event_merging (representative KU's first entity).
+                        role = "subject" if entity_id == cluster.primary_entity_id else "object"
+                        ent = ent_by_id.get(entity_id)
+                        scope = derive_edge_scope(ent.entity_type if ent else None)
+                        nature = derive_edge_nature(cluster.cluster_type)
                         session.run(
                             """
                             MATCH (e:Entity {id: $entity_id})
@@ -142,13 +157,19 @@ class KnowledgeGraphSync:
                             MERGE (e)-[r:INVOLVED_IN]->(c)
                             SET r.member_ku_ids = $member_ku_ids,
                                 r.source_doc_ids = $source_doc_ids,
-                                r.updated_at = $updated_at
+                                r.updated_at = $updated_at,
+                                r.role = $role,
+                                r.scope = $scope,
+                                r.nature = $nature
                             """,
                             entity_id=entity_id,
                             cluster_id=cluster.cluster_id,
                             member_ku_ids=cluster.member_ku_ids,
                             source_doc_ids=cluster.source_doc_ids,
                             updated_at=cluster.updated_at.isoformat(),
+                            role=role,
+                            scope=scope,
+                            nature=nature,
                         )
                         edges_created += 1
         except Exception as exc:
