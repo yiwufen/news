@@ -72,6 +72,31 @@ def _run_with_transient_retry(
     raise last_exc
 
 
+def _build_edge_filter_clauses(
+    structured_query: StructuredQuery,
+) -> tuple[str, dict[str, Any]]:
+    """Build optional INVOLVED_IN edge-attribute WHERE clauses.
+
+    Returns ``(clause_fragment, params)``. The fragment is "" when no edge
+    filter is requested (conservative: None = no pruning, behavior unchanged),
+    or a leading-AND-joined string like ``" AND all(r IN rels WHERE r.role IN $edge_roles)"``.
+    ``rels`` is the relationship-list variable bound in the MATCH path.
+    """
+    fragments: list[str] = []
+    params: dict[str, Any] = {}
+    roles = structured_query.filters.edge_role
+    scopes = structured_query.filters.edge_scope
+    if roles:
+        fragments.append("all(r IN rels WHERE r.role IN $edge_roles)")
+        params["edge_roles"] = roles
+    if scopes:
+        fragments.append("all(r IN rels WHERE r.scope IN $edge_scopes)")
+        params["edge_scopes"] = scopes
+    if not fragments:
+        return ("", {})
+    return (" AND " + " AND ".join(fragments), params)
+
+
 class GraphSessionLike(Protocol):
     def run(self, query: str, **params: object) -> object:
         ...
@@ -248,6 +273,10 @@ class KnowledgeGraphRetriever:
         effective_hops = max(min(structured_query.hops, MAX_HOPS), 1)
         max_edges = 2 * effective_hops - 1  # N Entity-hops = 2N-1 max edges to farthest EC
 
+        # Optional edge-attribute pruning (conservative: None = no pruning,
+        # behavior unchanged). Built from QueryFilters.edge_role / edge_scope.
+        edge_filters, edge_params = _build_edge_filter_clauses(structured_query)
+
         try:
             records = _run_with_transient_retry(
                 self.connection.session(),
@@ -256,8 +285,8 @@ class KnowledgeGraphRetriever:
                         Iterable[Any],
                         session.run(
                             f"""
-                            MATCH path = (start:Entity)-[:INVOLVED_IN*1..{max_edges}]-(cluster:EventCluster)
-                            WHERE start.id IN $start_entity_ids
+                            MATCH path = (start:Entity)-[rels:INVOLVED_IN*1..{max_edges}]-(cluster:EventCluster)
+                            WHERE start.id IN $start_entity_ids{edge_filters}
                             WITH start, cluster
                             OPTIONAL MATCH (cluster)<-[:INVOLVED_IN]-(neighbor:Entity)
                             RETURN
@@ -279,6 +308,7 @@ class KnowledgeGraphRetriever:
                             start_entity_ids=[
                                 entity.entity_id for entity in start_entities
                             ],
+                            **edge_params,
                         ),
                     )
                 ),
@@ -710,11 +740,16 @@ class KnowledgeGraphRetriever:
         entity_a: Entity,
         entity_b: Entity,
         max_hops: int = 3,
+        edge_role: list[str] | None = None,
+        edge_scope: list[str] | None = None,
     ) -> GraphRetrievalResult:
         """Find all paths between two entities in the bipartite graph.
 
         Returns paths connecting entity_a to entity_b within max_hops Entity-to-Entity distance.
         Each path alternates between Entity and EventCluster nodes.
+
+        ``edge_role`` / ``edge_scope`` are optional INVOLVED_IN pruning filters
+        (default None = no pruning, behavior unchanged).
         """
         if entity_a.entity_id == entity_b.entity_id:
             return GraphRetrievalResult(
@@ -726,6 +761,17 @@ class KnowledgeGraphRetriever:
         effective_hops = max(min(max_hops, MAX_HOPS), 1)
         max_edges = 2 * effective_hops  # N Entity-hops = 2N max edges for A-to-B path
 
+        # Optional edge-attribute pruning (conservative: None = no pruning).
+        fragments: list[str] = []
+        edge_params: dict[str, Any] = {}
+        if edge_role:
+            fragments.append("all(r IN rels WHERE r.role IN $edge_roles)")
+            edge_params["edge_roles"] = edge_role
+        if edge_scope:
+            fragments.append("all(r IN rels WHERE r.scope IN $edge_scopes)")
+            edge_params["edge_scopes"] = edge_scope
+        edge_filter = (" AND " + " AND ".join(fragments)) if fragments else ""
+
         try:
             records = _run_with_transient_retry(
                 self.connection.session(),
@@ -734,8 +780,8 @@ class KnowledgeGraphRetriever:
                         Iterable[Any],
                         session.run(
                             f"""
-                            MATCH path = (a:Entity {{id: $entity_a_id}})-[:INVOLVED_IN*1..{max_edges}]-(b:Entity {{id: $entity_b_id}})
-                            WHERE a.id <> b.id
+                            MATCH path = (a:Entity {{id: $entity_a_id}})-[rels:INVOLVED_IN*1..{max_edges}]-(b:Entity {{id: $entity_b_id}})
+                            WHERE a.id <> b.id{edge_filter}
                             RETURN
                                 [n IN nodes(path) | {{
                                     id: n.id,
@@ -751,6 +797,7 @@ class KnowledgeGraphRetriever:
                             """,
                             entity_a_id=entity_a.entity_id,
                             entity_b_id=entity_b.entity_id,
+                            **edge_params,
                         ),
                     )
                 ),

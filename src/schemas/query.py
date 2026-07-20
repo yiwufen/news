@@ -52,13 +52,22 @@ class QueryFilters:
     Only ``event_types`` is consumed by the retrieval and graph layers;
     risk-centric filters were removed together with the risk intents (the
     type-vocabulary bonus paths did not match real relevance).
+
+    ``edge_role`` / ``edge_scope`` are optional multi-hop pruning filters over
+    INVOLVED_IN edge attributes (written by KnowledgeGraphSync). Default None
+    means "no pruning" — multi-hop behavior is unchanged. See
+    docs/graph_edge_design.md §2.
     """
 
     event_types: list[str] | None = None
+    edge_role: list[str] | None = None
+    edge_scope: list[str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "event_types": self.event_types,
+            "edge_role": self.edge_role,
+            "edge_scope": self.edge_scope,
         }
 
 
@@ -99,6 +108,8 @@ def make_query(
     hops: int = 1,
     target_entity: str | None = None,
     *,
+    edge_role: list[str] | None = None,
+    edge_scope: list[str] | None = None,
     original_query: str | None = None,
 ) -> StructuredQuery:
     """Build a StructuredQuery without LLM parsing.
@@ -122,6 +133,12 @@ def make_query(
         Entity-to-Entity hop count for graph expansion (1-5, default: 1).
     target_entity:
         For A-B relationship path queries, the second entity name.
+    edge_role:
+        Optional multi-hop pruning filter on INVOLVED_IN edge role.
+        Values: ``"subject"`` / ``"object"``. None (default) = no pruning.
+    edge_scope:
+        Optional multi-hop pruning filter on INVOLVED_IN edge scope.
+        Values: ``"corporate"`` / ``"environment"``. None = no pruning.
     original_query:
         Optional raw query text (e.g. a topic phrase like ``"半导体"`` when
         ``entities`` is empty). Falls back to ``", ".join(entities)`` when
@@ -144,7 +161,11 @@ def make_query(
         intent=intent,
         entities=entities,
         time_range=tr,
-        filters=QueryFilters(event_types=event_types),
+        filters=QueryFilters(
+            event_types=event_types,
+            edge_role=edge_role,
+            edge_scope=edge_scope,
+        ),
         original_query=effective_query,
         hops=hops,
         target_entity=target_entity,

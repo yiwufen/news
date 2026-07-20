@@ -94,6 +94,8 @@ def _enhance_with_graph(
             entity_a=start_entities[0],
             entity_b=target_entities[0],
             max_hops=structured_query.hops,
+            edge_role=structured_query.filters.edge_role,
+            edge_scope=structured_query.filters.edge_scope,
         )
     else:
         graph_result = retriever.search(

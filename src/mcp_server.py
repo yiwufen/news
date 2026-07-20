@@ -88,6 +88,8 @@ def create_server(
         event_types: list[str] | None = None,
         target_entity: str | None = None,
         hops: int = 1,
+        edge_role: list[str] | None = None,
+        edge_scope: list[str] | None = None,
         top_k: int = 20,
     ) -> dict[str, Any]:
         """从金融知识库中检索实体、事件和关系。支持6种查询意图，返回知识单元、实体画像、事件聚类和图谱概览。
@@ -154,6 +156,12 @@ def create_server(
                 例如 entities=["比亚迪"], target_entity="特斯拉" 查询两者关系。
             hops: 图谱扩展跳数（1-5）。1=仅直接关联，2-3=扩展到二/三度关联。
                 默认 1。关系查询建议设 2-3。
+            edge_role: 多跳遍历时按 INVOLVED_IN 边的角色剪枝。可选值：
+                "subject"（事件主体/施动者）、"object"（事件客体/受动者）。
+                不传 = 不剪枝（默认）。例如只跟主体走可大幅缩减热点实体的邻居。
+            edge_scope: 多跳遍历时按 INVOLVED_IN 边的归属剪枝。可选值：
+                "corporate"（公司自身的事）、"environment"（外部环境的事）。
+                不传 = 不剪枝（默认）。
             top_k: 返回的最大知识单元数量。默认 20，范围 1-100。
         """
         from src.orchestration.graph import run_pipeline
@@ -179,6 +187,8 @@ def create_server(
             event_types=event_types,
             hops=hops,
             target_entity=target_entity,
+            edge_role=edge_role,
+            edge_scope=edge_scope,
         )
 
         # Offload the blocking retrieval to a bounded worker thread so the

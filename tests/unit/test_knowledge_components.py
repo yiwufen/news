@@ -727,7 +727,12 @@ class FakeResultSession:
         # Check for both old and new Cypher patterns
         if "MATCH (start:Entity)-[:INVOLVED_IN]->(cluster:EventCluster)" in query:
             return self.records
-        if "MATCH path = (start:Entity)-[:INVOLVED_IN*1.." in query:
+        # multi-hop: edge variable may be named (rels:) or unnamed (:);
+        # match on the invariant part of the path pattern.
+        if (
+            "MATCH path = (start:Entity)-[" in query
+            and ":INVOLVED_IN*1.." in query
+        ):
             return self.records
         return []
 
@@ -1164,6 +1169,100 @@ def test_knowledge_graph_retriever_returns_paths_with_filters(tmp_path) -> None:
     assert result.hit_reasons["ent_supplier"] == ["co_involved_via:clu_1"]
 
 
+def test_knowledge_graph_retriever_edge_role_filter_added_to_cypher(tmp_path) -> None:
+    """When edge_role is set, the multi-hop Cypher carries a WHERE all(...) clause.
+
+    Conservative pruning: passing edge_role adds the filter; NOT passing it
+    leaves the Cypher equivalent to the original (no all(...) fragment).
+    """
+    db_path = tmp_path / "news.db"
+    entity_repo = EntityRepository(str(db_path))
+    now = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
+    start_entity = Entity(
+        entity_id="ent_xiaomi",
+        entity_type="Company",
+        canonical_name="Xiaomi Group",
+        aliases=[], identifiers={}, source_ku_ids=["ku_1"],
+        created_at=now, updated_at=now,
+    )
+    entity_repo.save_batch([start_entity])
+    cluster_repo = EventClusterRepository(str(db_path))
+    cluster_repo.save_batch([
+        EventCluster(
+            cluster_id="clu_1", cluster_type="investment",
+            title="t", summary="s", entity_ids=["ent_xiaomi"],
+            primary_entity_id="ent_xiaomi", time_anchor=now, time_range=None,
+            member_ku_ids=["ku_1"], source_doc_ids=["doc-1"], updated_at=now,
+        )
+    ])
+
+    # --- With edge_role filter: Cypher must contain the all(...) fragment ---
+    session_filtered = FakeResultSession(
+        [
+            {
+                "start_entity_id": "ent_xiaomi",
+                "cluster_id": "clu_1",
+                "cluster_type": "investment",
+                "cluster_title": "t",
+                "cluster_summary": "s",
+                "cluster_primary_entity_id": "ent_xiaomi",
+                "member_ku_ids": ["ku_1"],
+                "source_doc_ids": ["doc-1"],
+                "conflict_status": "none",
+                "representative_ku_id": None,
+                "member_count": 1,
+                "source_count": 1,
+                "time_range_json": "null",
+                "neighbor_entity_id": None,
+            }
+        ]
+    )
+    retriever = KnowledgeGraphRetriever(
+        db_path=str(db_path),
+        connection=FakeConnection(session_filtered),
+        entity_repo=entity_repo,
+        cluster_repo=cluster_repo,
+    )
+    retriever.search(
+        StructuredQuery(
+            intent=IntentType.ENTITY_OVERVIEW,
+            entities=["Xiaomi Group"],
+            time_range=None,
+            filters=QueryFilters(edge_role=["subject"]),
+            original_query="x",
+            confidence=1.0,
+            hops=2,
+        ),
+        start_entities=[start_entity],
+    )
+    cypher_with_filter = session_filtered.calls[0][0]
+    assert "all(r IN rels WHERE r.role IN $edge_roles)" in cypher_with_filter
+    assert session_filtered.calls[0][1]["edge_roles"] == ["subject"]
+
+    # --- Without edge_role: no all(...) fragment (behavior unchanged) ---
+    session_plain = FakeResultSession([])
+    retriever_plain = KnowledgeGraphRetriever(
+        db_path=str(db_path),
+        connection=FakeConnection(session_plain),
+        entity_repo=entity_repo,
+        cluster_repo=cluster_repo,
+    )
+    retriever_plain.search(
+        StructuredQuery(
+            intent=IntentType.ENTITY_OVERVIEW,
+            entities=["Xiaomi Group"],
+            time_range=None,
+            filters=QueryFilters(),  # no edge filters
+            original_query="x",
+            confidence=1.0,
+            hops=2,
+        ),
+        start_entities=[start_entity],
+    )
+    cypher_plain = session_plain.calls[0][0]
+    assert "all(r IN rels" not in cypher_plain
+
+
 def test_knowledge_graph_retriever_fails_open_without_breaking_result_shape(tmp_path) -> None:
     db_path = tmp_path / "news.db"
     entity_repo = EntityRepository(str(db_path))
@@ -1246,8 +1345,10 @@ def test_knowledge_graph_retriever_does_not_write_schema_on_read_path(tmp_path) 
 
     assert result.used is True
     assert len(session.calls) == 1
-    # Check for the new variable-length path pattern
-    assert "MATCH path = (start:Entity)-[:INVOLVED_IN*1.." in session.calls[0][0]
+    # Check for the variable-length path pattern (edge var may be named rels:).
+    query_text = session.calls[0][0]
+    assert "MATCH path = (start:Entity)-[" in query_text
+    assert ":INVOLVED_IN*1.." in query_text
 
 
 def test_knowledge_unit_repository_syncs_fts_rows(tmp_path) -> None:
