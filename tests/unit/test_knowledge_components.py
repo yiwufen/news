@@ -28,6 +28,7 @@ from src.knowledge_base import (
     KnowledgeUnit,
     KnowledgeUnitRepository,
     RawDocument,
+    RelationHint,
     SourceRef,
     TimeRef,
     adapt_article_to_raw_document,
@@ -886,6 +887,160 @@ def test_knowledge_graph_sync_missing_entity_falls_back_to_environment() -> None
     missing = edge_writes["ent_missing"]
     assert missing["scope"] == "environment"
     assert missing["role"] == "object"
+
+
+def _ku_with_hints(
+    ku_id: str, hints: list[RelationHint], published_at: datetime | None = None
+) -> KnowledgeUnit:
+    """Minimal KU carrying relation_hints for direct-edge sync tests."""
+    published_at = published_at or datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
+    return KnowledgeUnit(
+        ku_id=ku_id,
+        unit_kind="event",
+        unit_type="investment",
+        summary="relation hint test",
+        entities=[],
+        source=SourceRef(doc_id="doc-1", source_name="test"),
+        evidence=[EvidenceSpan(text="relation hint test")],
+        time=TimeRef(
+            event_time=published_at,
+            published_at=published_at,
+            extracted_at=published_at,
+        ),
+        relation_hints=hints,
+    )
+
+
+def test_knowledge_graph_sync_writes_direct_edges_from_relation_hints() -> None:
+    """Stable relation_hints become Entity→Entity direct edges (4 types)."""
+    session = FakeSession()
+    graph_sync = KnowledgeGraphSync(connection=FakeConnection(session))
+    now = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
+    a = Entity(
+        entity_id="ent_a", entity_type="Company", canonical_name="A",
+        aliases=[], identifiers={}, source_ku_ids=[], created_at=now, updated_at=now,
+    )
+    b = Entity(
+        entity_id="ent_b", entity_type="Company", canonical_name="B",
+        aliases=[], identifiers={}, source_ku_ids=[], created_at=now, updated_at=now,
+    )
+    # One hint per direct-edge type
+    unit = _ku_with_hints(
+        "ku_1",
+        [
+            RelationHint(relation_type="控股", subject_entity_id="ent_a", object_entity_id="ent_b"),
+            RelationHint(relation_type="高管任职", subject_entity_id="ent_a", object_entity_id="ent_b"),
+            RelationHint(relation_type="合作", subject_entity_id="ent_a", object_entity_id="ent_b"),
+            RelationHint(relation_type="竞争", subject_entity_id="ent_a", object_entity_id="ent_b"),
+        ],
+    )
+    graph_sync.sync([a, b], [], units=[unit])
+
+    # Collect direct-edge MERGE queries by edge type
+    direct_queries = [
+        (query, params)
+        for query, params in session.calls
+        if "MERGE (a)-[r:" in query and "]->(b)" in query
+    ]
+    edge_types_seen = set()
+    for query, _ in direct_queries:
+        for t in ("OWNERSHIP", "GOVERNANCE", "COMMERCIAL", "RISK"):
+            if f"[r:{t} " in query:
+                edge_types_seen.add(t)
+    assert edge_types_seen == {"OWNERSHIP", "GOVERNANCE", "COMMERCIAL", "RISK"}
+
+
+def test_knowledge_graph_sync_skips_one_off_event_hints() -> None:
+    """One-off event relation_types (袭击/签署/…) must NOT become direct edges."""
+    session = FakeSession()
+    graph_sync = KnowledgeGraphSync(connection=FakeConnection(session))
+    now = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
+    a = Entity(
+        entity_id="ent_a", entity_type="Company", canonical_name="A",
+        aliases=[], identifiers={}, source_ku_ids=[], created_at=now, updated_at=now,
+    )
+    unit = _ku_with_hints(
+        "ku_1",
+        [
+            RelationHint(relation_type="袭击", subject_entity_id="ent_a", object_entity_id="ent_b"),
+            RelationHint(relation_type="签署", subject_entity_id="ent_a", object_entity_id="ent_b"),
+            RelationHint(relation_type="谴责", subject_entity_id="ent_a", object_entity_id="ent_b"),
+        ],
+    )
+    graph_sync.sync([a], [], units=[unit])
+    direct_queries = [
+        query for query, _ in session.calls
+        if "MERGE (a)-[r:" in query and "]->(b)" in query
+    ]
+    assert direct_queries == []  # no direct edges from one-off events
+
+
+def test_knowledge_graph_sync_merges_repeated_direct_edge() -> None:
+    """The same (A,B,type,subtype) from multiple KUs collapses into one MERGE."""
+    session = FakeSession()
+    graph_sync = KnowledgeGraphSync(connection=FakeConnection(session))
+    now = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
+    a = Entity(
+        entity_id="ent_a", entity_type="Company", canonical_name="A",
+        aliases=[], identifiers={}, source_ku_ids=[], created_at=now, updated_at=now,
+    )
+    # Two KUs both reporting A 控股 B → one OWNERSHIP edge, merged source_ku_ids
+    unit1 = _ku_with_hints(
+        "ku_1",
+        [RelationHint(relation_type="控股", subject_entity_id="ent_a", object_entity_id="ent_b")],
+    )
+    unit2 = _ku_with_hints(
+        "ku_2",
+        [RelationHint(relation_type="控股", subject_entity_id="ent_a", object_entity_id="ent_b")],
+    )
+    graph_sync.sync([a], [], units=[unit1, unit2])
+    ownership_queries = [
+        (query, params)
+        for query, params in session.calls
+        if "[r:OWNERSHIP " in query
+    ]
+    assert len(ownership_queries) == 1  # collapsed, not duplicated
+    # merged source_ku_ids should carry both ku_ids
+    _, params = ownership_queries[0]
+    assert "ku_1" in params["new_ku_ids"]
+    assert "ku_2" in params["new_ku_ids"]
+
+
+def test_knowledge_graph_sync_skips_unresolved_hints() -> None:
+    """Hints whose entity_id couldn't be resolved (None) must be skipped."""
+    session = FakeSession()
+    graph_sync = KnowledgeGraphSync(connection=FakeConnection(session))
+    now = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
+    a = Entity(
+        entity_id="ent_a", entity_type="Company", canonical_name="A",
+        aliases=[], identifiers={}, source_ku_ids=[], created_at=now, updated_at=now,
+    )
+    # subject_entity_id is None (unresolved mention)
+    unit = _ku_with_hints(
+        "ku_1",
+        [RelationHint(relation_type="控股", subject_entity_id=None, object_entity_id="ent_b")],
+    )
+    graph_sync.sync([a], [], units=[unit])
+    direct_queries = [
+        query for query, _ in session.calls
+        if "MERGE (a)-[r:" in query and "]->(b)" in query
+    ]
+    assert direct_queries == []
+
+
+def test_knowledge_graph_sync_no_units_skips_direct_edges() -> None:
+    """admin path passes units=None → no direct edges written (backward compat)."""
+    session = FakeSession()
+    graph_sync = KnowledgeGraphSync(connection=FakeConnection(session))
+    now = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
+    a = Entity(
+        entity_id="ent_a", entity_type="Company", canonical_name="A",
+        aliases=[], identifiers={}, source_ku_ids=[], created_at=now, updated_at=now,
+    )
+    # units not passed (default None) — like all admin/service.py call sites
+    stats = graph_sync.sync([a], [])
+    assert stats["direct_edges_created"] == 0
+    assert stats["direct_edges_merged"] == 0
 
 
 def test_knowledge_graph_sync_serializes_identifiers_to_json() -> None:

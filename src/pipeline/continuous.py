@@ -263,7 +263,9 @@ class ContinuousPipeline:
                 ]
                 if all_entities or all_clusters:
                     try:
-                        sync_result = self.graph_sync.sync(all_entities, all_clusters)
+                        sync_result = self.graph_sync.sync(
+                            all_entities, all_clusters, units=all_units
+                        )
                         total_nodes += sync_result["entities_created"] + sync_result["clusters_created"]
                         total_edges += sync_result["edges_created"]
                         all_errors.extend(sync_result["errors"])
@@ -555,7 +557,9 @@ class ContinuousPipeline:
         # Graph sync
         if self.graph_enabled and self.graph_sync and (result.entities or result.clusters):
             try:
-                self.graph_sync.sync(result.entities, result.clusters)
+                self.graph_sync.sync(
+                    result.entities, result.clusters, units=result.units
+                )
             except Exception:
                 logger.warning("Graph sync failed for %s", doc_id, exc_info=True)
 

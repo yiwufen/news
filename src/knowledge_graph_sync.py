@@ -10,7 +10,12 @@ from typing import Any, ContextManager, Protocol, TypedDict
 from src.entities import Entity
 from src.event_merging import EventCluster
 from src.graph.connection import get_connection
-from src.schemas.enums import derive_edge_nature, derive_edge_scope
+from src.knowledge_base import KnowledgeUnit
+from src.schemas.enums import (
+    derive_edge_nature,
+    derive_edge_scope,
+    normalize_relation_type,
+)
 
 
 class GraphSessionLike(Protocol):
@@ -27,6 +32,8 @@ class GraphSyncStats(TypedDict):
     entities_created: int
     clusters_created: int
     edges_created: int
+    direct_edges_created: int
+    direct_edges_merged: int
     errors: list[str]
 
 
@@ -44,10 +51,18 @@ class KnowledgeGraphSync:
     def __init__(self, connection: GraphConnectionLike | None = None):
         self.connection = connection or get_connection()
 
-    def sync(self, entities: list[Entity], clusters: list[EventCluster]) -> GraphSyncStats:
+    def sync(
+        self,
+        entities: list[Entity],
+        clusters: list[EventCluster],
+        *,
+        units: list[KnowledgeUnit] | None = None,
+    ) -> GraphSyncStats:
         entities_created = 0
         clusters_created = 0
         edges_created = 0
+        direct_edges_created = 0
+        direct_edges_merged = 0
         errors: list[str] = []
 
         # Index entities by id so the INVOLVED_IN edge loop can look up each
@@ -172,6 +187,14 @@ class KnowledgeGraphSync:
                             nature=nature,
                         )
                         edges_created += 1
+
+                # --- Direct edges (Entity → Entity) from relation_hints ---
+                # Only written when units are available (pipeline path). The
+                # admin path passes units=None and skips this entirely.
+                if units:
+                    direct_edges_created, direct_edges_merged = (
+                        self._sync_direct_edges(session, units)
+                    )
         except Exception as exc:
             errors.append(str(exc))
 
@@ -179,8 +202,95 @@ class KnowledgeGraphSync:
             "entities_created": entities_created,
             "clusters_created": clusters_created,
             "edges_created": edges_created,
+            "direct_edges_created": direct_edges_created,
+            "direct_edges_merged": direct_edges_merged,
             "errors": errors,
         }
+
+    @staticmethod
+    def _sync_direct_edges(
+        session: Any, units: list[KnowledgeUnit]
+    ) -> tuple[int, int]:
+        """Write Entity→Entity direct edges from KU relation_hints.
+
+        Returns (created, merged). Each relation_hint whose relation_type maps
+        to a stable direct-edge type (OWNERSHIP/GOVERNANCE/COMMERCIAL/RISK)
+        becomes a direct edge. One-off events (袭击/签署/…) return (None, None)
+        from normalize_relation_type and are skipped — they stay in EventCluster.
+
+        Merge semantics: the same (A, B, type, subtype) seen multiple times
+        collapses into one edge. last_seen takes the newest, source_ku_ids the
+        union, confidence the max — so repeated observations strengthen rather
+        than duplicate the edge.
+        """
+        # Aggregate hints by (subject, object, type, subtype) so we write each
+        # direct edge once with merged properties.
+        agg: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+        for unit in units:
+            for hint in unit.relation_hints:
+                s_id = hint.subject_entity_id
+                o_id = hint.object_entity_id
+                if not s_id or not o_id:
+                    continue  # unresolved mention — skip
+                mapped = normalize_relation_type(hint.relation_type)
+                if mapped[0] is None:
+                    continue  # one-off event, not a stable relation
+                edge_type, subtype = mapped
+                key = (s_id, o_id, edge_type, subtype)
+                bucket = agg.setdefault(
+                    key,
+                    {
+                        "source_ku_ids": [],
+                        "confidence": 0.0,
+                        "last_seen": None,
+                    },
+                )
+                if unit.ku_id not in bucket["source_ku_ids"]:
+                    bucket["source_ku_ids"].append(unit.ku_id)
+                bucket["confidence"] = max(bucket["confidence"], hint.confidence)
+                event_time = unit.time.event_time or unit.time.published_at
+                if bucket["last_seen"] is None or event_time > bucket["last_seen"]:
+                    bucket["last_seen"] = event_time
+
+        created = 0
+        merged = 0
+        for (s_id, o_id, edge_type, subtype), props in agg.items():
+            last_seen_iso = (
+                props["last_seen"].isoformat() if props["last_seen"] else None
+            )
+            # MERGE on (a, b, type, subtype). ON CREATE seeds first_seen;
+            # always update last_seen/source_ku_ids/confidence (merge semantics).
+            # source_ku_ids uses coalesce + a parameter list — without APOC we
+            # accept potential duplicates in the list (cheap to dedupe later).
+            result = session.run(
+                f"""
+                MATCH (a:Entity {{id: $a_id}}), (b:Entity {{id: $b_id}})
+                MERGE (a)-[r:{edge_type} {{subtype: $subtype}}]->(b)
+                ON CREATE SET r.first_seen = $last_seen
+                SET r.last_seen = $last_seen,
+                    r.source_ku_ids = coalesce(r.source_ku_ids, []) + $new_ku_ids,
+                    r.confidence = $confidence
+                RETURN r.first_seen AS first_seen
+                """,
+                a_id=s_id,
+                b_id=o_id,
+                subtype=subtype,
+                last_seen=last_seen_iso,
+                new_ku_ids=props["source_ku_ids"],
+                confidence=props["confidence"],
+            )
+            # The fake session returns None; the real driver returns a Result.
+            # Use presence of first_seen to distinguish create vs merge when the
+            # driver is real (best-effort accounting — not critical for correctness).
+            try:
+                records = result.data() if hasattr(result, "data") else []  # type: ignore[union-attr]
+            except Exception:  # noqa: BLE001 — fake session / read error
+                records = []
+            if records and records[0].get("first_seen") == last_seen_iso:
+                created += 1
+            else:
+                merged += 1
+        return created, merged
 
     def prune_orphans(
         self,
