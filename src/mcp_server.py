@@ -133,12 +133,23 @@ def create_server(
                 风险/担保/事件影响等场景不设专用意图，改用上述意图配合 event_types 过滤。
             time_range: 时间范围，格式 "START:END"（ISO日期）。
                 例如 "2025-04-01:2026-05-24"。不传则不限时间。
-            event_types: 按事件类型过滤。可选值：
-                "政策制裁/出口管制"、"股市波动/市场异动"、"企业并购/重组"、
-                "供应链中断/调整"、"财报发布/业绩预告"、"监管处罚/合规调查"、
-                "关税调整/贸易协定"、"高管变动/人事调整"、"IPO/融资事件"、
-                "地缘政治影响"。
-                例如 ["财报发布/业绩预告", "高管变动/人事调整"]。
+            event_types: 按事件类型过滤。可传 canonical 英文值或中文别名（均会归一化）。
+                32 类闭集（不要用 announcement/other，已取消）：
+                公司资本类：restructuring(重组/并购)、ipo(上市/增发)、
+                    shareholding_change(增减持/大宗交易/配售)、equity_pledge(股权质押)、
+                    dividend(分红/派息)、company_establishment(企业设立)、investment(投资/融资)
+                公司经营类：financial_performance(财报/业绩)、product_launch(产品发布)、
+                    business_strategy(企业战略)、executive_change(高管变动/实控人变动)
+                公司风险类：debt_default(债务违约)、legal_proceeding(诉讼)、risk_warning(风险提示)
+                市场分析类：stock_price_change(股价)、price_change(商品价格)、
+                    sector_performance(板块表现)、market_analysis(市场分析)、
+                    industry_analysis(行业分析)、rating_change(评级调整/目标价)
+                监管类：regulatory_action(监管处罚)、sanction(制裁)、policy_announcement(政策发布)
+                宏观类：economic_data(经济数据)、trade_data(贸易数据)
+                影响因素类：diplomatic_event(外交)、military_action(军事)、political_statement(政治声明)
+                关系/披露类：strategic_cooperation(战略合作/签约)、disclosure(澄清/回应/停牌)、
+                    meeting(会议)、non_financial(明确非金融内容)
+                例如 ["减持", "评级调整"] 或 ["shareholding_change", "rating_change"]。
             target_entity: 关系查询的目标实体（第二个实体），仅 intent="RELATIONSHIP_QUERY" 时有效。
                 例如 entities=["比亚迪"], target_entity="特斯拉" 查询两者关系。
             hops: 图谱扩展跳数（1-5）。1=仅直接关联，2-3=扩展到二/三度关联。

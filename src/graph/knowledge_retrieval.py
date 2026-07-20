@@ -525,9 +525,15 @@ class KnowledgeGraphRetriever:
         return grouped
 
     def _matches_filters(self, row: dict[str, Any], structured_query: StructuredQuery) -> bool:
-        event_types = structured_query.filters.event_types or []
-        if event_types and row["cluster_type"] not in event_types:
-            return False
+        raw_event_types = structured_query.filters.event_types or []
+        if raw_event_types:
+            # Expand user-facing terms (e.g. Chinese "减持") to canonical values
+            # before comparing against row["cluster_type"] (e.g. "shareholding_change").
+            from src.retrieval.event_type_mapping import expand_event_types
+
+            expanded = expand_event_types(raw_event_types)
+            if expanded and row["cluster_type"] not in expanded:
+                return False
         if structured_query.time_range is None:
             return True
         return self._matches_time_range(row.get("time_range_json"), structured_query)

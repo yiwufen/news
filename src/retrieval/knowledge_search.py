@@ -502,7 +502,7 @@ class KnowledgeSearcher:
         cluster_lookup_ids = matched_entity_ids if matched_entity_ids else selected_entity_ids
         related_clusters = self.clusters.find_related(
             primary_entity_ids=cluster_lookup_ids,
-            cluster_types=query.filters.event_types,
+            cluster_types=self._expand_event_types(query),
             time_range=time_range,
         )
         related_cluster_ids = {c.cluster_id for c in related_clusters}
@@ -600,7 +600,7 @@ class KnowledgeSearcher:
         cluster_lookup_ids = matched_entity_ids if matched_entity_ids else selected_entity_ids
         related_clusters = self.clusters.find_related(
             primary_entity_ids=cluster_lookup_ids,
-            cluster_types=request.structured_query.filters.event_types,
+            cluster_types=self._expand_event_types(request.structured_query),
             time_range=self._serialize_time_range(request.structured_query),
         )
         related_cluster_ids = {cluster.cluster_id for cluster in related_clusters}
@@ -754,7 +754,7 @@ class KnowledgeSearcher:
         cluster_lookup_ids = matched_entity_ids if matched_entity_ids else selected_entity_ids
         related_clusters = self.clusters.find_related(
             primary_entity_ids=cluster_lookup_ids,
-            cluster_types=request.structured_query.filters.event_types,
+            cluster_types=self._expand_event_types(request.structured_query),
             time_range=self._serialize_time_range(request.structured_query),
         )
         related_cluster_ids = {cluster.cluster_id for cluster in related_clusters}
@@ -859,8 +859,12 @@ class KnowledgeSearcher:
             component_scores["dense_weighted"] = weighted
             final_score += weighted
 
-        # Event type match
-        if query.filters.event_types and unit.unit_type in query.filters.event_types:
+        # Event type match — compare against the expanded synonym set, not the
+        # raw user input. filters.event_types holds the original terms (e.g.
+        # Chinese "减持"); unit.unit_type is the canonical DB value (e.g.
+        # "shareholding_change"). Without expansion the bonus never fires.
+        expanded_event_types = self._expand_event_types(query)
+        if expanded_event_types and unit.unit_type in expanded_event_types:
             component_scores["event_type_bonus"] = p.event_type_bonus
             final_score += p.event_type_bonus
 
