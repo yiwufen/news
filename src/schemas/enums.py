@@ -460,3 +460,51 @@ def reclassify_legacy_unit_type(old: str) -> tuple[UnitType, bool]:
     # Surviving canonical — normalise to guard against case drift, then return
     # as-is. Anything unrecognised also lands on disclosure (certain).
     return normalize_unit_type(old), False
+
+
+# ---------------------------------------------------------------------------
+# Edge attribute derivation — role / scope / nature for INVOLVED_IN edges
+# ---------------------------------------------------------------------------
+
+# Entity types that count as "corporate" (a company's own affairs). Everything
+# else (Organization / Person / None / unknown) is "environment" — external to
+# the company scope. See docs/graph_edge_design.md §2.1.
+_CORPORATE_ENTITY_TYPES: frozenset[str] = frozenset({"Company", "Product"})
+
+
+def derive_edge_scope(entity_type: str | None) -> str:
+    """Classify an INVOLVED_IN edge's scope as ``corporate`` or ``environment``.
+
+    A pure mechanical mapping from the participating entity's type — no content
+    reading. Company/Product → corporate; Organization/Person/None/unknown →
+    environment. This is the "whose affair is it?" coarse filter used for
+    multi-hop pruning.
+    """
+    if entity_type in _CORPORATE_ENTITY_TYPES:
+        return "corporate"
+    return "environment"
+
+
+# cluster_types that represent market *reactions* (price/opinion movements) as
+# opposed to *actions* (things that happened). Multi-hop causal-chain queries
+# typically want to skip reactions. See docs/graph_edge_design.md §2.1.
+_REACTION_CLUSTER_TYPES: frozenset[str] = frozenset({
+    UnitType.STOCK_PRICE_CHANGE.value,
+    UnitType.PRICE_CHANGE.value,
+    UnitType.SECTOR_PERFORMANCE.value,
+    UnitType.MARKET_ANALYSIS.value,
+    UnitType.INDUSTRY_ANALYSIS.value,
+    UnitType.RATING_CHANGE.value,
+})
+
+
+def derive_edge_nature(cluster_type: str) -> str:
+    """Classify an INVOLVED_IN edge's nature as ``action`` or ``reaction``.
+
+    Reaction = price/market/rating movement types; everything else is an
+    action (something that happened). Used to prune derivative market noise
+    from causal-chain multi-hop traversal.
+    """
+    if cluster_type in _REACTION_CLUSTER_TYPES:
+        return "reaction"
+    return "action"

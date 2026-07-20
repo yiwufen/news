@@ -12,6 +12,8 @@ import pytest
 from src.schemas.enums import (
     UnitType,
     _CANONICAL_VALUES,
+    derive_edge_nature,
+    derive_edge_scope,
     is_known_unit_type,
     normalize_unit_type,
 )
@@ -153,3 +155,57 @@ class TestKeywordOrdering:
     def test_zhichang_not_mismatched_to_investment(self) -> None:
         # '减持' contains no '投资', but guard against future regressions
         assert normalize_unit_type("减持计划公告") is UnitType.SHAREHOLDING_CHANGE
+
+
+class TestDeriveEdgeScope:
+    """derive_edge_scope — the coarse "whose affair" filter for multi-hop."""
+
+    @pytest.mark.parametrize("et", ["Company", "Product"])
+    def test_corporate_types(self, et: str) -> None:
+        assert derive_edge_scope(et) == "corporate"
+
+    @pytest.mark.parametrize("et", ["Organization", "Person", "Asset", "Unknown"])
+    def test_environment_types(self, et: str) -> None:
+        assert derive_edge_scope(et) == "environment"
+
+    def test_none_is_environment(self) -> None:
+        # admin path may pass partial entities; missing type must not crash
+        assert derive_edge_scope(None) == "environment"
+
+
+class TestDeriveEdgeNature:
+    """derive_edge_nature — action vs reaction for causal-chain pruning."""
+
+    @pytest.mark.parametrize(
+        "ct",
+        [
+            "stock_price_change",
+            "price_change",
+            "sector_performance",
+            "market_analysis",
+            "industry_analysis",
+            "rating_change",
+        ],
+    )
+    def test_reaction_types(self, ct: str) -> None:
+        assert derive_edge_nature(ct) == "reaction"
+
+    @pytest.mark.parametrize(
+        "ct",
+        [
+            "financial_performance",
+            "investment",
+            "restructuring",
+            "regulatory_action",
+            "debt_default",
+            "policy_announcement",
+            "military_action",
+        ],
+    )
+    def test_action_types(self, ct: str) -> None:
+        assert derive_edge_nature(ct) == "action"
+
+    def test_unknown_type_defaults_to_action(self) -> None:
+        # An unrecognised cluster_type is treated as an action (happened),
+        # not silently dropped as a reaction.
+        assert derive_edge_nature("totally_unknown") == "action"
