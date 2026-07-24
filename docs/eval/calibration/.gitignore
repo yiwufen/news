@@ -1,0 +1,4 @@
+# Calibration intermediates (regenerable; keep harness + report only)
+component_signals.json
+*.sweep.json
+*.grid.json

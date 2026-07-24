@@ -1,0 +1,11 @@
+# 评估运行产物 —— 不入库
+
+# 冻结的 DB 快照 (从 data/news.db 复制，约数十 MB)
+eval_snapshot.db
+snapshot_meta.json
+
+# 历次评估报告 (每次运行重新生成)
+results/
+
+# judge 标注缓存可选入库：如果希望团队共享标注，删除下一行
+# golden_labels/
