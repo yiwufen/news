@@ -35,8 +35,16 @@ uv.lock
 .claude/settings.local.json
 .zcode/settings.local.json
 
+# ZCode 会话产物（每次会话自动生成，不入库）
+.zcode/plans/
+
 # EDD eval 运行产物（每次运行临时生成，不入库）
 eval/run_latest.json
+
+# 检索评估运行产物（DB 快照 + 历次报告，不入库；scripts/queries/golden_labels 入库）
+docs/eval/eval_snapshot.db
+docs/eval/snapshot_meta.json
+docs/eval/results/
 
 # Frontend
 frontend/node_modules/
