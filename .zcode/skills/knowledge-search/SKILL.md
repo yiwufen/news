@@ -27,10 +27,11 @@ Search the financial knowledge base via `knowledge-cli search`.
 - `RELATIONSHIP_QUERY` — Relationship between two entities (requires `--target-entity`)
 - `COMPARATIVE_ANALYSIS` — Compare multiple entities
 - `EVENT_ANALYSIS` — Analyze specific events
-- `RISK_ASSESSMENT` — Risk assessment for entities
-- `GUARANTEE_ANALYSIS` — Guarantee relationship analysis
 - `TOPIC_RESEARCH` — Research a topic across entities
-- `EVENT_IMPACT_ANALYSIS` — Event impact analysis
+
+Risk / guarantee / event-impact content is retrieved by combining the intents
+above with `--event-types` filters (e.g. risk = overview + debt_default /
+regulatory types; guarantee = RELATIONSHIP_QUERY via graph expand).
 
 ## Usage
 
