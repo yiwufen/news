@@ -12,7 +12,6 @@ from src.entities import Entity
 from src.event_merging import EventCluster
 
 if TYPE_CHECKING:
-    from src.graph.nodes import NodeRepository
     from src.knowledge_graph_sync import KnowledgeGraphSync
 
 logger = logging.getLogger(__name__)
@@ -44,7 +43,6 @@ class AdminWriteService:
     # -- 懒加载 Neo4j 连接（可能不可用） --
 
     _graph_sync: KnowledgeGraphSync | None = None
-    _node_repo: NodeRepository | None = None
     _graph_attempted: bool = False
 
     def _ensure_graph(self) -> None:
@@ -53,11 +51,9 @@ class AdminWriteService:
         self._graph_attempted = True
         try:
             from src.graph.connection import get_connection
-            from src.graph.nodes import NodeRepository
             from src.knowledge_graph_sync import KnowledgeGraphSync
             conn = get_connection()
             self._graph_sync = KnowledgeGraphSync(conn)
-            self._node_repo = NodeRepository(conn)
         except Exception:
             logger.debug("Neo4j not available, graph sync disabled")
 
@@ -65,11 +61,6 @@ class AdminWriteService:
     def graph_sync(self) -> KnowledgeGraphSync | None:
         self._ensure_graph()
         return self._graph_sync
-
-    @property
-    def node_repo(self) -> NodeRepository | None:
-        self._ensure_graph()
-        return self._node_repo
 
     def _sync_graph(self, entities=None, clusters=None) -> None:
         """Best-effort Neo4j 同步，失败不影响主流程。"""
@@ -82,11 +73,11 @@ class AdminWriteService:
             logger.warning("Neo4j sync failed, SQLite is authoritative", exc_info=True)
 
     def _delete_graph_node(self, node_id: str) -> None:
-        nr = self.node_repo
-        if nr is None:
+        gs = self.graph_sync
+        if gs is None:
             return
         try:
-            nr.delete_node(node_id)
+            gs.delete_node(node_id)
         except Exception:
             logger.warning("Neo4j delete failed for %s", node_id, exc_info=True)
 
