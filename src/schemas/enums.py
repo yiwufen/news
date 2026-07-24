@@ -12,27 +12,6 @@ from enum import Enum
 
 
 # ---------------------------------------------------------------------------
-# RelationType / EntityType — graph model canonical enums
-# ---------------------------------------------------------------------------
-
-
-class RelationType(Enum):
-    INVESTS = "股权投资"
-    GUARANTEES = "担保"
-    DEBTOR_OF = "债权债务"
-    ACTUAL_CONTROL = "实际控制"
-    OWNS = "资产所有权"
-    ISSUES = "发行产品"
-
-
-class EntityType(Enum):
-    COMPANY = "公司实体"
-    PERSON = "自然人"
-    ASSET = "资产"
-    FINANCIAL_PRODUCT = "金融产品"
-
-
-# ---------------------------------------------------------------------------
 # UnitType — canonical unit_type vocabulary
 # ---------------------------------------------------------------------------
 

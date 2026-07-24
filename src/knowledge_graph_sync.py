@@ -514,3 +514,19 @@ class KnowledgeGraphSync:
             "MATCH (o:Entity {id: $orphan_id}) DETACH DELETE o",
             orphan_id=orphan_id,
         )
+
+    def delete_node(self, node_id: str) -> bool:
+        """Delete any node (Entity or EventCluster) by id, detaching its edges.
+
+        Used by the admin write path (entity/cluster merge/split/delete) to keep
+        Neo4j in sync when SQLite-side rows are removed. Returns True if a node
+        was deleted.
+        """
+        with self.connection.session() as session:
+            result = session.run(
+                "MATCH (n {id: $node_id}) DETACH DELETE n "
+                "RETURN count(n) AS deleted",
+                node_id=node_id,
+            )
+            rows = result.data() if hasattr(result, "data") else []  # type: ignore[union-attr]
+            return bool(rows and rows[0].get("deleted", 0) > 0)
