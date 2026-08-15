@@ -228,6 +228,10 @@ news/
 │   ├── entities.py              # Entity resolution + Repository
 │   ├── event_merging.py         # EventCluster conservative merge
 │   ├── knowledge_extractor.py   # LLM KnowledgeUnit extraction
+│   ├── pipeline/                # Offline pipeline (run_continuous)
+│   ├── admin/                   # FastAPI admin backend
+│   ├── llm/                     # LLM client abstraction
+│   ├── utils/                   # Shared utilities
 │   ├── retrieval/               # Hybrid retrieval engine
 │   │   ├── knowledge_search.py  #   Multi-path search orchestration
 │   │   ├── vector_index.py      #   FAISS dense vector index
@@ -269,7 +273,7 @@ uv run python -m src.cli serve --host 0.0.0.0 --port 8000
 ### Docker
 
 ```bash
-docker compose up -d                     # Start MCP + Neo4j + Caddy + Admin
+docker compose up -d                     # Start MCP + Neo4j + Caddy + Admin + Cloudflared
 docker compose exec mcp python -m src.cli serve
 ```
 

@@ -1,6 +1,6 @@
 # SSH 隧道访问指南
 
-所有服务通过 SSH 隧道访问，不对外暴露端口。
+MCP 与 Admin 已有 Cloudflare Tunnel 公网入口；其余服务通过 SSH 隧道访问，不直接对外暴露端口。
 
 ## 前置条件
 
@@ -42,10 +42,10 @@ ssh -L 8000:172.18.0.3:8000 \
 
 | 存储 | 位置 | 说明 |
 |------|------|------|
-| **关系库（SQLite）** | 远程 `knowledge-mcp`/`offline-new` 容器内 `/app/data/news.db` | 427MB 级，随 ingest 持续更新（最新写入见 `entities.updated_at`） |
+| **关系库（SQLite）** | 远程 `knowledge-mcp`/`offline-new` 容器内 `/app/data/news.db` | 随 ingest 持续更新（最新写入见 `entities.updated_at`） |
 | **图库（Neo4j）** | 远程 `knowledge-neo4j` 容器 | 由同一套 pipeline 写入，与 SQLite 同源同步 |
 
-**本地 `data/news.db`（约 80MB）是某次开发遗留的旧快照，不可作为生产事实依据。** 它与远程 SQLite 的 `entity_id` 等主键**完全不重叠**（UUID 在每次新建实体时随机生成），用它对比远程 Neo4j 必然得到"对不上"的假象。
+**本地 `data/news.db` 是某次开发遗留的旧快照，不可作为生产事实依据。** 它与远程 SQLite 的 `entity_id` 等主键**完全不重叠**（UUID 在每次新建实体时随机生成），用它对比远程 Neo4j 必然得到"对不上"的假象。
 
 ### 何时必须用远程数据
 

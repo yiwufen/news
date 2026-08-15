@@ -10,9 +10,14 @@
 
 ## ZCode 专属规则入口
 
-- `.zcode/rules/python.md`：Python 开发规则
+按需加载 `.zcode/rules/` 下的规则文件：
 
-其余历史规则文件已删除，避免旧的风险研判设计继续干扰当前“金融知识检索底座”方向。
+- `python.md`：Python 开发约定
+- `retrieval-code.md`：检索相关代码修改前置检查与 EDD 回归门禁
+- `deployment.md`：本地开发与远程部署、公网入口
+- `admin.md`：Admin 后台开发规则
+- `prompt-design.md`：LLM 提示词设计原则
+- `env.md`：环境变量约定
 
 ## 维护原则
 

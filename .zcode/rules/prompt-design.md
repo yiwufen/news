@@ -19,7 +19,7 @@
 
 每个容易出错的边界 case，给 1 个正例 + 1 个反例，比多写 5 行规则有效。
 
-- 优先针对召回率最低的类型补充示例（当前基线：broad_topic 55.6%、entity_only 58.8%）
+- 优先针对召回率最低的类型补充示例（活基线见 `eval/baseline.json`；本地 EDD 绝对值虚高，仅用于回归检测，见 `.zcode/rules/retrieval-code.md`）
 - 示例应使用项目中的实际字段名（`unit_type`、`mention`、`evidence`）
 
 **具体场景**：在 `SYSTEM_PROMPT` 的实体排除规则后，附上 2-3 个边界 case 的正反例，帮助模型区分"苹果公司(Company)"和"苹果产业链(抽象概念，不提取)"。

@@ -57,7 +57,7 @@ uv run python scripts/eval_run.py --init-baseline
 
 本地 EDD 的 Recall@5/MRR **绝对值不代表真实召回水平**，只用于**回归检测**。
 
-原因：fixture DB 是 golden 集涉及 KU 的子集（当前约 80 KU，真实库 31543 个），
+原因：fixture DB 是 golden 集涉及 KU 的子集（约 80 KU，远小于真实库），
 查询候选池被裁剪，ground truth 几乎必然排第一 → 本地 Recall@5 趋近 100% 是假象。
 真实召回水平需在**部署后**用远程全量库只读验证（`eval_generate.py` + `eval_report.py`）。
 
