@@ -11,7 +11,7 @@
 | 环境变量（远程） | `/home/deployer/knowledge/.env`（API keys、NEO4J_URI、NEO4J_PASSWORD 等） |
 | 数据目录（远程） | `/home/deployer/knowledge/data/`（host volume 挂载到容器 `/app/data/`） |
 | MCP 端点 | `https://kg.yiyiyiwufeng.cn/mcp`（Streamable HTTP） |
-| 公网入口 | Cloudflare Named Tunnel：`kg.yiyiyiwufeng.cn` / `fin.yiyiyiwufeng.cn` → `caddy:80`（服务器零入站 Web 端口，不依赖域名备案） |
+| 公网入口 | 当前公网流量全部经 Cloudflare Named Tunnel：`kg.yiyiyiwufeng.cn` / `fin.yiyiyiwufeng.cn` → `caddy:80`，不依赖域名备案；`caddy` 的 80/443 端口映射保留为备案域名直连预留（备案通过前无实际流量） |
 
 ## 部署流程
 
@@ -27,14 +27,18 @@ ssh baidu "cd /home/deployer/knowledge/repo && ./deploy.sh"
 
 ## 远程服务架构
 
-Docker Compose 管理 3 个容器 + 1 个 systemd 服务：
+Docker Compose 管理 5 个容器 + 1 个 systemd 服务：
 
 | 组件 | 容器/服务 | 说明 |
 |------|----------|------|
-| Caddy | `knowledge-caddy` | 反向代理，自动 HTTPS，对外 80/443 |
+| Caddy | `knowledge-caddy` | 反向代理；映射 80/443（备案域名直连预留），当前流量经 Cloudflare Tunnel 回源 `caddy:80` |
 | MCP Server | `knowledge-mcp` | Streamable HTTP，内部 8000，依赖 Neo4j |
 | Neo4j | `knowledge-neo4j` | 图数据库，仅 Docker 内网，不对外暴露端口 |
+| Admin | `knowledge-admin` | FastAPI 管理后台（`/admin`、`/api/v1`），内部 8001 |
+| Cloudflared | `knowledge-cloudflared` | Cloudflare Tunnel 出口连接器，仅出站连接 |
 | Ingestion | `knowledge-ingestion.service` | systemd 管理的持续离线处理（爬取 + 知识化 + 图同步） |
+
+> `fin.yiyiyiwufeng.cn` 经 Caddy 反代到 `fin-trace:3001`；`fin-trace` 是服务器上独立部署的外部服务，不在本仓库 docker-compose 内。
 
 ### Docker 网络
 
@@ -141,21 +145,21 @@ curl -s -m 15 https://kg.yiyiyiwufeng.cn/mcp \
 | 职责 | 在哪 | 依赖什么 | 频率 |
 |------|------|---------|------|
 | **回归检测**（代码改动后检索是否退化） | 本地 | `tests/fixtures/eval_snapshot.db` + `eval/golden_dataset_v3.json`（都在 Git 里） | 每次改检索相关代码 |
-| **真实召回评估**（绝对召回水平） | 远程全量库 | `/home/deployer/knowledge/data/news.db`（189MB，31543 KU） | 部署后按需 |
+| **真实召回评估**（绝对召回水平） | 远程全量库 | `/home/deployer/knowledge/data/news.db`（全量生产库） | 部署后按需 |
 | **fixture 产物生成**（snapshot） | 远程 | 真实库 + golden 集 | golden 失效时才重跑 |
 
-**关键约束**：本地 `data/news.db`（80MB）**不能用于 EDD**——它与 golden 集的 KU id 严重失配（仅 2/1163 命中），因为爬虫持续灌新数据、本地库严重滞后。EDD 的所有真实数据依赖必须走远程。
+**关键约束**：本地 `data/news.db`（开发旧快照）**不能用于 EDD**——它与 golden 集的 KU id 严重失配（仅 2/1163 命中），因为爬虫持续灌新数据、本地库严重滞后。EDD 的所有真实数据依赖必须走远程。
 
 ### 产物生命周期
 
 ```
-远程真实库 (189MB)
+远程真实库
     │
     │  snapshot_eval_pair.py（远程跑一次）
     ▼
-tests/fixtures/eval_snapshot.db (0.89MB) ──┐
-eval/golden_dataset_v3.json (380KB)        ├─ 入 Git，hash 锁定成对
-eval/baseline.json (metrics)               ┘
+tests/fixtures/eval_snapshot.db ──┐
+eval/golden_dataset_v3.json       ├─ 入 Git，hash 锁定成对
+eval/baseline.json (metrics)      ┘
     │
     │  拉回本地，提交
     ▼

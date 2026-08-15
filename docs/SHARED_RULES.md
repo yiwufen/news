@@ -22,6 +22,7 @@
 项目提供 CLI 工具 `knowledge-cli`（容器外）或 `python -m src.cli`（Docker 内直接执行），包含以下子命令：
 
 - `search`：结构化参数检索，输出 JSON
+- `graph-expand`：展开图谱聚类的完整节点/边/路径详情（对应 MCP 工具 `expand_graph_detail`）
 - `_run_offline --once`：单次离线知识化处理
 - `_run_offline`：持续离线处理循环
 - `_run_fetch`：持续爬取循环
@@ -184,7 +185,17 @@
 | `source_doc_ids` | `list[str]` | 是 | 派生来源文档列表 |
 | `conflict_status` | `Literal["none", "possible", "confirmed"]` | 是 | 事件簇层冲突状态 |
 | `cluster_confidence` | `float` | 是 | 归并置信度，取值 `0-1` |
+| `representative_ku_id` | `str \| None` | 否 | 代表性 KnowledgeUnit，供图谱节点展示 |
+| `member_count` | `int` | 否 | 成员 KU 数量（冗余计数） |
+| `source_count` | `int` | 否 | 去重后来源文档数量 |
+| `summary_variants` | `list[AggregationVariant]` | 否 | 摘要变体聚合，保留多来源表述差异 |
+| `event_time_variants` | `list[AggregationVariant]` | 否 | 事件时间变体聚合 |
+| `conflict_reasons` | `list[str]` | 否 | 冲突原因列表 |
+| `conflict_details` | `list[dict[str, Any]]` | 否 | 冲突明细，来自 `conflict_detection` |
+| `manual_overrides` | `dict[str, Any]` | 否 | 人工调整记录（预留，当前主线不写入） |
 | `updated_at` | `datetime` | 是 | 最近更新时间 |
+
+其中 `AggregationVariant` 至少包含：`value`、`ku_ids`、`source_doc_ids`、`count`。
 
 归并条件第一版建议同时满足：
 
@@ -232,7 +243,7 @@
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `entity_id` | `str` | 是 | 标准实体主键 |
-| `entity_type` | `Literal["Company", "Organization", "Person", "Product", "Asset"]` | 是 | 实体类型 |
+| `entity_type` | `Literal["Company", "Organization", "Person", "Product", "Asset"] \| None` | 否 | 实体类型，允许暂未分类（默认 `None`，以 `src/entities.py` 实现为准） |
 | `canonical_name` | `str` | 是 | 标准名称 |
 | `aliases` | `list[str]` | 否 | 别名、简称、外文名 |
 | `identifiers` | `dict[str, str]` | 否 | 稳定标识，如证券代码、注册号 |
@@ -406,3 +417,11 @@ uv run python scripts/eval_guard.py --run eval/run_latest.json
 2. 代码中的真实实现
 3. `README.md`
 4. `AGENTS.md` / `ZCODE.md` / `.zcode/rules/`
+
+### 冲突裁定次序
+
+文档之间或文档与实现冲突时，先分类再裁定：
+
+- 事实性冲突（描述系统现状，如端口、容器、CLI、字段）：以可执行真相为准，代码与配置（`docker-compose.yml`、`Caddyfile`、CI）高于任何文档；多份文档互相矛盾时，与配置变更同一 commit 更新的一份优先，未跟上的旧表述视为残留并修正
+- 约束性冲突（契约与 guardrail）：以本文件为准；代码与契约不一致时，先区分刻意演进（有配套测试与改动说明）还是静默漂移——前者更新本文件，后者修代码回归契约
+- 快照性冲突（随时间变化的事实，如库规模、数据量）：不在多处文档维护可变数值；确需记录时带「截至 YYYY-MM」标注且只在一处维护，其余文档引用
