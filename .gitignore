@@ -40,11 +40,6 @@ uv.lock
 
 # EDD eval 运行产物（每次运行临时生成，不入库）
 eval/run_latest.json
-# eval 快照与结果（含大体积 fixture DB，不入库）
-docs/eval/
-
-# ZCode 会话记录（本地计划/产物，不入库）
-.zcode/plans/
 
 # 检索评估运行产物（DB 快照 + 历次报告，不入库；scripts/queries/golden_labels 入库）
 docs/eval/eval_snapshot.db
