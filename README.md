@@ -35,10 +35,12 @@
 ### 服务地址
 
 ```
-https://182-61-1-77.nip.io/mcp
+https://kg.yiyiyiwufeng.cn/mcp
 ```
 
 协议：**Streamable HTTP**（MCP 2024-11-05），无需 API Key。
+
+> 入口经 Cloudflare Tunnel（自动 HTTPS）回源服务器，服务器不开放公网 Web 端口。
 
 ### ZCode 接入
 
@@ -49,7 +51,7 @@ https://182-61-1-77.nip.io/mcp
   "mcpServers": {
     "knowledge": {
       "type": "url",
-      "url": "https://182-61-1-77.nip.io/mcp"
+      "url": "https://kg.yiyiyiwufeng.cn/mcp"
     }
   }
 }

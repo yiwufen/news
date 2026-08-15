@@ -19,7 +19,7 @@ Host baidu
 | MCP Server | `ssh -L 8000:172.18.0.3:8000 baidu` | `http://localhost:8000/mcp` |
 | Neo4j Browser | `ssh -L 17474:172.18.0.2:7474 baidu` | `http://localhost:17474` |
 | Neo4j Bolt | `ssh -L 17687:172.18.0.2:7687 baidu` | `bolt://localhost:17687` |
-| Admin | 无需隧道，公网访问 | `https://182-61-1-77.nip.io/admin` |
+| Admin | 无需隧道，公网访问 | `https://kg.yiyiyiwufeng.cn/admin`（Cloudflare Tunnel） |
 
 > 容器 IP 在容器重建后会变化。查当前 IP：
 > ```bash

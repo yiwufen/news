@@ -10,7 +10,8 @@
 | 仓库（远程） | `/home/deployer/knowledge/repo/`，跟踪 GitHub master |
 | 环境变量（远程） | `/home/deployer/knowledge/.env`（API keys、NEO4J_URI、NEO4J_PASSWORD 等） |
 | 数据目录（远程） | `/home/deployer/knowledge/data/`（host volume 挂载到容器 `/app/data/`） |
-| MCP 端点 | `https://182-61-1-77.nip.io/mcp`（Caddy 反代，Streamable HTTP） |
+| MCP 端点 | `https://kg.yiyiyiwufeng.cn/mcp`（Streamable HTTP） |
+| 公网入口 | Cloudflare Named Tunnel：`kg.yiyiyiwufeng.cn` / `fin.yiyiyiwufeng.cn` → `caddy:80`（服务器零入站 Web 端口，不依赖域名备案） |
 
 ## 部署流程
 
@@ -110,13 +111,13 @@ print(result)
 
 ```bash
 # 初始化握手
-curl -s -m 15 https://182-61-1-77.nip.io/mcp \
+curl -s -m 15 https://kg.yiyiyiwufeng.cn/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
 
 # 工具列表
-curl -s -m 15 https://182-61-1-77.nip.io/mcp \
+curl -s -m 15 https://kg.yiyiyiwufeng.cn/mcp \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
