@@ -5,9 +5,11 @@
 # clients immediately.
 
 # ------------------------------------------------------------------
-# Primary: nip.io (free DNS, auto Let's Encrypt cert)
+# Primary: kg.yiyiyiwufeng.cn via Cloudflare Tunnel (edge terminates
+# TLS; origin is plain HTTP, hence the explicit http:// scheme which
+# also keeps Caddy from attempting ACME for this name)
 # ------------------------------------------------------------------
-182-61-1-77.nip.io {
+http://kg.yiyiyiwufeng.cn {
     handle /admin* {
         reverse_proxy admin:8001
     }
@@ -80,10 +82,10 @@
 
 # ------------------------------------------------------------------
 # fin-trace agent (Graph Explorer)
-# HTTPS via auto Let's Encrypt. Reverse proxy to fin-trace container.
+# Cloudflare Tunnel origin (plain HTTP, edge terminates TLS).
 # flush_interval -1 禁用缓冲，保证 SSE 流式回复实时到达。
 # ------------------------------------------------------------------
-fin.182-61-1-77.nip.io {
+http://fin.yiyiyiwufeng.cn {
     reverse_proxy fin-trace:3001 {
         flush_interval -1
     }

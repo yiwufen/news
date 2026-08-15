@@ -104,6 +104,22 @@ services:
       retries: 5
       start_period: 30s
 
+  # ====================================================================
+  # Cloudflare Tunnel — outbound-only public ingress (no inbound ports).
+  # Token 由 Cloudflare Zero Trust 面板创建隧道时提供，经
+  # /home/deployer/knowledge/.env 的 TUNNEL_TOKEN 注入，不进 git。
+  # ====================================================================
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: knowledge-cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    env_file: /home/deployer/knowledge/.env
+    networks:
+      - knowledge-net
+    depends_on:
+      - caddy
+
 # ====================================================================
 # Networks
 # ====================================================================
