@@ -142,6 +142,8 @@ def create_server(
                 例如 "2025-04-01:2026-05-24"。不传则不限时间。
             event_types: 按事件类型过滤。可传 canonical 英文值或中文别名（均会归一化）；
                 无法识别的类型会返回错误并列出全部合法值，不会静默忽略。
+                同时作用于图谱：多跳邻域的簇与 RELATIONSHIP_QUERY 路径上的事件簇
+                都必须属于所选类型。
                 32 类闭集（不要用 announcement/other，已取消）：
                 公司资本类：restructuring(重组/并购)、ipo(上市/增发)、
                     shareholding_change(增减持/大宗交易/配售)、equity_pledge(股权质押)、
