@@ -742,6 +742,7 @@ class KnowledgeGraphRetriever:
         max_hops: int = 3,
         edge_role: list[str] | None = None,
         edge_scope: list[str] | None = None,
+        event_types: list[str] | None = None,
     ) -> GraphRetrievalResult:
         """Find all paths between two entities in the bipartite graph.
 
@@ -750,6 +751,10 @@ class KnowledgeGraphRetriever:
 
         ``edge_role`` / ``edge_scope`` are optional INVOLVED_IN pruning filters
         (default None = no pruning, behavior unchanged).
+        ``event_types`` optionally requires every EventCluster on a path to be
+        of one of the given types (expanded via ``expand_event_types``, same
+        normalization as the multi-hop search). Unresolvable terms are dropped
+        by the expansion; the MCP layer validates them upfront.
         """
         if entity_a.entity_id == entity_b.entity_id:
             return GraphRetrievalResult(
@@ -770,6 +775,23 @@ class KnowledgeGraphRetriever:
         if edge_scope:
             fragments.append("all(r IN rels WHERE r.scope IN $edge_scopes)")
             edge_params["edge_scopes"] = edge_scope
+
+        # Optional event-type pruning: every EventCluster on the path must be
+        # of an allowed type. Filtered in Cypher (not post-fetch) so rejected
+        # paths never consume the LIMIT budget. Same expansion/normalization
+        # as the multi-hop search's _matches_filters.
+        expanded_types: list[str] | None = None
+        if event_types:
+            from src.retrieval.event_type_mapping import expand_event_types
+
+            expanded = expand_event_types(event_types)
+            if expanded:
+                expanded_types = expanded
+                fragments.append(
+                    "all(n IN nodes(path) "
+                    "WHERE n:Entity OR n.cluster_type IN $cluster_types)"
+                )
+                edge_params["cluster_types"] = expanded_types
         edge_filter = (" AND " + " AND ".join(fragments)) if fragments else ""
 
         try:

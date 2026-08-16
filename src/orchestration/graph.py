@@ -96,6 +96,7 @@ def _enhance_with_graph(
             max_hops=structured_query.hops,
             edge_role=structured_query.filters.edge_role,
             edge_scope=structured_query.filters.edge_scope,
+            event_types=structured_query.filters.event_types,
         )
     else:
         graph_result = retriever.search(

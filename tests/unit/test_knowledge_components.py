@@ -2205,3 +2205,129 @@ def test_embedding_below_threshold_does_not_merge(tmp_path) -> None:
     _, clusters = clusterer.assign_clusters([unit_a, unit_b], persist=False)
     assert len(clusters) == 2
 
+
+
+def test_relationship_path_event_type_filter_added_to_cypher(tmp_path) -> None:
+    """event_types 在路径查询中生成 cluster-type 过滤片段并带入展开后的类型参数。
+
+    过滤发生在 Cypher 内（而非取回后过滤），被拒绝的路径不占用 LIMIT 预算；
+    不传 event_types 时 Cypher 保持原样（行为不变）。
+    """
+    db_path = tmp_path / "news.db"
+    entity_repo = EntityRepository(str(db_path))
+    cluster_repo = EventClusterRepository(str(db_path))
+    now = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
+
+    def _entity(entity_id: str, name: str) -> Entity:
+        return Entity(
+            entity_id=entity_id,
+            entity_type="Company",
+            canonical_name=name,
+            aliases=[], identifiers={}, source_ku_ids=["ku_1"],
+            created_at=now, updated_at=now,
+        )
+
+    entity_a = _entity("ent_a", "Company A")
+    entity_b = _entity("ent_b", "Company B")
+
+    # --- With event_types: Cypher carries the cluster-type all(...) fragment ---
+    session_filtered = FakeResultSession([])
+    retriever = KnowledgeGraphRetriever(
+        db_path=str(db_path),
+        connection=FakeConnection(session_filtered),
+        entity_repo=entity_repo,
+        cluster_repo=cluster_repo,
+    )
+    retriever.search_relationship_path(
+        entity_a=entity_a,
+        entity_b=entity_b,
+        max_hops=2,
+        event_types=["重组"],
+    )
+    cypher_with_filter = session_filtered.calls[0][0]
+    assert (
+        "all(n IN nodes(path) "
+        "WHERE n:Entity OR n.cluster_type IN $cluster_types)" in cypher_with_filter
+    )
+    params = session_filtered.calls[0][1]
+    assert "restructuring" in params["cluster_types"]
+
+    # --- Without event_types: no cluster-type fragment (behavior unchanged) ---
+    session_plain = FakeResultSession([])
+    retriever_plain = KnowledgeGraphRetriever(
+        db_path=str(db_path),
+        connection=FakeConnection(session_plain),
+        entity_repo=entity_repo,
+        cluster_repo=cluster_repo,
+    )
+    retriever_plain.search_relationship_path(
+        entity_a=entity_a,
+        entity_b=entity_b,
+        max_hops=2,
+    )
+    assert "$cluster_types" not in session_plain.calls[0][0]
+
+
+def test_enhance_with_graph_passes_event_types_to_path_search(
+    monkeypatch, tmp_path
+) -> None:
+    """RELATIONSHIP_QUERY + target_entity 时 filters.event_types 必须透传到
+    search_relationship_path（图路径不再无视事件类型过滤）。"""
+    from src.orchestration import graph as graph_module
+    from src.graph.knowledge_retrieval import GraphRetrievalResult
+
+    now = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
+
+    def _entity(entity_id: str, name: str) -> Entity:
+        return Entity(
+            entity_id=entity_id,
+            entity_type="Company",
+            canonical_name=name,
+            aliases=[], identifiers={}, source_ku_ids=["ku_1"],
+            created_at=now, updated_at=now,
+        )
+
+    ent_a = _entity("ent_a", "Company A")
+    ent_b = _entity("ent_b", "Company B")
+    by_name = {"Company A": ent_a, "Company B": ent_b}
+
+    class FakeEntityRepo:
+        def find_by_names(self, names):
+            return [by_name[n] for n in names if n in by_name]
+
+    recorded: dict[str, Any] = {}
+
+    class FakeRetriever:
+        def search_relationship_path(self, **kwargs):
+            recorded.update(kwargs)
+            return GraphRetrievalResult(used=True)
+
+        def search(self, *args, **kwargs):
+            raise AssertionError("带 target_entity 的 RELATIONSHIP_QUERY 不应走多跳 search")
+
+    monkeypatch.setattr(
+        graph_module, "_resolve_entity_repo", lambda db_path: FakeEntityRepo()
+    )
+    monkeypatch.setattr(
+        graph_module, "_resolve_graph_retriever", lambda db_path: FakeRetriever()
+    )
+
+    query = StructuredQuery(
+        intent=IntentType.RELATIONSHIP_QUERY,
+        entities=["Company A"],
+        time_range=None,
+        filters=QueryFilters(event_types=["重组"]),
+        original_query="A B 关系",
+        target_entity="Company B",
+        hops=2,
+    )
+    enhancement = graph_module._enhance_with_graph(
+        structured_query=query,
+        db_path=str(tmp_path / "news.db"),
+    )
+
+    assert recorded["event_types"] == ["重组"]
+    assert recorded["max_hops"] == 2
+    assert recorded["entity_a"] is ent_a
+    assert recorded["entity_b"] is ent_b
+    assert enhancement.graph_result.used is True
