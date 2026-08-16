@@ -105,7 +105,10 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "cypher-shell -u neo4j -p ${NEO4J_PASSWORD:-test1234} 'RETURN 1' || exit 1"]
       interval: 10s
-      timeout: 5s
+      # 5s was too tight: during image pulls/extracts on this ≤4G host the
+      # probe timed out 3× in a row and flipped the container unhealthy,
+      # which failed a deploy at the `depends_on: service_healthy` gate.
+      timeout: 15s
       retries: 5
       start_period: 30s
 

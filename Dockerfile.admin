@@ -16,8 +16,10 @@ RUN npm run build
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
 
 WORKDIR /app
-COPY pyproject.toml uv.toml ./
-RUN uv sync --no-dev --no-install-project
+# uv.lock + --frozen keeps the image pinned to the tested dependency set
+# (see Dockerfile for the mcp 2.0.0 incident this prevents).
+COPY pyproject.toml uv.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
 COPY src/ src/
 COPY collectors/ collectors/
 

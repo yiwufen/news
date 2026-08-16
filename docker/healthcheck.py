@@ -27,9 +27,26 @@ _LOOP_LOGS = (
     "/app/data/logs/offline.log",  # ingestion loop
     "/app/data/logs/fetch.log",     # crawl loop
 )
-# Loop intervals are 5–15 min; allow up to ~3 missed cycles before declaring a
-# loop stalled.
+# Loop intervals are 5–15 min; allow up to ~3 missed cycles before declaring
+# a loop stalled.
 _STALE_SECONDS = 1800
+
+
+def _is_server_role() -> bool:
+    """True when PID 1 is the MCP server (``src.cli serve ...``).
+
+    The data volume is shared with the ingestion/fetch loop containers, so a
+    crash-looping server container would otherwise pass the loop-log fallback
+    below on logs written by *other* containers — reporting "healthy" while
+    the public endpoint is down (observed during the 2026-08-16 incident).
+    """
+    try:
+        with open("/proc/1/cmdline", "rb") as f:
+            cmdline = f.read()
+    except OSError:
+        return False
+    args = [part for part in cmdline.split(b"\0") if part]
+    return b"serve" in args
 
 
 def _port_open(port: int) -> bool:
@@ -54,8 +71,11 @@ def _any_log_fresh(paths: tuple[str, ...], max_age: float) -> bool:
 
 
 def main() -> int:
+    if _is_server_role():
+        # Long-lived MCP server role: the port MUST be listening. Never fall
+        # back to the shared loop logs here.
+        return 0 if _port_open(_MCP_PORT) else 1
     if _port_open(_MCP_PORT):
-        # Long-lived MCP server role.
         return 0
     if _any_log_fresh(_LOOP_LOGS, _STALE_SECONDS):
         # A background loop role (ingestion/fetch) — still advancing.
