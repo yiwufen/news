@@ -16,23 +16,25 @@ Host baidu
 
 | 服务 | 隧道命令 | 本地地址 |
 |------|---------|---------|
-| MCP Server | `ssh -L 8000:172.18.0.3:8000 baidu` | `http://localhost:8000/mcp` |
-| Neo4j Browser | `ssh -L 17474:172.18.0.2:7474 baidu` | `http://localhost:17474` |
-| Neo4j Bolt | `ssh -L 17687:172.18.0.2:7687 baidu` | `bolt://localhost:17687` |
+| MCP Server | `ssh -L 8000:172.20.0.3:8000 baidu` | `http://localhost:8000/mcp` |
+| Neo4j Browser | `ssh -L 17474:172.20.0.2:7474 baidu` | `http://localhost:17474` |
+| Neo4j Bolt | `ssh -L 17687:172.20.0.2:7687 baidu` | `bolt://localhost:17687` |
 | Admin | 无需隧道，公网访问 | `https://kg.yiyiyiwufeng.cn/admin`（Cloudflare Tunnel） |
 
-> 容器 IP 在容器重建后会变化。查当前 IP：
+> 容器均在固定名外部网络 `knowledge-net`（网段 `172.20.0.0/16`）。容器 IP 在重建后会变化，查当前 IP：
 > ```bash
 > ssh baidu "docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' knowledge-mcp"
 > ssh baidu "docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' knowledge-neo4j"
 > ```
+> 若输出多个 IP，取 `172.20.0.x`（knowledge-net）那个；过渡期 neo4j 可能还挂着旧网络
+> `repo_knowledge-net`（`172.18.0.x`）的过渡桥，旧网络清理后消失。
 
 ## 一键隧道（所有服务）
 
 ```bash
-ssh -L 8000:172.18.0.3:8000 \
-    -L 17474:172.18.0.2:7474 \
-    -L 17687:172.18.0.2:7687 \
+ssh -L 8000:172.20.0.3:8000 \
+    -L 17474:172.20.0.2:7474 \
+    -L 17687:172.20.0.2:7687 \
     baidu
 ```
 
