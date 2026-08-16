@@ -22,7 +22,8 @@ push master → CI test（pytest + pyright）
             → CI build：构建镜像推 GHCR（PR 只构建不推送）
                ghcr.io/yiwufen/news-mcp:{sha-<commit>, master}
                ghcr.io/yiwufen/news-admin:{sha-<commit>, master}
-            → CI deploy：SSH 执行 deploy.sh（pull-only，服务器不构建）
+            → CI deploy：SSH 先把服务器仓库同步到该 commit（避免 bash 执行到
+               半更新状态的旧 deploy.sh），再执行 deploy.sh（pull-only，服务器不构建）
 ```
 
 `deploy.sh` 自动完成：pull 代码（compose 配置）→ `docker compose pull`（拉 CI 构建的镜像）→
