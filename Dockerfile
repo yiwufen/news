@@ -5,12 +5,16 @@ FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
 
 WORKDIR /app
 
-# Copy dependency manifests first for layer caching
-COPY pyproject.toml uv.toml ./
+# Copy dependency manifests first for layer caching. uv.lock MUST be included:
+# without it `uv sync` re-resolves pyproject constraints from scratch and can
+# pick up brand-new major releases (mcp 2.0.0 broke `mcp.server.fastmcp`
+# imports in CI-built images while local cached builds stayed on 1.27.1).
+COPY pyproject.toml uv.toml uv.lock ./
 
 # Install production dependencies only (project itself is not installed —
-# at runtime we use `python -m src.cli` so source paths resolve correctly)
-RUN uv sync --no-dev --no-install-project
+# at runtime we use `python -m src.cli` so source paths resolve correctly).
+# --frozen: resolve strictly from uv.lock so the image matches the tested env.
+RUN uv sync --frozen --no-dev --no-install-project
 
 # Copy application code
 COPY src/ src/
