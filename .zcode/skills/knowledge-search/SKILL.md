@@ -85,7 +85,9 @@ Returns JSON with `nodes`, `edges`, `paths` for the selected clusters.
 4. If the user's query mentions two entities and their relationship, use `--intent RELATIONSHIP_QUERY --target-entity "B" --hops N`.
 5. If the user asks about time progression, use `--intent ENTITY_TIMELINE` with a `--time-range`.
 6. Entity names containing spaces do NOT need extra quoting beyond the surrounding quotes.
-7. When the user asks about specific clusters or wants deeper analysis, note the `cluster_id` values from `graph_data.clusters_overview` and run `knowledge-cli graph-expand --cluster-ids <ids>` to get full nodes, edges, and paths.
+7. Prefer Chinese entity names. Common English short names (e.g. `BYD`, `CATL`, `NIO`) resolve
+   automatically; obscure English names may not resolve, so convert them to Chinese first.
+8. When the user asks about specific clusters or wants deeper analysis, note the `cluster_id` values from `graph_data.clusters_overview` and run `knowledge-cli graph-expand --cluster-ids <ids>` to get full nodes, edges, and paths.
 
 ## Examples from user arguments
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from datetime import date
 from typing import Any
 
 from anyio import CapacityLimiter
@@ -65,7 +66,8 @@ def create_server(
             "典型工作流：先调用 search_knowledge，从返回的 graph_data.clusters_overview 中提取感兴趣的 "
             "cluster_id，再调用 expand_graph_detail 获取完整图谱结构。\n"
             "\n"
-            "实体名称必须使用中文（如 '比亚迪'、'宁德时代'），不支持英文简称（如 'BYD'）。"
+            "实体名称优先使用中文（如 '比亚迪'、'宁德时代'）；常见英文简称（如 'BYD'、'CATL'）"
+            "可自动解析，冷门英文名建议先转换为中文。"
         ),
         host=host,
         port=port,
@@ -105,7 +107,7 @@ def create_server(
         注：风险/担保/事件影响场景不再使用专用意图，改为在上述意图基础上叠加
         event_types 过滤。例如查"恒大集团的债务风险"用
         intent=ENTITY_OVERVIEW + entities=["恒大"] + event_types=["债务违约","监管处罚/合规调查"]；
-        查担保关系用 RELATIONSHIP_QUERY（图谱 expand 接口仍提供担保链/循环担保分析）。
+        查担保关系用 RELATIONSHIP_QUERY 查询两实体间的关联路径。
 
         输出结构：
         - knowledge_units: 匹配的知识单元列表（含 text、entity_mentions、event_type 等）
@@ -116,15 +118,17 @@ def create_server(
         - total_count: 匹配的知识单元总数
 
         限制：
-        - 实体名称必须使用中文，不支持英文简称
+        - 实体名称优先使用中文；常见英文简称（BYD、CATL、NIO 等）可自动解析，
+          冷门英文名可能解析不到，建议先转换为中文
         - 实体不在知识库中时返回空结果（不报错）
         - 知识库主要覆盖中国A股和港股上市公司、主要金融机构及宏观经济实体
         - 单次最多返回 top_k 条知识单元
 
         Args:
-            entities: 实体名称列表，使用中文名称。支持公司简称（"小米集团"）、
+            entities: 实体名称列表，优先使用中文。支持公司简称（"小米集团"）、
                 人名（"雷军"）、机构名（"证监会"）。
-                不支持英文简称如 "BYD"，需转换为中文 "比亚迪"。
+                常见英文简称如 "BYD"、"CATL" 可自动解析为对应中文实体；
+                冷门英文名可能解析不到，建议先转换（如 "CATL" → "宁德时代"）。
             intent: 查询意图，决定检索策略和结果排序。可选值：
                 - "ENTITY_OVERVIEW"（默认）：实体综合概览
                 - "ENTITY_TIMELINE"：按时间排序的事件时间线
@@ -133,9 +137,11 @@ def create_server(
                 - "EVENT_ANALYSIS"：按事件类型筛选分析
                 - "TOPIC_RESEARCH"：主题/产业链研究
                 风险/担保/事件影响等场景不设专用意图，改用上述意图配合 event_types 过滤。
-            time_range: 时间范围，格式 "START:END"（ISO日期）。
+            time_range: 时间范围，格式 "START:END"（ISO 日期），两端必填，不支持开放区间；
+                需要开放范围时请传一个足够远的结束日期（如当年年底）。
                 例如 "2025-04-01:2026-05-24"。不传则不限时间。
-            event_types: 按事件类型过滤。可传 canonical 英文值或中文别名（均会归一化）。
+            event_types: 按事件类型过滤。可传 canonical 英文值或中文别名（均会归一化）；
+                无法识别的类型会返回错误并列出全部合法值，不会静默忽略。
                 32 类闭集（不要用 announcement/other，已取消）：
                 公司资本类：restructuring(重组/并购)、ipo(上市/增发)、
                     shareholding_change(增减持/大宗交易/配售)、equity_pledge(股权质押)、
@@ -154,30 +160,65 @@ def create_server(
                 例如 ["减持", "评级调整"] 或 ["shareholding_change", "rating_change"]。
             target_entity: 关系查询的目标实体（第二个实体），仅 intent="RELATIONSHIP_QUERY" 时有效。
                 例如 entities=["比亚迪"], target_entity="特斯拉" 查询两者关系。
-            hops: 图谱扩展跳数（1-5）。1=仅直接关联，2-3=扩展到二/三度关联。
-                默认 1。关系查询建议设 2-3。
+            hops: 图谱扩展跳数，必须在 1-5 范围内（越界返回错误）。
+                1=仅直接关联，2-3=扩展到二/三度关联。默认 1。关系查询建议设 2-3。
             edge_role: 多跳遍历时按 INVOLVED_IN 边的角色剪枝。可选值：
                 "subject"（事件主体/施动者）、"object"（事件客体/受动者）。
                 不传 = 不剪枝（默认）。例如只跟主体走可大幅缩减热点实体的邻居。
             edge_scope: 多跳遍历时按 INVOLVED_IN 边的归属剪枝。可选值：
                 "corporate"（公司自身的事）、"environment"（外部环境的事）。
                 不传 = 不剪枝（默认）。
-            top_k: 返回的最大知识单元数量。默认 20，范围 1-100。
+            top_k: 返回的最大知识单元数量。默认 20，必须在 1-100 范围内（越界返回错误）。
         """
+        from src.graph.knowledge_retrieval import MAX_HOPS
         from src.orchestration.graph import run_pipeline
+        from src.schemas.enums import UnitType, is_known_unit_type
 
         # Cheap validation on the event loop before occupying a worker thread.
+        # 每个枚举/范围参数都返回可读错误并附合法值，让调用方 agent 能自我修正；
+        # 校验必须与下游实现同源（is_known_unit_type 即 event_types 过滤的判定函数），
+        # 避免出现"校验通过但过滤被静默丢弃"的缺口。
         try:
             parsed_intent = IntentType(intent)
         except ValueError:
             valid = ", ".join(t.value for t in IntentType)
             return {"error": f"Invalid intent '{intent}'. Valid values: {valid}"}
 
+        if not 1 <= hops <= MAX_HOPS:
+            return {"error": f"hops must be between 1 and {MAX_HOPS}, got {hops}"}
+
+        if not 1 <= top_k <= 100:
+            return {"error": f"top_k must be between 1 and 100, got {top_k}"}
+
+        if event_types:
+            unknown = [t for t in event_types if not is_known_unit_type(t)]
+            if unknown:
+                valid_types = ", ".join(t.value for t in UnitType)
+                return {
+                    "error": (
+                        f"Unknown event types: {unknown}. "
+                        f"Valid canonical values: {valid_types}. "
+                        "Chinese aliases (e.g. '减持', '债务违约') are also accepted."
+                    )
+                }
+
         parsed_time_range = None
         if time_range:
             parts = time_range.split(":")
             if len(parts) != 2:
-                return {"error": "time_range must be START:END (ISO dates)"}
+                return {
+                    "error": "time_range must be START:END (ISO dates, both ends required)"
+                }
+            try:
+                date.fromisoformat(parts[0])
+                date.fromisoformat(parts[1])
+            except ValueError:
+                return {
+                    "error": (
+                        "time_range endpoints must be ISO dates "
+                        f"(e.g. '2025-04-01:2026-05-24'), got '{time_range}'"
+                    )
+                }
             parsed_time_range = (parts[0], parts[1])
 
         structured_query = make_query(
@@ -215,7 +256,7 @@ def create_server(
         何时使用：search_knowledge 的 graph_data.clusters_overview 中存在需要深入了解的聚类时。
 
         输出结构：
-        - nodes: 聚类中的所有节点（实体和知识单元）
+        - nodes: 聚类中的所有节点（实体和事件聚类）
         - edges: 节点间的关系边
         - paths: 实体间的关联路径
         - clusters_overview: 聚类摘要
