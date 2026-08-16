@@ -4,7 +4,7 @@
 
 | 文件 | 用途 |
 |------|------|
-| `knowledge-mcp.service` | oneshot 拉起整个 MCP 栈（Caddy + MCP 服务 + Neo4j），`ExecReload` 时重建镜像 |
+| `knowledge-mcp.service` | oneshot 拉起应用栈（MCP 服务 + Admin + Neo4j）；入口层（Caddy + cloudflared）在独立 infra compose（`deploy/infra/`），不由本单元管理 |
 | `knowledge-ingestion.service` | 常驻离线知识化循环（`src.cli _run_offline`），`Restart=always` 保活 |
 | `knowledge-ingestion.timer` | 每 4 小时定时触发 ingestion（随机化延迟防惊群） |
 | `knowledge-fetch.service` | 常驻 EastMoney 抓取循环（`src.cli _run_fetch`），`Restart=always` 保证 one-shot 容器在主机重启后自动恢复 |

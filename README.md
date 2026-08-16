@@ -273,9 +273,14 @@ uv run python -m src.cli serve --host 0.0.0.0 --port 8000
 ### Docker
 
 ```bash
-docker compose up -d                     # Start MCP + Neo4j + Caddy + Admin + Cloudflared
+docker network create knowledge-net      # One-time: shared external network
+docker compose up -d                     # Start MCP + Admin + Neo4j
 docker compose exec mcp python -m src.cli serve
 ```
+
+> The ingress layer (Caddy + Cloudflare Tunnel) runs in a separate infra
+> compose (`deploy/infra/`) so app deploys never restart the shared proxy;
+> see `deploy/infra/docker-compose.yml` if you need it locally.
 
 ---
 

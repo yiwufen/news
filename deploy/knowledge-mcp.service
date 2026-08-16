@@ -1,5 +1,7 @@
 # knowledge-mcp.service
-# Ensures the knowledge-cli MCP stack (Caddy + MCP server + Neo4j) is running.
+# Ensures the knowledge-cli app stack (MCP server + Admin + Neo4j) is running.
+# Ingress (Caddy + Cloudflare Tunnel) runs in the standalone infra compose
+# at /home/deployer/knowledge/infra/ and is not managed by this unit.
 #
 # Install:
 #   sudo cp deploy/knowledge-mcp.service /etc/systemd/system/
@@ -18,7 +20,7 @@ RemainAfterExit=yes
 WorkingDirectory=/home/deployer/knowledge/repo
 ExecStart=/usr/bin/docker compose --env-file /home/deployer/knowledge/.env up -d --remove-orphans
 ExecStop=/usr/bin/docker compose down
-ExecReload=/usr/bin/docker compose --env-file /home/deployer/knowledge/.env up -d --build --remove-orphans
+ExecReload=/usr/bin/docker compose --env-file /home/deployer/knowledge/.env up -d --no-build --remove-orphans
 StandardOutput=journal
 StandardError=journal
 

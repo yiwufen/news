@@ -1,0 +1,72 @@
+# ====================================================================
+# Infra compose — shared ingress layer, decoupled from app deploys.
+#
+# Deployed on the server at /home/deployer/knowledge/infra/ as a standalone
+# compose project (NOT started by deploy.sh). App releases recreate only the
+# app containers; Caddy and the tunnel stay up, so fin-trace (an external
+# service also routed through Caddy) is never interrupted by knowledge deploys.
+#
+# One-time setup:
+#   docker network create knowledge-net      # shared external network
+#   docker compose --env-file /home/deployer/knowledge/.env up -d
+#
+# Config changes (Caddyfile):
+#   edit ./Caddyfile, then: docker restart knowledge-caddy
+# ====================================================================
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: knowledge-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+      # Defensive: keep the proxy off Caddy's outbound (ACME etc.) even if
+      # the daemon ever injects proxy env into containers.
+      - NO_PROXY=mcp,neo4j,caddy,localhost,127.0.0.1,172.18.0.0/16,172.17.0.0/16
+      - no_proxy=mcp,neo4j,caddy,localhost,127.0.0.1,172.18.0.0/16,172.17.0.0/16
+      - HTTP_PROXY=
+      - http_proxy=
+      - HTTPS_PROXY=
+      - https_proxy=
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - knowledge-net
+
+  # Cloudflare Tunnel — outbound-only public ingress (no inbound ports).
+  # Token 由 Cloudflare Zero Trust 面板创建隧道时提供，经
+  # /home/deployer/knowledge/.env 的 TUNNEL_TOKEN 注入；ingress 规则
+  # （kg./fin.yiyiyiwufeng.cn → caddy:80）在面板侧远管，本文件不涉及。
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: knowledge-cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    env_file: /home/deployer/knowledge/.env
+    networks:
+      - knowledge-net
+    depends_on:
+      - caddy
+
+# ====================================================================
+# Networks — the fixed-name external bridge shared with the app compose
+# (and fin-trace). Fixed name so it is independent of any compose project
+# prefix; must be created manually: docker network create knowledge-net
+# ====================================================================
+networks:
+  knowledge-net:
+    external: true
+    name: knowledge-net
+
+# ====================================================================
+# Volumes — ACME/state for Caddy (fresh volumes: current traffic is
+# tunnel-origin plain HTTP, no live certs to carry over)
+# ====================================================================
+volumes:
+  caddy-data:
+  caddy-config:

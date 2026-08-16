@@ -1,31 +1,7 @@
+# Application stack only. The ingress layer (Caddy + Cloudflare Tunnel)
+# lives in the standalone infra compose project (deploy/infra/) so app
+# deploys never restart the shared proxy; see that file for setup.
 services:
-  # ====================================================================
-  # Caddy — public-facing reverse proxy with auto HTTPS
-  # ====================================================================
-  caddy:
-    image: caddy:2-alpine
-    container_name: knowledge-caddy
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    environment:
-      - DOMAIN=${DOMAIN:-localhost}
-      - NO_PROXY=mcp,neo4j,caddy,localhost,127.0.0.1,172.18.0.0/16,172.17.0.0/16
-      - no_proxy=mcp,neo4j,caddy,localhost,127.0.0.1,172.18.0.0/16,172.17.0.0/16
-      - HTTP_PROXY=
-      - http_proxy=
-      - HTTPS_PROXY=
-      - https_proxy=
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
-    networks:
-      - knowledge-net
-    depends_on:
-      - mcp
-
   # ====================================================================
   # MCP Server — stateless Streamable HTTP API
   # ====================================================================
@@ -112,34 +88,19 @@ services:
       retries: 5
       start_period: 30s
 
-  # ====================================================================
-  # Cloudflare Tunnel — outbound-only public ingress (no inbound ports).
-  # Token 由 Cloudflare Zero Trust 面板创建隧道时提供，经
-  # /home/deployer/knowledge/.env 的 TUNNEL_TOKEN 注入，不进 git。
-  # ====================================================================
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    container_name: knowledge-cloudflared
-    restart: unless-stopped
-    command: tunnel --no-autoupdate run
-    env_file: /home/deployer/knowledge/.env
-    networks:
-      - knowledge-net
-    depends_on:
-      - caddy
-
 # ====================================================================
-# Networks
+# Networks — fixed-name external bridge shared with the infra compose
+# (Caddy/Cloudflare) and fin-trace. Create once per host:
+#   docker network create knowledge-net
 # ====================================================================
 networks:
   knowledge-net:
-    driver: bridge
+    external: true
+    name: knowledge-net
 
 # ====================================================================
 # Volumes
 # ====================================================================
 volumes:
-  caddy-data:
-  caddy-config:
   neo4j-data:
   neo4j-logs:
