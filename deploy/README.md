@@ -13,8 +13,10 @@
 
 ## 与 CI 的关系
 
-CI（`.github/workflows/ci.yml`）只自动化 docker compose 层面的部署（master push → SSH 执行
-`deploy.sh`）。**systemd unit 变更刻意不自动化**：修改 unit 需要 root 权限，须人工在远程主机上
+CI（`.github/workflows/ci.yml`）自动化镜像构建与部署：master push → CI 构建镜像并推 GHCR
+（`ghcr.io/yiwufen/news-mcp` / `news-admin`，`sha-<commit>` + `master` 双 tag）→ SSH 执行
+`deploy.sh` 以 pull-only 方式部署（服务器不再构建镜像）；PR 只跑测试与镜像构建验证，不推送。
+**systemd unit 变更刻意不自动化**：修改 unit 需要 root 权限，须人工在远程主机上
 执行 `sudo systemctl` 操作——这正是 CI "zero sudo" 设计的边界（见 ci.yml 头部注释；`SERVER_SSH_KEY`
 即供该流水线 SSH 登录 `deployer` 用户使用）。
 

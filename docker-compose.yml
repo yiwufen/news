@@ -30,6 +30,10 @@ services:
   # MCP Server — stateless Streamable HTTP API
   # ====================================================================
   mcp:
+    # image: what CI pushes to GHCR and production pulls (deploy.sh sets
+    # IMAGE_TAG). build: local-dev fallback — `docker compose up --build`
+    # tags the same name, so both flows stay interchangeable.
+    image: ghcr.io/yiwufen/news-mcp:${IMAGE_TAG:-master}
     build: .
     container_name: knowledge-mcp
     restart: unless-stopped
@@ -55,6 +59,7 @@ services:
   # Admin Dashboard — read-only monitoring and data browsing
   # ====================================================================
   admin:
+    image: ghcr.io/yiwufen/news-admin:${IMAGE_TAG:-master}
     build:
       context: .
       dockerfile: Dockerfile.admin
