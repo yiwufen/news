@@ -149,10 +149,17 @@ jobs:
           SSH_HOST: ${{ secrets.SERVER_HOST }}
           SSH_USER: ${{ secrets.SERVER_USER }}
         run: |
-          # deploy.sh lives in the repo on the server (kept in sync by git pull
-          # inside the script itself). It runs `set -euo pipefail`, so any
-          # failed step (pull error, unhealthy container) propagates a non-zero
-          # exit code back here and fails the job. IMAGE_TAG pins the exact
-          # images built by the `build` job — the server never builds.
+          # Sync the repo BEFORE invoking deploy.sh. deploy.sh pulls the repo
+          # as its own step 1, but a push that changes deploy.sh itself would
+          # run the stale script: bash has already buffered the old body by
+          # the time the in-script `git pull` rewrites the file (observed on
+          # the first pull-only deploy, which silently ran the old build
+          # path). Syncing here guarantees the new script body executes;
+          # deploy.sh keeps its own sync as a no-op for manual runs.
+          #
+          # deploy.sh runs `set -euo pipefail`, so any failed step (pull
+          # error, unhealthy container) propagates a non-zero exit code back
+          # here and fails the job. IMAGE_TAG pins the exact images built by
+          # the `build` job — the server never builds.
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes "$SSH_USER@$SSH_HOST" \
-            "IMAGE_TAG=sha-${GITHUB_SHA} bash /home/deployer/knowledge/repo/deploy.sh"
+            "cd /home/deployer/knowledge/repo && git fetch origin master && git reset --hard origin/master && git clean -fd && IMAGE_TAG=sha-${GITHUB_SHA} bash deploy.sh"
