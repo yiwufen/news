@@ -1,5 +1,7 @@
 # 实体解析五步修补 — Claude Code 实施方案
 
+> **状态（2026-08-16 标注）：已完成。** 五步修补已全部实施，实施记录见 `entity-resolution-analysis.md` §9。标题中的 "Claude Code" 为撰写时的工具名（仓库 agent 现为 ZCode/Codex），保留历史原貌不改。下文为当时的实施计划原文。
+
 > **目标**：在现有贪心匹配框架内修补 5 个实现缺陷，补充黄金测试集，守住高精度底线。
 > **预估**：1-1.5 天（含测试）
 > **唯一修改文件**：`src/entities.py`（主逻辑）、`tests/unit/test_entity_resolution.py`（新增测试）

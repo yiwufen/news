@@ -1,6 +1,8 @@
 # User Testing Quality Metrics
 
-> 每次测试会话结束后更新。
+> **已归档(2026-08-16 标注)**:本体系自 2026-05-24 后停更,质量度量基线已由 `docs/eval/`(可复现的检索质量评估)取代,对照说明见 `docs/eval/README.md`。`findings.md` 的 OPEN 项仍作为 bug 报告线索被 `.zcode/rules/retrieval-code.md` 引用。
+>
+> 每次测试会话结束后更新(归档前)。
 
 ---
 
@@ -11,15 +13,18 @@
 | Total Sessions | 9 | 2026-05-24 |
 | Total Scenarios Executed | 71 | 2026-05-24 |
 | Total Findings | 61 | 2026-05-24 |
-| CRITICAL Findings (OPEN) | 2 | 2026-05-24 |
-| CRITICAL Findings (PARTIAL) | 1 | 2026-05-09 |
-| CRITICAL Findings (FIXED) | 5 | 2026-05-24 |
-| HIGH Findings (OPEN) | 12 | 2026-05-24 |
-| HIGH Findings (IMPROVED) | 3 | 2026-05-24 |
-| HIGH Findings (FIXED) | 4 | 2026-05-20 |
-| MEDIUM Findings (OPEN) | 16 | 2026-05-24 |
-| MEDIUM Findings (FIXED) | 4 | 2026-05-09 |
-| LOW Findings (OPEN) | 7 | 2026-05-16 |
+| CRITICAL Findings (OPEN) | 5 | 2026-08-16 * |
+| CRITICAL Findings (PARTIAL) | 1 | 2026-08-16 * |
+| CRITICAL Findings (FIXED) | 4 | 2026-08-16 * |
+| HIGH Findings (OPEN) | 17 | 2026-08-16 * |
+| HIGH Findings (IMPROVED) | 2 | 2026-08-16 * |
+| HIGH Findings (FIXED) | 3 | 2026-08-16 * |
+| MEDIUM Findings (OPEN) | 16 | 2026-08-16 * |
+| MEDIUM Findings (IMPROVED) | 1 | 2026-08-16 * |
+| MEDIUM Findings (FIXED) | 4 | 2026-08-16 * |
+| LOW Findings (OPEN) | 8 | 2026-08-16 * |
+
+> \* 2026-08-16 校正:原表(各行合计仅 54)与 `findings.md` 实际状态漂移,已按 findings.md 全量重算(合计 61:OPEN 46 / IMPROVED 3 / PARTIAL 1 / FIXED 11)。其余章节保留为归档前的历史快照。
 
 ## Per-Persona Coverage
 

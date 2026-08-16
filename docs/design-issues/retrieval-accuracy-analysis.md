@@ -2,7 +2,14 @@
 
 > 分析日期：2026-04-09
 > 分析范围：检索准确性（不含数据增长相关的性能问题）
-> 分析状态：进行中
+> 分析状态：已完结（2026-05-22 后停更；见文末"分析状态"说明）
+>
+> **历史文档提示（2026-08-16 标注）**：本文描述的是旧检索架构，与现状有三处主要漂移——
+> 1. 架构图中的 `IntentClassifier` 已被移出管线：LLM 意图解析分离后，`run_pipeline()` 要求调用方传入 `structured_query`（见 `docs/SHARED_RULES.md` §2），缺陷 17 讨论的"每次 parse 新建客户端"场景不复存在；
+> 2. 缺陷 13 引用的 `src/graph/queries.py` 已从代码库删除（`src/graph/` 现仅剩 `connection.py` / `knowledge_retrieval.py`）；
+> 3. 17 项缺陷的修复进展未在本文回写，以 `docs/user-testing/metrics.md` 的 Known Defect Verification Status 为准（截至 2026-05-24：7 项 FIXED / 2 项 PARTIAL / 1 项 REGRESSION）。
+>
+> 本文保留作缺陷清单与思路参考，不再作为架构现状参考。
 
 ## 当前检索架构
 
@@ -347,4 +354,4 @@ JSON 数组字符串 + LIKE 子串匹配：
 - [x] P1 缺陷识别（8 个）
 - [x] P2 缺陷识别（5 个）
 - [x] 分析完成
-- [ ] 修复方案设计（后续）
+- [ ] 修复方案设计（后续）——实际走向：修复未在本文档内展开设计，而是经 2026-05 的 user-testing 循环落地，进展以 `docs/user-testing/metrics.md` 的缺陷验证表为准

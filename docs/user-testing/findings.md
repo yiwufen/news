@@ -4,6 +4,8 @@
 > 每个 finding 是一个 H2 section，ID 格式：`F<YYYYMMDD>-<session-sequence>`
 > Status 值：OPEN, CONFIRMED, FIXED, WONTFIX, DUPLICATE
 > Severity 值：CRITICAL, HIGH, MEDIUM, LOW
+>
+> **已归档（2026-08-16 标注）**：本文件自 2026-05-24 后停更，不再作为质量度量基线（现行基线见 `docs/eval/`）；OPEN 项仍是有效的 bug 线索，修改检索代码前仍须查阅（见 `.zcode/rules/retrieval-code.md`）。下方发现条目 append-only，不作改动。
 
 ---
 

@@ -3,6 +3,7 @@
 > 本文件是知识图谱「可检索化」的最终设计，涵盖**直连边、参与边粗筛、事件闭集精排、历史数据重分类**四个部分。
 >
 > 依据：对主库（13,479 KU / 13,479 EventCluster / 6,233 Entity）的真实数据压测（三批共 160 条样本）。所有设计结论都有数据支撑，不靠想象。
+> （2026-08-16 标注：括号内为本地库 2026-06-22 快照——6,233 Entity 与 `docs/design-issues/entity-merge-followup.md` 记录的本地合并后规模一致——并非远程主库的当前规模，后者见 `docs/improvement_narrative.md` 的 2026-07-24 快照。数据真源约定见 `docs/SSH_TUNNEL.md`。）
 >
 > 优先级遵守 `docs/SHARED_RULES.md` 第 4 节（图谱与 GraphRAG 约定）。
 

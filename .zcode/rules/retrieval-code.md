@@ -12,6 +12,8 @@
 
 确认你的修改不会导致 findings.md 中 OPEN 状态的发现恶化。
 
+> 注：`docs/user-testing/findings.md` 属已归档体系（质量度量基线现为 `docs/eval/`），但其 OPEN 项仍是有效的 bug 线索，上述查阅要求继续适用。
+
 ## 检索评估（Retrieval Eval）
 
 修改上述文件后，**必须**运行本地 EDD 回归门禁（用新代码 + 固定 fixture DB 重跑检索，
