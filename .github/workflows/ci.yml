@@ -18,9 +18,10 @@
 #   SERVER_HOST    — production host IP, e.g. 182.61.1.77
 #   SERVER_USER    — ssh user, e.g. deployer
 #   GHCR login uses the built-in GITHUB_TOKEN (packages: write) — no extra
-#   secret. The production host needs a one-time `docker login ghcr.io`
-#   with a read:packages PAT because this repo (and its packages) are
-#   private; see .zcode/rules/deployment.md.
+#   secret. New GHCR packages are created PRIVATE by default even though the
+#   repo is public: after the first push, flip them to public in package
+#   settings (anonymous pulls then work) or `docker login ghcr.io` once on
+#   the production host with a read:packages PAT; see .zcode/rules/deployment.md.
 #
 # Failure notifications rely on GitHub's built-in email to the repo owner
 # (no extra notify step needed).

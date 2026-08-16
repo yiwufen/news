@@ -16,9 +16,10 @@
 # Prerequisites:
 #   - Docker + Docker Compose installed
 #   - /home/deployer/knowledge/.env configured with API keys + NEO4J_PASSWORD
-#   - One-time: `docker login ghcr.io` as deployer with a read:packages PAT
-#     (the repo and its GHCR packages are private; public packages would
-#     pull anonymously)
+#   - One-time: GHCR packages are created private by default even though the
+#     repo is public — either flip them to public in GitHub package settings
+#     (anonymous pulls then work), or `docker login ghcr.io` as deployer with
+#     a read:packages PAT
 # ============================================================
 
 set -euo pipefail

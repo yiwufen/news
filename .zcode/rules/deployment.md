@@ -40,7 +40,9 @@ ssh baidu "bash /home/deployer/knowledge/repo/deploy.sh"
 ssh baidu "IMAGE_TAG=sha-<旧commit完整sha> bash /home/deployer/knowledge/repo/deploy.sh"
 ```
 
-> **一次性服务器准备**：仓库为 private，GHCR 包同为 private，服务器需以 `deployer` 执行一次
+> **一次性准备**：仓库是 public，但 GHCR 包首次推送时默认创建为 private，首次部署前二选一：
+> ① GitHub → Packages → `news-mcp` / `news-admin` → Settings → 改为 public（镜像内容与公开源码
+> 一致，之后服务器匿名可拉）；② 保持 private，在服务器以 `deployer` 执行一次
 > `docker login ghcr.io`（PAT 勾选 `read:packages`）。若 ghcr.io 拉取不通，需给 docker daemon
 > 配代理（systemd drop-in）——`deploy.sh` 内的 shell 级代理变量对 `docker compose pull` 无效。
 
