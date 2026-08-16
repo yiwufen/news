@@ -1,15 +1,25 @@
 #!/usr/bin/env bash
 # ============================================================
-# deploy.sh — one-click deploy for knowledge-cli MCP service
+# deploy.sh — pull-only deploy for knowledge-cli MCP service
+#
+# Images are built and pushed to GHCR by CI (.github/workflows/ci.yml).
+# This script never builds: it pulls the CI-pinned images and recreates
+# containers, so what CI tested is exactly what production runs.
 #
 # Usage:
-#   ./deploy.sh              # deploy with default domain
-#   DOMAIN=mcp.example.com ./deploy.sh
+#   IMAGE_TAG=sha-<commit> ./deploy.sh   # CI path: deploy the tested commit
+#   ./deploy.sh                          # manual: reuse persisted tag, else master
+#
+# Rollback:
+#   IMAGE_TAG=sha-<old-commit> ./deploy.sh
 #
 # Prerequisites:
 #   - Docker + Docker Compose installed
 #   - /home/deployer/knowledge/.env configured with API keys + NEO4J_PASSWORD
-#   - /home/deployer/knowledge/data/ directory exists
+#   - One-time: GHCR packages are created private by default even though the
+#     repo is public — either flip them to public in GitHub package settings
+#     (anonymous pulls then work), or `docker login ghcr.io` as deployer with
+#     a read:packages PAT
 # ============================================================
 
 set -euo pipefail
@@ -31,11 +41,28 @@ if [ ! -f "${ENV_FILE}" ]; then
     exit 1
 fi
 
+# Caller-supplied IMAGE_TAG (CI passes sha-<commit>) must be captured before
+# `set -a; source` below, which would re-export the stale persisted value.
+REQUESTED_TAG="${IMAGE_TAG:-}"
+
 # Load env vars into shell so ${NEO4J_PASSWORD} interpolation works
 set -a
 source "${ENV_FILE}"
 set +a
 export DOMAIN
+IMAGE_TAG="${REQUESTED_TAG:-${IMAGE_TAG:-master}}"
+export IMAGE_TAG
+
+# Persist the deployed tag: the ingestion/fetch systemd units run
+# `docker compose run --rm mcp ...` outside this script and must resolve
+# the same image the service containers run.
+if [ -n "${REQUESTED_TAG}" ]; then
+    if grep -q '^IMAGE_TAG=' "${ENV_FILE}"; then
+        sed -i "s|^IMAGE_TAG=.*|IMAGE_TAG=${IMAGE_TAG}|" "${ENV_FILE}"
+    else
+        echo "IMAGE_TAG=${IMAGE_TAG}" >> "${ENV_FILE}"
+    fi
+fi
 
 # --- 1. Pull latest code ---
 cd "${REPO_DIR}"
@@ -54,40 +81,40 @@ echo "[1/4] Pulling latest code..."
 #                       so server-only assets stay safe: .env (API keys),
 #                       data/ (the SQLite knowledge base), .venv/, caches.
 #
-# This makes the "which files can drift?" question moot — the answer is
-# "all of them, and they all get reconciled to the repo". --ff-only is kept
-# so a genuine non-fast-forward (e.g. a force-push rewriting history) still
-# fails loudly instead of silently merging.
+# --ff-only is kept so a genuine non-fast-forward (e.g. a force-push
+# rewriting history) still fails loudly instead of silently merging.
 git reset --hard HEAD
 git clean -fd
 
 git pull --ff-only origin master
 
 # --- 2. Ensure data directory exists ---
-mkdir -p /home/deployer/knowledge/data
+mkdir -p "${DATA_DIR}"
 
-# BuildKit needs proxy to pull base images from Docker Hub
-export HTTP_PROXY="${HTTP_PROXY:-http://127.0.0.1:7890}"
-export HTTPS_PROXY="${HTTPS_PROXY:-http://127.0.0.1:7890}"
-export NO_PROXY="${NO_PROXY:-localhost,127.0.0.1}"
+# --- 3. Pull pinned images & recreate containers ---
+# Pulls go through the docker daemon: if ghcr.io is unreachable from the
+# host, configure the proxy at the daemon level (systemd drop-in for
+# docker.service) — shell-level HTTP_PROXY exports do not affect `pull`.
+echo "[2/4] Pulling images (IMAGE_TAG=${IMAGE_TAG})..."
+docker compose --env-file "${ENV_FILE}" pull mcp admin
 
-# --- 3. Rebuild & restart ---
-echo "[2/4] Rebuilding and restarting services..."
-docker compose --env-file "${ENV_FILE}" up -d --build --remove-orphans
+echo "[2a] Recreating containers..."
+docker compose --env-file "${ENV_FILE}" up -d --no-build --remove-orphans
 
 # --- 3a. Restart Caddy to pick up bind-mounted config changes ---
 # Caddyfile is bind-mounted; caddy reload reads from the container's
 # filesystem which may be stale.  docker restart guarantees fresh mount.
-echo "[2a] Restarting Caddy for config update..."
+# (Goes away once Caddy moves to its own compose project.)
+echo "[2b] Restarting Caddy for config update..."
 docker restart knowledge-caddy
 
 # --- 4. Health check ---
 echo "[3/4] Waiting for health checks..."
 sleep 5
 
-if docker compose ps | grep -q "unhealthy"; then
+if docker compose --env-file "${ENV_FILE}" ps | grep -q "unhealthy"; then
     echo "WARNING: Some services are unhealthy:"
-    docker compose ps
+    docker compose --env-file "${ENV_FILE}" ps
     exit 1
 fi
 
@@ -96,6 +123,6 @@ docker image prune -f
 
 echo ""
 echo "=== Deploy complete ==="
-docker compose ps
+docker compose --env-file "${ENV_FILE}" ps
 echo ""
 echo "MCP endpoint: https://${DOMAIN}/mcp"

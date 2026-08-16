@@ -1,6 +1,6 @@
 # 本地开发与远程部署
 
-> 本项目采用"本地开发 + git push + 远程 deploy.sh"的工作流。
+> 本项目采用"本地开发 + git push + CI 构建镜像（GHCR）+ 远程 pull-only 部署"的工作流。
 
 ## 环境概览
 
@@ -15,15 +15,36 @@
 
 ## 部署流程
 
-```bash
-# 1. 本地提交并推送
-git push origin master
+master push 后全自动（`.github/workflows/ci.yml` 三段式）：
 
-# 2. SSH 登录服务器执行部署脚本
-ssh baidu "cd /home/deployer/knowledge/repo && ./deploy.sh"
+```
+push master → CI test（pytest + pyright）
+            → CI build：构建镜像推 GHCR（PR 只构建不推送）
+               ghcr.io/yiwufen/news-mcp:{sha-<commit>, master}
+               ghcr.io/yiwufen/news-admin:{sha-<commit>, master}
+            → CI deploy：SSH 执行 deploy.sh（pull-only，服务器不构建）
 ```
 
-`deploy.sh` 自动完成：pull 代码 → docker compose build → up -d → 健康检查 → 清理旧镜像。
+`deploy.sh` 自动完成：pull 代码（compose 配置）→ `docker compose pull`（拉 CI 构建的镜像）→
+`up -d --no-build` → 健康检查 → 清理旧镜像。部署镜像由 `IMAGE_TAG` 精确锁定（CI 传
+`sha-<commit>`，回退链：CI 传入 > 服务器 `.env` 持久值 > `master`），并把该 tag 持久化到
+服务器 `.env`，保证 ingestion/fetch 等 systemd 单元里的 `docker compose run` 与在线服务用同一镜像。
+
+手动部署 / 回滚：
+
+```bash
+# 手动部署当前 master 浮动 tag（或复用 .env 持久 tag）
+ssh baidu "bash /home/deployer/knowledge/repo/deploy.sh"
+
+# 回滚到某个历史 commit（tag 由 CI 按相同规则推送过）
+ssh baidu "IMAGE_TAG=sha-<旧commit完整sha> bash /home/deployer/knowledge/repo/deploy.sh"
+```
+
+> **一次性准备**：仓库是 public，但 GHCR 包首次推送时默认创建为 private，首次部署前二选一：
+> ① GitHub → Packages → `news-mcp` / `news-admin` → Settings → 改为 public（镜像内容与公开源码
+> 一致，之后服务器匿名可拉）；② 保持 private，在服务器以 `deployer` 执行一次
+> `docker login ghcr.io`（PAT 勾选 `read:packages`）。若 ghcr.io 拉取不通，需给 docker daemon
+> 配代理（systemd drop-in）——`deploy.sh` 内的 shell 级代理变量对 `docker compose pull` 无效。
 
 ## 远程服务架构
 

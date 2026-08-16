@@ -1,17 +1,27 @@
 # CI/CD pipeline for the knowledge-cli service.
 #
-# Two stages:
+# Three stages:
 #   1. test   — quality gate (pytest + pyright), runs on every push/PR.
-#   2. deploy — SSH into the production host and run deploy.sh, only on master
-#               and only after `test` passes. Zero sudo: deployer is in the
-#               docker group, deploy.sh is pure `docker compose`. systemd unit
-#               changes stay manual (they need root) and are intentionally NOT
-#               automated here.
+#   2. build  — build the Docker images with BuildKit and push them to GHCR
+#               (ghcr.io/yiwufen/news-mcp, news-admin). Pushing only happens
+#               on master; PRs build without pushing to catch Dockerfile
+#               breakage early. What CI builds here is exactly what
+#               production runs — the server never builds images itself.
+#   3. deploy — SSH into the production host and run deploy.sh (pull-only),
+#               only on master and only after `test` + `build` pass. Zero
+#               sudo: deployer is in the docker group, deploy.sh is pure
+#               `docker compose`. systemd unit changes stay manual (they
+#               need root) and are intentionally NOT automated here.
 #
 # Secrets (repo → Settings → Secrets and variables → Actions):
 #   SERVER_SSH_KEY — ed25519 private key for the `deployer` user (see deploy/README)
 #   SERVER_HOST    — production host IP, e.g. 182.61.1.77
 #   SERVER_USER    — ssh user, e.g. deployer
+#   GHCR login uses the built-in GITHUB_TOKEN (packages: write) — no extra
+#   secret. New GHCR packages are created PRIVATE by default even though the
+#   repo is public: after the first push, flip them to public in package
+#   settings (anonymous pulls then work) or `docker login ghcr.io` once on
+#   the production host with a read:packages PAT; see .zcode/rules/deployment.md.
 #
 # Failure notifications rely on GitHub's built-in email to the repo owner
 # (no extra notify step needed).
@@ -32,6 +42,10 @@ concurrency:
 
 permissions:
   contents: read
+
+env:
+  MCP_IMAGE: ghcr.io/yiwufen/news-mcp
+  ADMIN_IMAGE: ghcr.io/yiwufen/news-admin
 
 jobs:
   test:
@@ -59,16 +73,64 @@ jobs:
       - name: Run tests (pytest)
         run: uv run pytest
 
+  build:
+    name: Build & push images
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Login only when the images will actually be pushed (master pushes).
+      # PR builds run with push: false and need no registry credentials.
+      - name: Login to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # sha-<commit> is the immutable deploy anchor (deploy.sh pins it via
+      # IMAGE_TAG); master is the floating convenience tag.
+      - name: Build & push mcp image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          tags: |
+            ${{ env.MCP_IMAGE }}:master
+            ${{ env.MCP_IMAGE }}:sha-${{ github.sha }}
+          cache-from: type=gha,scope=mcp
+          cache-to: type=gha,mode=max,scope=mcp
+
+      - name: Build & push admin image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.admin
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          tags: |
+            ${{ env.ADMIN_IMAGE }}:master
+            ${{ env.ADMIN_IMAGE }}:sha-${{ github.sha }}
+          cache-from: type=gha,scope=admin
+          cache-to: type=gha,mode=max,scope=admin
+
   deploy:
     name: Deploy to production
-    needs: test
-    # Only the default branch reaches production. PRs run `test` only.
+    needs: [test, build]
+    # Only the default branch reaches production. PRs run `test` + `build` only.
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-
       - name: Configure SSH
         env:
           SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
@@ -89,7 +151,8 @@ jobs:
         run: |
           # deploy.sh lives in the repo on the server (kept in sync by git pull
           # inside the script itself). It runs `set -euo pipefail`, so any
-          # failed step (build error, unhealthy container) propagates a non-zero
-          # exit code back here and fails the job.
+          # failed step (pull error, unhealthy container) propagates a non-zero
+          # exit code back here and fails the job. IMAGE_TAG pins the exact
+          # images built by the `build` job — the server never builds.
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes "$SSH_USER@$SSH_HOST" \
-            'bash /home/deployer/knowledge/repo/deploy.sh'
+            "IMAGE_TAG=sha-${GITHUB_SHA} bash /home/deployer/knowledge/repo/deploy.sh"
