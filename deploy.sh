@@ -70,10 +70,10 @@ echo "[1/4] Pulling latest code..."
 
 # The deploy host is a read-only mirror of origin/master: it must not carry
 # any working-tree state that diverges from git. In practice the tree gets
-# dirty through the normal ops rhythm — Caddyfile hand-tuned for a route,
-# deploy/*.service created on the host before being committed, deploy.sh
-# itself edited in place. Any of these breaks `git pull --ff-only` and stalls
-# every subsequent deploy until someone logs in to clean up.
+# dirty through the normal ops rhythm — deploy/*.service created on the host
+# before being committed, deploy.sh itself edited in place. Any of these
+# breaks `git pull --ff-only` and stalls every subsequent deploy until
+# someone logs in to clean up.
 #
 # So before pulling we force the working tree back to a pristine state:
 #   git reset --hard  — discard ALL tracked modifications (repo is truth)
@@ -101,12 +101,9 @@ docker compose --env-file "${ENV_FILE}" pull mcp admin
 echo "[2a] Recreating containers..."
 docker compose --env-file "${ENV_FILE}" up -d --no-build --remove-orphans
 
-# --- 3a. Restart Caddy to pick up bind-mounted config changes ---
-# Caddyfile is bind-mounted; caddy reload reads from the container's
-# filesystem which may be stale.  docker restart guarantees fresh mount.
-# (Goes away once Caddy moves to its own compose project.)
-echo "[2b] Restarting Caddy for config update..."
-docker restart knowledge-caddy
+# Caddy / cloudflared are NOT touched here: they run in the standalone infra
+# compose (deploy/infra/ on the server), so app deploys never restart the
+# shared proxy or interrupt fin-trace traffic.
 
 # --- 4. Health check ---
 echo "[3/4] Waiting for health checks..."

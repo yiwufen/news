@@ -1,0 +1,103 @@
+# Caddyfile — ingress for the knowledge stack + fin-trace.
+#
+# Lives in the infra compose project (deploy/infra/ on the server), decoupled
+# from app deploys. Upstreams use CONTAINER names (knowledge-mcp /
+# knowledge-admin / fin-trace) rather than compose service names, because
+# each target belongs to a different compose project sharing the external
+# `knowledge-net` network — container names resolve across all of them.
+#
+# Streamable HTTP (MCP 2024-11-05) uses chunked transfer encoding.
+# flush_interval -1 disables buffering so streaming responses reach
+# clients immediately.
+
+# ------------------------------------------------------------------
+# Primary: kg.yiyiyiwufeng.cn via Cloudflare Tunnel (edge terminates
+# TLS; origin is plain HTTP, hence the explicit http:// scheme which
+# also keeps Caddy from attempting ACME for this name)
+# ------------------------------------------------------------------
+http://kg.yiyiyiwufeng.cn {
+    handle /admin* {
+        reverse_proxy knowledge-admin:8001
+    }
+
+    handle /api/v1* {
+        reverse_proxy knowledge-admin:8001
+    }
+
+    handle /api/docs* {
+        reverse_proxy knowledge-admin:8001
+    }
+
+    handle /api/redoc* {
+        reverse_proxy knowledge-admin:8001
+    }
+
+    handle /openapi.json {
+        reverse_proxy knowledge-admin:8001
+    }
+
+    handle /mcp* {
+        reverse_proxy knowledge-mcp:8000 {
+            flush_interval -1
+        }
+    }
+
+    # Public liveness probe. The MCP server never exposed /health (the old
+    # route 404'd since day one); admin's /api/v1/health is the real one.
+    handle /health {
+        rewrite * /api/v1/health
+        reverse_proxy knowledge-admin:8001
+    }
+
+    respond 404
+}
+
+# ------------------------------------------------------------------
+# Fallback: {$DOMAIN} or localhost (direct 80/443 hits, pre-ICP
+# registration; tunnel traffic never lands here)
+# ------------------------------------------------------------------
+{$DOMAIN:localhost} {
+    handle /admin* {
+        reverse_proxy knowledge-admin:8001
+    }
+
+    handle /api/v1* {
+        reverse_proxy knowledge-admin:8001
+    }
+
+    handle /api/docs* {
+        reverse_proxy knowledge-admin:8001
+    }
+
+    handle /api/redoc* {
+        reverse_proxy knowledge-admin:8001
+    }
+
+    handle /openapi.json {
+        reverse_proxy knowledge-admin:8001
+    }
+
+    handle /mcp* {
+        reverse_proxy knowledge-mcp:8000 {
+            flush_interval -1
+        }
+    }
+
+    handle /health {
+        rewrite * /api/v1/health
+        reverse_proxy knowledge-admin:8001
+    }
+
+    respond 404
+}
+
+# ------------------------------------------------------------------
+# fin-trace agent (Graph Explorer) — external service, own compose
+# project at /home/deployer/fin-trace, attached to knowledge-net.
+# Cloudflare Tunnel origin (plain HTTP, edge terminates TLS).
+# ------------------------------------------------------------------
+http://fin.yiyiyiwufeng.cn {
+    reverse_proxy fin-trace:3001 {
+        flush_interval -1
+    }
+}

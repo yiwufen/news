@@ -11,7 +11,7 @@
 | 环境变量（远程） | `/home/deployer/knowledge/.env`（API keys、NEO4J_URI、NEO4J_PASSWORD 等） |
 | 数据目录（远程） | `/home/deployer/knowledge/data/`（host volume 挂载到容器 `/app/data/`） |
 | MCP 端点 | `https://kg.yiyiyiwufeng.cn/mcp`（Streamable HTTP） |
-| 公网入口 | 当前公网流量全部经 Cloudflare Named Tunnel：`kg.yiyiyiwufeng.cn` / `fin.yiyiyiwufeng.cn` → `caddy:80`，不依赖域名备案；`caddy` 的 80/443 端口映射保留为备案域名直连预留（备案通过前无实际流量） |
+| 公网入口 | 当前公网流量全部经 Cloudflare Named Tunnel：`kg.yiyiyiwufeng.cn` / `fin.yiyiyiwufeng.cn` → `caddy:80`，不依赖域名备案；`caddy` 的 80/443 端口映射保留为备案域名直连预留（备案通过前无实际流量）。入口层（Caddy + cloudflared）由独立 infra compose 管理（`/home/deployer/knowledge/infra/`），与应用发版解耦 |
 
 ## 部署流程
 
@@ -27,7 +27,8 @@ push master → CI test（pytest + pyright）
 ```
 
 `deploy.sh` 自动完成：pull 代码（compose 配置）→ `docker compose pull`（拉 CI 构建的镜像）→
-`up -d --no-build` → 健康检查 → 清理旧镜像。部署镜像由 `IMAGE_TAG` 精确锁定（CI 传
+`up -d --no-build` → 健康检查 → 清理旧镜像（Caddy/cloudflared 属于 infra compose，应用发版
+不重启代理）。部署镜像由 `IMAGE_TAG` 精确锁定（CI 传
 `sha-<commit>`，回退链：CI 传入 > 服务器 `.env` 持久值 > `master`），并把该 tag 持久化到
 服务器 `.env`，保证 ingestion/fetch 等 systemd 单元里的 `docker compose run` 与在线服务用同一镜像。
 
@@ -49,24 +50,50 @@ ssh baidu "IMAGE_TAG=sha-<旧commit完整sha> bash /home/deployer/knowledge/repo
 
 ## 远程服务架构
 
-Docker Compose 管理 5 个容器 + 1 个 systemd 服务：
+两个独立 compose 项目 + 1 个 systemd 服务，共享固定名外部网络 `knowledge-net`：
 
-| 组件 | 容器/服务 | 说明 |
-|------|----------|------|
-| Caddy | `knowledge-caddy` | 反向代理；映射 80/443（备案域名直连预留），当前流量经 Cloudflare Tunnel 回源 `caddy:80` |
+**应用层**（`/home/deployer/knowledge/repo/docker-compose.yml`，由 deploy.sh/CI 管理）：
+
+| 组件 | 容器 | 说明 |
+|------|------|------|
 | MCP Server | `knowledge-mcp` | Streamable HTTP，内部 8000，依赖 Neo4j |
-| Neo4j | `knowledge-neo4j` | 图数据库，仅 Docker 内网，不对外暴露端口 |
 | Admin | `knowledge-admin` | FastAPI 管理后台（`/admin`、`/api/v1`），内部 8001 |
-| Cloudflared | `knowledge-cloudflared` | Cloudflare Tunnel 出口连接器，仅出站连接 |
-| Ingestion | `knowledge-ingestion.service` | systemd 管理的持续离线处理（爬取 + 知识化 + 图同步） |
+| Neo4j | `knowledge-neo4j` | 图数据库，仅 Docker 内网，不对外暴露端口 |
 
-> `fin.yiyiyiwufeng.cn` 经 Caddy 反代到 `fin-trace:3001`；`fin-trace` 是服务器上独立部署的外部服务，不在本仓库 docker-compose 内。
+**基础设施层**（`/home/deployer/knowledge/infra/`，独立 compose 项目，应用发版不触碰）：
+
+| 组件 | 容器 | 说明 |
+|------|------|------|
+| Caddy | `knowledge-caddy` | 反向代理；映射 80/443（备案域名直连预留），当前流量经 Cloudflare Tunnel 回源 `caddy:80` |
+| Cloudflared | `knowledge-cloudflared` | Cloudflare Tunnel 出口连接器，仅出站连接 |
+
+**systemd**：
+
+| 服务 | 说明 |
+|------|------|
+| `knowledge-ingestion.service` | 持续离线处理（爬取 + 知识化 + 图同步） |
+| `knowledge-fetch.service` | 持续 EastMoney 抓取 |
+
+> `fin.yiyiyiwufeng.cn` 经 Caddy 反代到 `fin-trace:3001`；`fin-trace` 是独立部署的外部服务
+> （`/home/deployer/fin-trace`，自己的 compose 项目），挂在外部网络 `knowledge-net` 上。
+
+### infra 层运维
+
+```bash
+# Caddyfile 变更（编辑 /home/deployer/knowledge/infra/Caddyfile 后）
+ssh baidu "docker restart knowledge-caddy"
+
+# infra compose 本身的变更（如增删服务）
+ssh baidu "cd /home/deployer/knowledge/infra && docker compose --env-file /home/deployer/knowledge/.env up -d"
+```
 
 ### Docker 网络
 
-所有容器在 `knowledge-net` bridge 网络中，通过服务名互通：
-- MCP → Neo4j：`bolt://neo4j:7687`（**不是** `localhost`）
-- Caddy → MCP：`http://mcp:8000`
+所有容器挂在**固定名外部网络** `knowledge-net`（无 compose 项目前缀，需手动创建：
+`docker network create knowledge-net`）。跨 compose 项目解析一律用**容器名**：
+- MCP → Neo4j：`bolt://neo4j:7687`（同项目服务名，**不是** `localhost`）
+- Caddy → 应用：`knowledge-mcp:8000` / `knowledge-admin:8001`、外部服务 `fin-trace:3001`
+- Cloudflared → Caddy：`caddy:80`（ingress 规则远管在 Cloudflare 面板）
 
 ### systemd 服务
 
