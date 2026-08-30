@@ -21,6 +21,12 @@ logger = logging.getLogger(__name__)
 # request; other OpenAI-compatible providers impose similar caps.
 MAX_BATCH = 32
 
+# Per-minute rate limits (SiliconFlow free tier: 2000 RPM / 500K TPM) need a
+# full-window cooldown; the seconds-level backoff for transient errors cannot
+# outlast them, so 429 gets its own longer wait and attempt budget.
+RATE_LIMIT_COOLDOWN = 60.0
+MAX_RATE_LIMIT_WAITS = 10
+
 
 @runtime_checkable
 class EmbeddingProvider(Protocol):
@@ -73,7 +79,9 @@ class OpenAICompatEmbedding:
         self, texts: list[str], *, retries: int, base_delay: float
     ) -> list[list[float]]:
         last_exc: Exception | None = None
-        for attempt in range(retries):
+        attempts = 0
+        rate_limit_waits = 0
+        while attempts < retries:
             try:
                 resp = httpx.post(
                     f"{self._base_url}/embeddings",
@@ -91,10 +99,32 @@ class OpenAICompatEmbedding:
                 return vectors
             except (httpx.HTTPError, KeyError) as exc:
                 last_exc = exc
-                delay = base_delay * (2**attempt)
+                if (
+                    isinstance(exc, httpx.HTTPStatusError)
+                    and exc.response.status_code == 429
+                    and rate_limit_waits < MAX_RATE_LIMIT_WAITS
+                ):
+                    rate_limit_waits += 1
+                    retry_after = exc.response.headers.get("Retry-After", "")
+                    cooldown = (
+                        float(retry_after)
+                        if retry_after.isdigit()
+                        else RATE_LIMIT_COOLDOWN
+                    )
+                    cooldown = max(cooldown, RATE_LIMIT_COOLDOWN)
+                    logger.warning(
+                        "Embedding rate-limited (429) — cooldown %.0fs (wait %d/%d)",
+                        cooldown,
+                        rate_limit_waits,
+                        MAX_RATE_LIMIT_WAITS,
+                    )
+                    time.sleep(cooldown)
+                    continue
+                attempts += 1
+                delay = base_delay * (2 ** (attempts - 1))
                 logger.warning(
                     "Embedding attempt %d/%d failed: %s — retrying in %.1fs",
-                    attempt + 1,
+                    attempts,
                     retries,
                     exc,
                     delay,
