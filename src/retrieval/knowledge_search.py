@@ -206,8 +206,23 @@ class KnowledgeSearcher:
         query_text = query.original_query or " ".join(query.entities)
         dense_scores: dict[str, float] = {}
         semantic_filter = "skipped_no_index"
+        route_warnings: list[dict[str, str]] = []
         if self._vector_index is not None and query_text.strip():
-            dense_scores = self._vector_index.score_ids(query_text, [u.ku_id for u in units])
+            try:
+                dense_scores = self._vector_index.score_ids(
+                    query_text, [u.ku_id for u in units]
+                )
+            except Exception as exc:
+                # Semantic scoring is an enhancement, never a hard dependency:
+                # degrade explicitly (marker + warning) instead of failing the
+                # whole entity search.
+                logger.warning("Semantic scoring failed: %s", exc)
+                semantic_filter = "skipped_error"
+                route_warnings.append({
+                    "code": "SEMANTIC_FILTER_SKIPPED",
+                    "message": f"语义打分失败，已跳过硬过滤: {exc}",
+                })
+                dense_scores = {}
             if dense_scores:
                 threshold = float(os.environ.get("SEMANTIC_FILTER_THRESHOLD", "0.30"))
                 kept = [u for u in units if dense_scores.get(u.ku_id, -1.0) >= threshold]
@@ -223,7 +238,7 @@ class KnowledgeSearcher:
                     )
                     units = kept + dropped[: request.top_k - len(kept)]
                     semantic_filter = "applied_backfilled"
-            else:
+            elif semantic_filter != "skipped_error":
                 semantic_filter = "skipped_no_vectors"
 
         hits = [(u.ku_id, -1.0) for u in units]
@@ -238,6 +253,7 @@ class KnowledgeSearcher:
         )
         result.applied_filters["event_recall"] = event_recall
         result.applied_filters["semantic_filter"] = semantic_filter
+        result.warnings.extend(route_warnings)
         return result
 
     # ------------------------------------------------------------------
