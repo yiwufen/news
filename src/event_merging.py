@@ -610,6 +610,47 @@ class EventClusterRepository:
             ).fetchall()
         return self._load_clusters_from_rows(rows)
 
+    def find_by_entity_ids(
+        self,
+        entity_ids: Sequence[str],
+        *,
+        cluster_types: Sequence[str] | None = None,
+        time_range: tuple[str, str] | None = None,
+    ) -> list[EventCluster]:
+        """Find clusters where ANY of the given entities participates.
+
+        Unlike find_related (which matches only the primary_entity_id column),
+        this queries cluster_entity_map so clusters where the entity is a
+        non-primary member are also returned — the entity-route recall path
+        needs full participation, not just primary ownership.
+        """
+        ids = list(dict.fromkeys(entity_ids))
+        if not ids:
+            return []
+        placeholders = ", ".join("?" for _ in ids)
+        where_parts = [f"cem.entity_id IN ({placeholders})"]
+        params: list[Any] = list(ids)
+        if cluster_types:
+            type_placeholders = ", ".join("?" for _ in cluster_types)
+            where_parts.append(f"cem.cluster_type IN ({type_placeholders})")
+            params.extend(cluster_types)
+        sql = f"""
+            SELECT DISTINCT ec.payload FROM event_clusters ec
+            JOIN cluster_entity_map cem ON ec.cluster_id = cem.cluster_id
+            WHERE {' AND '.join(where_parts)}
+            ORDER BY ec.updated_at DESC, ec.cluster_id ASC
+        """
+        with self._connect() as connection:
+            rows = connection.execute(sql, params).fetchall()
+        clusters = self._load_clusters_from_rows(rows)
+        if time_range is None:
+            return clusters
+        return [
+            cluster
+            for cluster in clusters
+            if self._cluster_overlaps_time_range(cluster, time_range)
+        ]
+
     def find_related(
         self,
         *,

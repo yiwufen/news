@@ -24,6 +24,8 @@
 | **DB 快照** | 复制 `data/news.db` → `docs/eval/eval_snapshot.db`，固定使用 |
 | **eval set** | 30 条固定查询 (`queries-v1.json`)，显式携带 intent |
 | **judge 模型** | `EVAL_JUDGE_MODEL` 环境变量，默认 `glm-5.1` |
+| **reranker** | 真实链路参与（`.env` 配 `SILICONFLOW_API_KEY` 后启用）；无 key 时降级为融合排序并在报告可见 |
+| **分组维度** | 按 category **和实际 retrieval_path**（`entity_events`/`hybrid`）双维聚合，实体路线与文本路线各自独立基线 |
 
 ## 指标定义
 
@@ -73,18 +75,23 @@ queries-v1.json (30 条固定查询)
   │
   ├─ make_query() → StructuredQuery (显式 intent)
   ├─ run_pipeline(db_path=eval_snapshot.db, top_k=judge_pool_k=100)  ← 冻结快照
+  │     ├─ 实体解析成功 → 实体路线: 事件簇严格召回 → 时间/标签 → 语义硬过滤 → rerank
+  │     └─ 否则        → 文本路线: BM25 ∥ dense 并联 → 时间/标签 → rerank
   ├─ judge.label_query_hits() ← 标注全部 100 条候选，缓存增量
-  └─ metrics.compute_query_metrics()
+  └─ metrics.compute_query_metrics(retrieval_path=...)
         │   ├─ Recall@k 分母 = 判定池相关总数 (grade≥1 across pool)
-        │   └─ nDCG/MRR/Precision 在标准截断点评估
+        │   ├─ nDCG/MRR/Precision 在标准截断点评估
+        │   └─ 按 category 与 retrieval_path 双维聚合
         ├─ results/<ts>_report.json  (完整明细)
-        └─ results/<ts>_report.txt   (汇总表)
+        └─ results/<ts>_report.txt   (汇总表，含 By retrieval path 段)
 ```
 
 ## 快速开始
 
 ```bash
-# 1. 确保 .env 配置了 ANTHROPIC_API_KEY / ANTHROPIC_API_BASE_URL
+# 1. 确保 .env 配置了 ANTHROPIC_API_KEY / ANTHROPIC_API_BASE_URL（judge 用）
+#    以及 SILICONFLOW_API_KEY（reranker 用，硅基流动国内直连；无 key 时
+#    评测仍可跑，但走降级排序，retrieval_path 无 +rerank 后缀）
 # 2. (可选) 指定 judge 模型，默认 glm-5.1
 #    export EVAL_JUDGE_MODEL=glm-5.1
 

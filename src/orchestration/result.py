@@ -15,7 +15,7 @@ PipelineSource = Literal["knowledge_base", "direct_articles"]
 class RetrievalMeta:
     """Metadata about the retrieval process."""
 
-    retrieval_mode: str  # "bm25"
+    retrieval_mode: str  # "entity_events" | "hybrid" | "comparative" | "timeline" | "no_results" (+"+rerank")
     bm25_count: int
     applied_filters: dict[str, object] = field(default_factory=dict)
     hit_scores: dict[str, dict[str, object]] = field(default_factory=dict)

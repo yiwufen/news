@@ -34,6 +34,11 @@ uv run python scripts/eval_guard.py --run eval/run_latest.json
 > 真正的回归检测靠上面的 `eval_run.py` + `eval_guard.py`。
 > `eval_report.py` 仅用于查看历史快照指标。
 
+> 门禁确定性说明：`eval_run.py` 进程内强制 `KNOWLEDGE_RERANK_DISABLED=1`，
+> 门禁只钉召回/融合层，不调用 SiliconFlow rerank（外部 API 不可进回归门禁）。
+> reranker 质量由 `docs/eval/`（真实库评测）度量，客户端本身由
+> `tests/unit/test_retrieval_routes.py`（MockTransport）覆盖。
+
 ### 基线刷新流程
 
 当 fixture DB 或 golden 集有意更新后，需要重置基线：

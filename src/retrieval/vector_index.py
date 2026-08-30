@@ -262,6 +262,54 @@ class VectorIndex:
                 results.append((ku_id, float(score)))
         return results
 
+    def score_ids(self, query_text: str, ku_ids: list[str]) -> dict[str, float]:
+        """Cosine similarity of the query against specific ku_ids.
+
+        Unlike ``search`` (global top-k), this scores an arbitrary candidate
+        subset — the entity route needs semantic scores for every recalled
+        candidate, not just the globally nearest ones. KU ids missing from the
+        index are simply absent from the returned dict.
+        """
+        self._ensure_fresh()
+        if self._index is None or self._index.ntotal == 0:
+            return {}
+
+        id_to_ku: dict[int, str] = {}
+        int_ids: list[int] = []
+        for ku_id in ku_ids:
+            int_id = self._reverse_map.get(ku_id)
+            if int_id is not None:
+                id_to_ku[int_id] = ku_id
+                int_ids.append(int_id)
+        if not int_ids:
+            return {}
+
+        query_vectors = self._provider.embed([query_text])
+        if not query_vectors:
+            return {}
+
+        q = np.array([query_vectors[0]], dtype=np.float32)
+        faiss.normalize_L2(q)
+
+        id_arr = np.array(int_ids, dtype=np.int64)
+        # IndexIDMap.reconstruct maps through the underlying storage; batch
+        # via reconstruct_batch when available, else one-by-one.
+        try:
+            vectors = self._index.reconstruct_batch(id_arr)  # type: ignore[attr-defined]
+        except (AttributeError, RuntimeError):
+            vectors = np.stack(
+                [self._index.reconstruct(int(i)) for i in int_ids]  # type: ignore[call-arg]
+            )
+        arr = np.array(vectors, dtype=np.float32)
+        # Stored vectors are already L2-normalized at index time; normalize the
+        # reconstructed copy defensively in case of float drift.
+        norms = np.linalg.norm(arr, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        arr = arr / norms
+
+        scores = (arr @ q[0]).astype(np.float64)
+        return {id_to_ku[int(i)]: float(s) for i, s in zip(id_arr, scores)}
+
     def is_available(self) -> bool:
         self._ensure_fresh()
         return self._index is not None and self._index.ntotal > 0

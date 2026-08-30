@@ -1,15 +1,22 @@
 """
-Knowledge-centric multi-path retrieval over KnowledgeUnit, Entity, and EventCluster.
+Knowledge-centric two-route retrieval over KnowledgeUnit, Entity, and EventCluster.
 
-Retrieval paths:
-  Path A: Entity-ID Lookup — direct query by entity_ids JSON column (primary for entity queries)
-  Path B: Dense Retrieval — embedding-based semantic search (primary for Chinese/topic queries)
-  Path C: BM25/FTS5 fallback — text search when entity resolution fails
+Routes (the "clean retrieval" contract):
+  Entity route: entity resolution → event-cluster recall (strict, any-participant)
+                → time/label filters → semantic hard filter (dense threshold)
+                → reranker precision re-rank
+  Text route:   hybrid recall (BM25 ∥ dense, always parallel) → time/label filters
+                → reranker precision re-rank
+
+COMPARATIVE_ANALYSIS and ENTITY_TIMELINE keep dedicated strategies (quota
+balance / month bucketing) and are exempt from reranking by design: a
+comparison query carries no comparison axis, and timeline order is temporal.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -28,8 +35,9 @@ from src.knowledge_base import (
     KnowledgeUnitRepository,
 )
 from src.knowledge_extractor import KnowledgeExtractor
+from src.retrieval.reranker import RerankProvider, try_create_reranker
 from src.retrieval.scoring import INTENT_PROFILES, ScoringProfile
-from src.retrieval.vector_index import VectorIndex
+from src.retrieval.vector_index import VectorIndex, build_embedding_text
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +57,8 @@ class KnowledgeSearchResult:
     bm25_count: int = 0
     applied_filters: dict[str, object] = field(default_factory=dict)
     hit_scores: dict[str, dict[str, object]] = field(default_factory=dict)
-    retrieval_path: str = "bm25"
+    retrieval_path: str = "hybrid"
+    warnings: list[dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -62,6 +71,7 @@ class KnowledgeSearchResult:
                 "bm25_count": self.bm25_count,
                 "applied_filters": self.applied_filters,
                 "hit_scores": self.hit_scores,
+                "warnings": self.warnings,
             },
         }
 
@@ -73,6 +83,7 @@ class KnowledgeSearcher:
         self,
         db_path: str = "data/news.db",
         extractor: KnowledgeExtractor | None = None,
+        reranker: RerankProvider | None = None,
     ):
         self.units = KnowledgeUnitRepository(db_path)
         self.entities = EntityRepository(db_path)
@@ -86,7 +97,12 @@ class KnowledgeSearcher:
             self.clusters,
             knowledge_units=self.units,
         )
-        # Dense retrieval (optional — graceful degradation)
+        # Reranker: injected for tests, auto-created from SILICONFLOW_* env.
+        # None (unset config / KNOWLEDGE_RERANK_DISABLED=1) is a supported
+        # degraded mode — weighted-fusion ordering is used, with an explicit
+        # warning surfaced per query (no silent degradation).
+        self.reranker: RerankProvider | None = reranker or try_create_reranker()
+        # Dense retrieval (optional — graceful degradation, warned per query)
         self._vector_index: VectorIndex | None = None
         try:
             from src.retrieval.embedding import OpenAICompatEmbedding
@@ -110,90 +126,164 @@ class KnowledgeSearcher:
 
     def search(self, request: KnowledgeSearchRequest) -> KnowledgeSearchResult:
         query = request.structured_query
-        strategy = {
-            IntentType.COMPARATIVE_ANALYSIS: self._search_comparative,
-            IntentType.TOPIC_RESEARCH: self._search_topic,
-            IntentType.ENTITY_TIMELINE: self._search_timeline,
-        }.get(query.intent)
-        if strategy:
-            return strategy(request)
-        return self._search_with_relaxation(request)
+        if query.intent == IntentType.COMPARATIVE_ANALYSIS:
+            return self._search_comparative(request)
+        if query.intent == IntentType.ENTITY_TIMELINE:
+            return self._search_timeline(request)
+        return self._dispatch_routes(request)
 
-    # ------------------------------------------------------------------
-    # Default search with relaxation cascade
-    # ------------------------------------------------------------------
-
-    def _search_with_relaxation(
+    def _dispatch_routes(
         self, request: KnowledgeSearchRequest
     ) -> KnowledgeSearchResult:
-        """Search with relaxation: entity-id → dense → BM25, merged and re-ranked."""
+        """Two-route dispatch: entity route when entities resolve, text route otherwise."""
         query = request.structured_query
-        profile = INTENT_PROFILES.get(query.intent)
         matched_entities = self.entities.find_by_names(query.entities)
+        if matched_entities:
+            return self._search_entity_route(request, matched_entities)
+        return self._search_text_route(request, matched_entities)
+
+    # ------------------------------------------------------------------
+    # Entity route: entity → events → time/label → semantic filter → rerank
+    # ------------------------------------------------------------------
+
+    def _search_entity_route(
+        self,
+        request: KnowledgeSearchRequest,
+        matched_entities: list[Entity],
+    ) -> KnowledgeSearchResult:
+        query = request.structured_query
         entity_ids = [e.entity_id for e in matched_entities]
         time_range = self._serialize_time_range(query)
         event_types = self._expand_event_types(query)
-        candidate_limit = max(request.top_k * 5, request.top_k)
 
-        # Path A: Entity-ID lookup
-        bm25_hits: list[tuple[str, float]] = []
-        if entity_ids:
-            ku_ids = self.units.find_by_entity_ids(
+        # 1. Strict event-first recall: KUs only from clusters where any
+        #    queried entity participates (via cluster_entity_map).
+        clusters = self.clusters.find_by_entity_ids(
+            entity_ids, cluster_types=event_types, time_range=time_range
+        )
+        ku_ids: list[str] = []
+        seen: set[str] = set()
+        for cluster in clusters:
+            for kid in cluster.member_ku_ids:
+                if kid not in seen:
+                    seen.add(kid)
+                    ku_ids.append(kid)
+
+        # Guardrail: cluster holes (stale map, unclustered KUs) would silently
+        # shrink recall — fall back to direct entity-id lookup to top up.
+        event_recall = "clusters" if ku_ids else "fallback_direct"
+        if len(ku_ids) < request.top_k:
+            direct = self.units.find_by_entity_ids(
                 entity_ids,
                 time_range=time_range,
                 event_types=event_types,
-                limit=candidate_limit,
+                limit=max(request.top_k * 5, request.top_k),
             )
-            bm25_hits = [(kid, -1.0) for kid in ku_ids]
+            if direct:
+                event_recall = "clusters+direct" if ku_ids else "fallback_direct"
+                for kid in direct:
+                    if kid not in seen:
+                        seen.add(kid)
+                        ku_ids.append(kid)
 
-        # Path C: BM25 fallback (if entity-id found nothing or no entity match)
-        if not bm25_hits:
-            bm25_hits = self._bm25_search(query, matched_entities)
+        if not ku_ids:
+            # Entity resolved but nothing reachable — degrade to the text route
+            # with entity-scoped BM25 (mirrors the old relaxation behaviour).
+            return self._search_text_route(request, matched_entities)
 
-        # Path B: Dense retrieval — runs as fallback when BM25 is empty,
-        # and as supplement when BM25 has results.
-        dense_scores: dict[str, float] = self._dense_search(query)
+        # 2. Time/label hard filter on hydrated KUs (SQL-level pushdown already
+        #    applied on the direct branch; cluster members are filtered here).
+        all_units = self.units.get_by_ids(ku_ids)
+        units = self._filter_candidates(all_units, query)
+        if not units:
+            result = self._empty_result(request, matched_entities)
+            result.retrieval_path = "entity_events"
+            return result
 
-        # Merge: add dense-only candidates to the pool
+        # 3. Semantic hard filter: drop candidates whose dense similarity to
+        #    the query is below threshold; backfill up to top_k when the cut
+        #    is too aggressive (protects recall, warns nothing — by design).
+        query_text = query.original_query or " ".join(query.entities)
+        dense_scores: dict[str, float] = {}
+        semantic_filter = "skipped_no_index"
+        if self._vector_index is not None and query_text.strip():
+            dense_scores = self._vector_index.score_ids(query_text, [u.ku_id for u in units])
+            if dense_scores:
+                threshold = float(os.environ.get("SEMANTIC_FILTER_THRESHOLD", "0.30"))
+                kept = [u for u in units if dense_scores.get(u.ku_id, -1.0) >= threshold]
+                if len(kept) >= request.top_k:
+                    units = kept
+                    semantic_filter = "applied"
+                else:
+                    # Backfill the best of the dropped ones, by dense score.
+                    dropped = sorted(
+                        (u for u in units if dense_scores.get(u.ku_id, -1.0) < threshold),
+                        key=lambda u: dense_scores.get(u.ku_id, -1.0),
+                        reverse=True,
+                    )
+                    units = kept + dropped[: request.top_k - len(kept)]
+                    semantic_filter = "applied_backfilled"
+            else:
+                semantic_filter = "skipped_no_vectors"
+
+        hits = [(u.ku_id, -1.0) for u in units]
+
+        result = self._build_ranked_result(
+            request=request,
+            bm25_hits=hits,
+            matched_entities=matched_entities,
+            dense_scores=dense_scores,
+            profile=INTENT_PROFILES.get(query.intent),
+            route_label="entity_events",
+        )
+        result.applied_filters["event_recall"] = event_recall
+        result.applied_filters["semantic_filter"] = semantic_filter
+        return result
+
+    # ------------------------------------------------------------------
+    # Text route: hybrid BM25 + dense → time/label → rerank
+    # ------------------------------------------------------------------
+
+    def _search_text_route(
+        self,
+        request: KnowledgeSearchRequest,
+        matched_entities: list[Entity],
+    ) -> KnowledgeSearchResult:
+        query = request.structured_query
+        time_range = self._serialize_time_range(query)
+
+        # 1. Hybrid recall — BM25 and dense ALWAYS run in parallel.
+        bm25_hits = self._bm25_search(query, matched_entities)
+        dense_scores = self._dense_search(query)
         existing_ids = {kid for kid, _ in bm25_hits}
-        for kid in dense_scores:
-            if kid not in existing_ids:
-                bm25_hits.append((kid, 0.0))
+        hits = list(bm25_hits) + [
+            (kid, 0.0) for kid in dense_scores if kid not in existing_ids
+        ]
 
-        if not bm25_hits and not dense_scores:
+        if not hits:
             # Pure time-range fallback: no entities, no search terms,
             # but user specified a time range — return recent KUs.
             if time_range:
                 time_ku_ids = self.units.find_by_time_range(
-                    time_range, limit=candidate_limit
+                    time_range, limit=max(request.top_k * 5, request.top_k)
                 )
                 if time_ku_ids:
-                    bm25_hits = [(kid, 0.0) for kid in time_ku_ids]
+                    hits = [(kid, 0.0) for kid in time_ku_ids]
 
-        if not bm25_hits and not dense_scores:
+        if not hits:
             result = self._empty_result(request, matched_entities)
             result.retrieval_path = "no_results"
             return result
 
+        pure_time = not query.entities and not query.original_query.strip() and bool(time_range)
         result = self._build_ranked_result(
             request=request,
-            bm25_hits=bm25_hits,
+            bm25_hits=hits,
             matched_entities=matched_entities,
             dense_scores=dense_scores,
-            profile=profile,
+            profile=INTENT_PROFILES.get(query.intent),
+            route_label="time_range" if pure_time else "hybrid",
         )
-
-        # Label retrieval path
-        if entity_ids and dense_scores:
-            result.retrieval_path = "entity_id+dense"
-        elif entity_ids:
-            result.retrieval_path = "entity_id_lookup"
-        elif dense_scores:
-            result.retrieval_path = "dense"
-        elif time_range and not query.original_query.strip() and not query.entities:
-            result.retrieval_path = "time_range"
-        else:
-            result.retrieval_path = "bm25_fallback"
         return result
 
     # ------------------------------------------------------------------
@@ -248,101 +338,6 @@ class KnowledgeSearcher:
         return []
 
     # ------------------------------------------------------------------
-    # Path A: Entity-ID Lookup (primary for entity-centric queries)
-    # ------------------------------------------------------------------
-
-    def _search_by_entity_ids(
-        self,
-        request: KnowledgeSearchRequest,
-        matched_entities: list[Entity],
-        entity_ids: list[str],
-    ) -> KnowledgeSearchResult:
-        query = request.structured_query
-        profile = INTENT_PROFILES.get(query.intent)
-        time_range = self._serialize_time_range(query)
-        event_types = self._expand_event_types(query)
-        candidate_limit = max(request.top_k * 5, request.top_k)
-
-        ku_ids = self.units.find_by_entity_ids(
-            entity_ids,
-            time_range=time_range,
-            event_types=event_types,
-            limit=candidate_limit,
-        )
-
-        if not ku_ids:
-            # Entity resolved but no KUs — fallback to BM25
-            return self._search_bm25_fallback(request, matched_entities)
-
-        hits: list[tuple[str, float]] = [(ku_id, -1.0) for ku_id in ku_ids]
-        result = self._build_ranked_result(
-            request=request,
-            bm25_hits=hits,
-            matched_entities=matched_entities,
-            profile=profile,
-        )
-        result.retrieval_path = "entity_id_lookup"
-        return result
-
-    # ------------------------------------------------------------------
-    # Path C: BM25 fallback (when entity resolution fails)
-    # ------------------------------------------------------------------
-
-    def _search_bm25_fallback(
-        self,
-        request: KnowledgeSearchRequest,
-        matched_entities: list[Entity],
-    ) -> KnowledgeSearchResult:
-        """BM25 text search — used when entity resolution produces no matches."""
-        query = request.structured_query
-        profile = INTENT_PROFILES.get(query.intent)
-        time_range = self._serialize_time_range(query)
-        event_types = self._expand_event_types(query)
-        candidate_limit = max(request.top_k * 3, request.top_k)
-
-        # Use entity names + original query terms for FTS
-        entity_id_filter = [e.entity_id for e in matched_entities] or None
-        fts_query = self._build_fts_query(query, matched_entities)
-        if not fts_query.strip():
-            return self._empty_result(request, matched_entities)
-
-        bm25_hits = self.units.search_bm25(
-            fts_query,
-            top_k=candidate_limit,
-            time_range=time_range,
-            event_types=event_types,
-            entity_ids=entity_id_filter,
-        )
-
-        if not bm25_hits:
-            # Try broader BM25 with just original query terms (no entity names)
-            broad_query = self._build_text_only_fts_query(query)
-            if broad_query.strip():
-                bm25_hits = self.units.search_bm25(
-                    broad_query,
-                    top_k=candidate_limit,
-                    time_range=time_range,
-                    event_types=event_types,
-                )
-
-        # Dense fallback when BM25 finds nothing
-        dense_scores: dict[str, float] = {}
-        if not bm25_hits:
-            dense_scores = self._dense_search(query)
-            for kid in dense_scores:
-                bm25_hits.append((kid, 0.0))
-
-        result = self._build_ranked_result(
-            request=request,
-            bm25_hits=bm25_hits,
-            matched_entities=matched_entities,
-            dense_scores=dense_scores,
-            profile=profile,
-        )
-        result.retrieval_path = "dense_fallback" if dense_scores and not entity_id_filter else "bm25_fallback"
-        return result
-
-    # ------------------------------------------------------------------
     # Intent-specific strategies
     # ------------------------------------------------------------------
 
@@ -365,7 +360,7 @@ class KnowledgeSearcher:
         """
         query = request.structured_query
         if len(query.entities) < 2:
-            return self._search_with_relaxation(request)
+            return self._dispatch_routes(request)
 
         profile = INTENT_PROFILES.get(query.intent)
         time_range = self._serialize_time_range(query)
@@ -403,7 +398,7 @@ class KnowledgeSearcher:
                 bm25_scores[kid] = min(bm25_scores.get(kid, 0.0), score)
 
         if not ku_ownership:
-            return self._search_with_relaxation(request)
+            return self._dispatch_routes(request)
 
         hits = [(kid, bm25_scores[kid]) for kid in ku_ownership]
         result = self._build_ranked_result_comparative(
@@ -415,21 +410,6 @@ class KnowledgeSearcher:
         )
         result.retrieval_path = "comparative"
         return result
-
-    def _search_topic(
-        self, request: KnowledgeSearchRequest
-    ) -> KnowledgeSearchResult:
-        """Topic search — entity lookup first, BM25 fallback for unknown topics."""
-        query = request.structured_query
-        matched_entities = self.entities.find_by_names(query.entities)
-        entity_ids = [e.entity_id for e in matched_entities]
-
-        if entity_ids:
-            # Topic is a known entity — use entity-id lookup
-            return self._search_by_entity_ids(request, matched_entities, entity_ids)
-
-        # Topic not in entity DB — BM25 text search with original terms
-        return self._search_bm25_fallback(request, matched_entities)
 
     def _search_timeline(
         self, request: KnowledgeSearchRequest
@@ -443,7 +423,7 @@ class KnowledgeSearcher:
         event_types = self._expand_event_types(query)
 
         if not entity_ids:
-            return self._search_bm25_fallback(request, matched_entities)
+            return self._search_text_route(request, matched_entities)
 
         # Get all candidates with amplified limit
         ku_ids = self.units.find_by_entity_ids(
@@ -454,7 +434,7 @@ class KnowledgeSearcher:
         )
 
         if not ku_ids:
-            return self._search_bm25_fallback(request, matched_entities)
+            return self._search_text_route(request, matched_entities)
 
         # Bucket by month for temporal coverage
         all_units = self.units.get_by_ids(ku_ids)
@@ -545,6 +525,7 @@ class KnowledgeSearcher:
         matched_entities: list[Entity],
         dense_scores: dict[str, float] | None = None,
         profile: ScoringProfile | None = None,
+        route_label: str = "hybrid",
     ) -> KnowledgeSearchResult:
         candidate_ids = [ku_id for ku_id, _ in bm25_hits]
         if not candidate_ids:
@@ -580,6 +561,10 @@ class KnowledgeSearcher:
             ),
             reverse=True,
         )
+
+        # Precision re-rank of the fused top pool, then cluster diversification
+        # (post-rerank, so a high-scored event still cannot flood top-K).
+        reranked, rerank_warnings = self._apply_rerank(request, ranked_hits)
         ranked_hits = self._diversify_by_cluster(ranked_hits)
         selected = ranked_hits[: request.top_k]
         selected_units = [unit for _, unit, _ in selected]
@@ -621,7 +606,59 @@ class KnowledgeSearcher:
                 matched_entities,
             ),
             hit_scores=hit_scores,
+            retrieval_path=route_label + ("+rerank" if reranked else ""),
+            warnings=rerank_warnings,
         )
+
+    def _apply_rerank(
+        self,
+        request: KnowledgeSearchRequest,
+        ranked_hits: list[tuple[float, KnowledgeUnit, dict[str, object]]],
+    ) -> tuple[bool, list[dict[str, str]]]:
+        """Reorder the fused top pool via the reranker, in place.
+
+        Returns (applied, warnings). Degraded modes are explicit, never silent:
+        - no reranker configured → (False, []) — unconfigured is a deployment
+          choice, logged at startup; fused order stands.
+        - reranker call failed → (False, [RERANKER_DEGRADED warning]) — the
+          fallback ordering is surfaced to the caller per query.
+        """
+        if self.reranker is None or not ranked_hits:
+            return False, []
+        query = request.structured_query
+        query_text = query.original_query or " ".join(query.entities)
+        if not query_text.strip():
+            return False, []
+
+        pool_n = int(os.environ.get("RERANK_POOL_N", "50"))
+        pool = ranked_hits[:pool_n]
+        documents = [build_embedding_text(unit) for _, unit, _ in pool]
+        try:
+            ranked = self.reranker.rerank(query_text, documents)
+        except Exception as exc:
+            logger.warning("Reranker failed, keeping fused order: %s", exc)
+            for _, _, metadata in pool:
+                metadata["rerank_degraded"] = True
+            return False, [{
+                "code": "RERANKER_DEGRADED",
+                "message": f"重排服务调用失败，已降级为融合分数排序: {exc}",
+            }]
+
+        # Score-index map; entries missing from the response keep relative
+        # fused order after the reranked ones.
+        score_by_pos = {idx: score for idx, score in ranked}
+        order = sorted(
+            range(len(pool)),
+            key=lambda i: (-score_by_pos.get(i, float("-inf")), i),
+        )
+        for i in order:
+            score = score_by_pos.get(i)
+            if score is not None:
+                component_scores = pool[i][2]["component_scores"]
+                if isinstance(component_scores, dict):
+                    component_scores["rerank_score"] = score  # type: ignore[index]
+        ranked_hits[:] = [pool[i] for i in order] + ranked_hits[pool_n:]
+        return True, []
 
     def _build_ranked_result_comparative(
         self,

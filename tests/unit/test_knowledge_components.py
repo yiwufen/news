@@ -1639,7 +1639,7 @@ def test_entity_id_lookup_finds_kus_by_entity(tmp_path) -> None:
     )
 
     assert result.total_count >= 2
-    assert result.retrieval_path == "entity_id_lookup"
+    assert result.retrieval_path == "entity_events"
 
 
 def test_relaxation_cascade_returns_results_when_entity_not_found(tmp_path) -> None:
@@ -1844,7 +1844,7 @@ def test_topic_research_fallback_to_text_search(tmp_path) -> None:
     )
 
     # "大模型" may or may not match as entity, but should not hard-gate to empty
-    assert result.retrieval_path in ("bm25_fallback", "entity_id_lookup")
+    assert result.retrieval_path in ("hybrid", "entity_events")
 
 
 def test_timeline_covers_time_range(tmp_path) -> None:
@@ -1914,7 +1914,7 @@ def test_cross_lingual_alias_byd_resolves(tmp_path) -> None:
     )
 
     assert result.total_count >= 1
-    assert result.retrieval_path == "entity_id_lookup"
+    assert result.retrieval_path == "entity_events"
 
 
 # ---------------------------------------------------------------------------
