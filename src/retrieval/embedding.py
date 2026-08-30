@@ -17,6 +17,10 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+# SiliconFlow's /embeddings endpoint accepts at most 32 input strings per
+# request; other OpenAI-compatible providers impose similar caps.
+MAX_BATCH = 32
+
 
 @runtime_checkable
 class EmbeddingProvider(Protocol):
@@ -57,6 +61,17 @@ class OpenAICompatEmbedding:
     ) -> list[list[float]]:
         if not texts:
             return []
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), MAX_BATCH):
+            chunk = texts[start : start + MAX_BATCH]
+            vectors.extend(
+                self._embed_chunk(chunk, retries=retries, base_delay=base_delay)
+            )
+        return vectors
+
+    def _embed_chunk(
+        self, texts: list[str], *, retries: int, base_delay: float
+    ) -> list[list[float]]:
         last_exc: Exception | None = None
         for attempt in range(retries):
             try:
