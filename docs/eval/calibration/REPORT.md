@@ -4,6 +4,13 @@
 > 利用现有 `docs/eval/` 闭环（固定 eval set + 冻结 DB 快照 + judge cache），
 > 在不调任何 LLM 的前提下量化每个权重项对排序质量的影响，并为 Phase 2/3 决策提供依据。
 
+> **⚠ 2026-08-30 加注（双路线重构后）**：`knowledge_search.py` 已重构为实体/文本双路线
+> （`feat/retrieval-clean-routes`）。`_score_final_hit` 加权融合仍保留，但其角色变为
+> ① reranker 之前的候选排序、② reranker 不可用时的降级顺序、③ hit_scores 元数据来源；
+> 本报告引用的行号（`knowledge_search.py:846-877`）已失效，`rerank.py` harness 的
+> 复现基线需重新采集信号后才能用于新架构。报告中的权重敏感性结论仅描述降级路径
+> （无 reranker 时）的行为。
+
 ## 0. 方法与可信度
 
 **Harness**（`docs/eval/calibration/`，纯 Python，不碰 `src/`）：

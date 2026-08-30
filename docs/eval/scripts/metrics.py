@@ -46,6 +46,7 @@ class QueryMetrics:
     mrr10: float
     precision5: float
     zero_hit: bool
+    retrieval_path: str = "unknown"  # actual route taken (entity_events / hybrid / ...)
 
     def to_dict(self) -> dict:
         return {
@@ -60,6 +61,7 @@ class QueryMetrics:
             "mrr10": round(self.mrr10, 4),
             "precision5": round(self.precision5, 4),
             "zero_hit": self.zero_hit,
+            "retrieval_path": self.retrieval_path,
         }
 
 
@@ -134,6 +136,7 @@ def compute_query_metrics(
     category: str,
     ranked_ku_ids: list[str],
     grades: dict[str, int],
+    retrieval_path: str = "unknown",
 ) -> QueryMetrics:
     """Compute all metrics for one query.
 
@@ -142,6 +145,10 @@ def compute_query_metrics(
     every KU in the pool, not just the final top-k ranking, so that the
     Recall@k denominator reflects the pool-relevant count (TREC-style pooling).
     KUs without a grade default to 0.
+
+    ``retrieval_path`` is the route actually taken (KnowledgeSearchResult.
+    retrieval_path) — grouping by it separates the entity route and text route
+    baselines so changes to one do not dilute the other's regression signal.
     """
     ranked_grades = [grades.get(kid, 0) for kid in ranked_ku_ids]
     # n_relevant_total spans the entire judged pool (all graded KUs), which is
@@ -163,6 +170,7 @@ def compute_query_metrics(
         mrr10=_mrr_at_k(ranked_grades, 10),
         precision5=_precision_at_k(ranked_grades, 5),
         zero_hit=zero_hit,
+        retrieval_path=retrieval_path,
     )
 
 
@@ -192,10 +200,21 @@ def aggregate_by_category(
     return {cat: aggregate(ms) for cat, ms in groups.items()}
 
 
+def aggregate_by_path(
+    metrics: list[QueryMetrics],
+) -> dict[str, AggregateMetrics]:
+    """Group by the retrieval route actually taken and aggregate within each group."""
+    groups: dict[str, list[QueryMetrics]] = defaultdict(list)
+    for m in metrics:
+        groups[m.retrieval_path].append(m)
+    return {path: aggregate(ms) for path, ms in groups.items()}
+
+
 def format_report(
     overall: AggregateMetrics,
     by_category: dict[str, AggregateMetrics],
     per_query: list[QueryMetrics],
+    by_path: dict[str, AggregateMetrics] | None = None,
 ) -> str:
     """Render a human-readable text report."""
     lines: list[str] = []
@@ -212,6 +231,19 @@ def format_report(
     lines.append(f"  MRR@10       : {overall.mrr10:.4f}")
     lines.append(f"  Precision@5  : {overall.precision5:.4f}")
     lines.append(f"  zero-hit rate: {overall.zero_hit_rate:.4f}   <- lower is better")
+    lines.append("")
+    lines.append("By retrieval path (actual route taken):")
+    lines.append(
+        f"  {'path':<26} {'n':>3} {'nDCG@10':>8} {'Rec@5':>8} {'Rec@20':>8} {'MRR@10':>8} {'P@5':>8} {'zero%':>7}"
+    )
+    lines.append("  " + "-" * 76)
+    for path, agg in sorted((by_path or {}).items()):
+        lines.append(
+            f"  {path:<26} {agg.n_queries:>3} "
+            f"{agg.ndcg10:>8.4f} {agg.recall5:>8.4f} {agg.recall20:>8.4f} "
+            f"{agg.mrr10:>8.4f} {agg.precision5:>8.4f} "
+            f"{agg.zero_hit_rate * 100:>6.1f}%"
+        )
     lines.append("")
     lines.append("By category:")
     lines.append(

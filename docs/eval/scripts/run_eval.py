@@ -57,6 +57,7 @@ from docs.eval.scripts.judge import (  # noqa: E402
 from docs.eval.scripts.metrics import (  # noqa: E402
     aggregate,
     aggregate_by_category,
+    aggregate_by_path,
     compute_query_metrics,
     format_report,
     QueryMetrics,
@@ -68,6 +69,14 @@ from docs.eval.scripts.snapshot import (  # noqa: E402
 )
 from src.orchestration.graph import run_pipeline  # noqa: E402
 from src.schemas.query import IntentType, make_query  # noqa: E402
+
+# Load repo-root .env so os.environ-based clients (embedding, SiliconFlow
+# reranker) pick up keys when this script is run directly. cli.py does this
+# for the CLI path; the judge gets its config via pydantic-settings' own
+# env_file handling, but these clients do not.
+from dotenv import load_dotenv  # noqa: E402
+
+load_dotenv(REPO_ROOT / ".env")
 
 logger = logging.getLogger("eval")
 
@@ -156,7 +165,10 @@ def evaluate(
 
         if not ku_ids:
             logger.warning("[%s] retrieved 0 KUs", qid)
-            m = compute_query_metrics(qid, q["category"], [], {})
+            m = compute_query_metrics(
+                qid, q["category"], [], {},
+                retrieval_path=str(retrieval_meta.get("retrieval_mode", "unknown")),
+            )
             per_query_metrics.append(m)
             query_details.append(
                 {
@@ -180,7 +192,10 @@ def evaluate(
             for lb in judge_store.labels.values():
                 store.upsert(lb)
 
-        m = compute_query_metrics(qid, q["category"], ku_ids, grades)
+        m = compute_query_metrics(
+            qid, q["category"], ku_ids, grades,
+            retrieval_path=str(retrieval_meta.get("retrieval_mode", "unknown")),
+        )
         per_query_metrics.append(m)
         query_details.append(
             {
@@ -204,6 +219,7 @@ def evaluate(
 
     overall = aggregate(per_query_metrics)
     by_category = aggregate_by_category(per_query_metrics)
+    by_path = aggregate_by_path(per_query_metrics)
 
     result = {
         "eval_version": "v1",
@@ -216,6 +232,7 @@ def evaluate(
         "snapshot_meta": load_meta(),
         "overall": overall.to_dict(),
         "by_category": {k: v.to_dict() for k, v in by_category.items()},
+        "by_retrieval_path": {k: v.to_dict() for k, v in by_path.items()},
         "per_query": query_details,
         "per_query_metrics": [m.to_dict() for m in per_query_metrics],
     }
@@ -237,6 +254,7 @@ def save_report(result: dict, qm_list: list) -> tuple[Path, Path]:
         overall=aggregate(qm_list),
         by_category=aggregate_by_category(qm_list),
         per_query=qm_list,
+        by_path=aggregate_by_path(qm_list),
     )
     txt += f"\nJudge model: {result['judge_model']}\n"
     txt += f"Eval set: {result['eval_version']}  |  judge_pool_k: {result['judge_pool_k']}\n"

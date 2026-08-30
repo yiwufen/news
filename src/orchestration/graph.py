@@ -212,7 +212,7 @@ def run_pipeline(
         graph_meta = GraphMeta(graph_enabled=graph_enabled, hops=effective_query.hops)
 
     errors = list(graph_enhancement.errors) if graph_enhancement else []
-    warnings: list[dict[str, str]] = []
+    warnings: list[dict[str, str]] = list(search_result.warnings)
 
     # Detect graph-dependent intents that degraded silently.
     if (

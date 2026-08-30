@@ -26,12 +26,18 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 import time
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# The gate must stay deterministic and offline: it pins the recall/fusion
+# layers only. Reranker quality is measured by docs/eval (real run), and the
+# reranker client itself is covered by unit tests with a mocked transport.
+os.environ.setdefault("KNOWLEDGE_RERANK_DISABLED", "1")
 
 from scripts import _eval_shared
 from scripts._eval_shared import (
