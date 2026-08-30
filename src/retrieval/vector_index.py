@@ -291,16 +291,23 @@ class VectorIndex:
         q = np.array([query_vectors[0]], dtype=np.float32)
         faiss.normalize_L2(q)
 
-        id_arr = np.array(int_ids, dtype=np.int64)
-        # IndexIDMap.reconstruct maps through the underlying storage; batch
-        # via reconstruct_batch when available, else one-by-one.
-        try:
-            vectors = self._index.reconstruct_batch(id_arr)  # type: ignore[attr-defined]
-        except (AttributeError, RuntimeError):
-            vectors = np.stack(
-                [self._index.reconstruct(int(i)) for i in int_ids]  # type: ignore[call-arg]
-            )
-        arr = np.array(vectors, dtype=np.float32)
+        # IndexIDMap does not implement reconstruct/reconstruct_batch in all
+        # faiss builds (raises "not implemented for this type of index"), so go
+        # through the wrapped flat index directly: id_map maps internal
+        # position → external id, invert it once and reconstruct from the
+        # inner IndexFlatIP, which always supports reconstruct.
+        inner = self._index.index  # type: ignore[attr-defined]
+        external_ids = faiss.vector_to_array(self._index.id_map)  # type: ignore[attr-defined]
+        internal_of = {int(ext): pos for pos, ext in enumerate(external_ids)}
+        missing = [i for i in int_ids if i not in internal_of]
+        if missing:
+            # Stale reverse map (index reloaded/rebuilt under us) — drop them.
+            int_ids = [i for i in int_ids if i in internal_of]
+            if not int_ids:
+                return {}
+        arr = np.stack(
+            [inner.reconstruct(internal_of[i]) for i in int_ids]  # type: ignore[call-arg]
+        ).astype(np.float32)
         # Stored vectors are already L2-normalized at index time; normalize the
         # reconstructed copy defensively in case of float drift.
         norms = np.linalg.norm(arr, axis=1, keepdims=True)
@@ -308,7 +315,7 @@ class VectorIndex:
         arr = arr / norms
 
         scores = (arr @ q[0]).astype(np.float64)
-        return {id_to_ku[int(i)]: float(s) for i, s in zip(id_arr, scores)}
+        return {id_to_ku[i]: float(s) for i, s in zip(int_ids, scores)}
 
     def is_available(self) -> bool:
         self._ensure_fresh()

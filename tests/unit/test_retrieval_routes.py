@@ -350,3 +350,99 @@ def test_text_route_reranker_applied(tmp_path) -> None:
     assert result.retrieval_path == "hybrid+rerank"
     assert len(result.knowledge_units) == 2
     assert fake.calls, "reranker must be called on the text route"
+
+
+# ---------------------------------------------------------------------------
+# VectorIndex.score_ids against a REAL faiss IndexIDMap
+# (regression: reconstruct_batch is not implemented for IndexIDMap in some
+#  faiss builds — production crashed until this went through the inner index)
+# ---------------------------------------------------------------------------
+
+
+class _FakeEmbeddingProvider:
+    """Deterministic small-dim embeddings keyed by exact text."""
+
+    def __init__(self, text_to_vector: dict[str, list[float]]):
+        self._map = text_to_vector
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return [self._map.get(t, [0.0, 0.0, 0.0, 0.0]) for t in texts]
+
+    @property
+    def dim(self) -> int:
+        return 4
+
+    @property
+    def model_name(self) -> str:
+        return "fake-provider"
+
+
+def _build_unit_for_index(ku_id_seed: str, summary: str) -> KnowledgeUnit:
+    pub = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
+    return KnowledgeUnit(
+        unit_kind="event",
+        unit_type="market_analysis",
+        summary=summary,
+        entities=[EntityRef(mention="测试")],
+        source=SourceRef(doc_id=f"doc-{ku_id_seed}", source_name="test"),
+        evidence=[EvidenceSpan(text=summary)],
+        time=TimeRef(event_time=pub, published_at=pub, extracted_at=pub),
+    )
+
+
+def test_vector_index_score_ids_matches_search(tmp_path) -> None:
+    """score_ids must return the same cosine scores as a global search."""
+    from src.retrieval.vector_index import VectorIndex
+
+    units = [
+        _build_unit_for_index("a", "电池技术进展"),
+        _build_unit_for_index("b", "财报发布"),
+        _build_unit_for_index("c", "电池产能扩张"),
+    ]
+    # Distinct directions; "电池*" queries should prefer units 0 and 2.
+    text_map = {
+        "电池技术进展 [实体] 测试 [类型] market_analysis": [0.9, 0.1, 0.0, 0.0],
+        "财报发布 [实体] 测试 [类型] market_analysis": [0.0, 0.0, 0.9, 0.1],
+        "电池产能扩张 [实体] 测试 [类型] market_analysis": [0.85, 0.2, 0.0, 0.0],
+        "电池技术": [0.9, 0.15, 0.0, 0.0],
+    }
+    provider = _FakeEmbeddingProvider(text_map)
+    idx = VectorIndex(str(tmp_path / "news.db"), provider)
+    assert idx.index_units(units) == 3
+
+    scores = idx.score_ids("电池技术", [u.ku_id for u in units])
+
+    assert set(scores) == {u.ku_id for u in units}
+    # Cross-check against the global search path.
+    search_scores = dict(idx.search("电池技术", top_k=3))
+    for ku_id, score in scores.items():
+        assert score == pytest.approx(search_scores[ku_id], abs=1e-5)
+    # The two battery units outrank the finance one.
+    assert scores[units[1].ku_id] < scores[units[0].ku_id]
+    assert scores[units[1].ku_id] < scores[units[2].ku_id]
+    # Missing/unknown ids are simply absent, no error.
+    assert idx.score_ids("电池技术", ["ku_unknown"]) == {}
+
+
+def test_entity_route_semantic_error_degrades_instead_of_crashing(tmp_path, monkeypatch) -> None:
+    """A broken vector index must degrade the semantic filter, not fail search."""
+    db_path, _units = _seed_db(
+        tmp_path,
+        [f"小米集团新闻第{i}条" for i in range(4)],
+        clusters=True,
+    )
+    searcher = _make_searcher(db_path)
+
+    class _BrokenVectorIndex:
+        def score_ids(self, query_text, ku_ids):
+            raise RuntimeError("reconstruct not implemented")
+
+    searcher._vector_index = _BrokenVectorIndex()  # type: ignore[assignment]
+
+    result = searcher.search(_entity_query())
+
+    assert result.retrieval_path == "entity_events"
+    assert len(result.knowledge_units) == 3
+    assert result.applied_filters["semantic_filter"] == "skipped_error"
+    codes = [w["code"] for w in result.warnings]
+    assert "SEMANTIC_FILTER_SKIPPED" in codes
