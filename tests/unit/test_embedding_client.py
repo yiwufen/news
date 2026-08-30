@@ -1,7 +1,7 @@
 """
 OpenAICompatEmbedding client tests (mocked transport — never real network):
 fail-fast on missing key (no fallback to SILICONFLOW_API_KEY), request shape,
-and MAX_BATCH chunking.
+MAX_BATCH chunking, and 429 rate-limit cooldown handling.
 """
 
 from __future__ import annotations
@@ -11,11 +11,17 @@ import json
 import httpx
 import pytest
 
-from src.retrieval.embedding import MAX_BATCH, OpenAICompatEmbedding
+from src.retrieval.embedding import (
+    MAX_BATCH,
+    MAX_RATE_LIMIT_WAITS,
+    RATE_LIMIT_COOLDOWN,
+    OpenAICompatEmbedding,
+)
 
 
-def _install_transport(monkeypatch, handler) -> list[httpx.Request]:
+def _install_transport(monkeypatch, handler) -> tuple[list[httpx.Request], list[float]]:
     requests: list[httpx.Request] = []
+    sleeps: list[float] = []
 
     def wrapped(request: httpx.Request) -> httpx.Response:
         requests.append(request)
@@ -23,8 +29,10 @@ def _install_transport(monkeypatch, handler) -> list[httpx.Request]:
 
     client = httpx.Client(transport=httpx.MockTransport(wrapped))
     monkeypatch.setattr(httpx, "post", client.post)
-    monkeypatch.setattr("src.retrieval.embedding.time.sleep", lambda _s: None)
-    return requests
+    monkeypatch.setattr(
+        "src.retrieval.embedding.time.sleep", lambda s: sleeps.append(s)
+    )
+    return requests, sleeps
 
 
 def _make_embedding(monkeypatch) -> OpenAICompatEmbedding:
@@ -60,7 +68,7 @@ def test_missing_key_raises_even_with_siliconflow_key(monkeypatch) -> None:
 
 
 def test_request_shape(monkeypatch) -> None:
-    requests = _install_transport(monkeypatch, _echo_handler)
+    requests, _ = _install_transport(monkeypatch, _echo_handler)
     embedding = _make_embedding(monkeypatch)
 
     vectors = embedding.embed(["t0"])
@@ -75,7 +83,7 @@ def test_request_shape(monkeypatch) -> None:
 
 
 def test_empty_input_short_circuits(monkeypatch) -> None:
-    requests = _install_transport(monkeypatch, _echo_handler)
+    requests, _ = _install_transport(monkeypatch, _echo_handler)
     embedding = _make_embedding(monkeypatch)
 
     assert embedding.embed([]) == []
@@ -83,7 +91,7 @@ def test_empty_input_short_circuits(monkeypatch) -> None:
 
 
 def test_chunks_oversized_batch_and_preserves_order(monkeypatch) -> None:
-    requests = _install_transport(monkeypatch, _echo_handler)
+    requests, _ = _install_transport(monkeypatch, _echo_handler)
     embedding = _make_embedding(monkeypatch)
 
     texts = [f"t{i}" for i in range(MAX_BATCH + 5)]
@@ -111,3 +119,43 @@ def test_retries_then_raises(monkeypatch) -> None:
     with pytest.raises(RuntimeError, match="after 3 retries"):
         embedding.embed(["t0"])
     assert calls["n"] == 3
+
+
+def test_rate_limit_429_cooldowns_then_succeeds(monkeypatch) -> None:
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(429, text="rate limited")
+        if calls["n"] == 2:
+            # Retry-After larger than the default cooldown is respected.
+            return httpx.Response(
+                429, text="rate limited", headers={"Retry-After": "90"}
+            )
+        return _echo_handler(request)
+
+    requests, sleeps = _install_transport(monkeypatch, handler)
+    embedding = _make_embedding(monkeypatch)
+
+    vectors = embedding.embed(["t0"])
+
+    assert vectors == [[0.0]]
+    assert len(requests) == 3
+    assert sleeps == [RATE_LIMIT_COOLDOWN, 90.0]
+
+
+def test_rate_limit_429_falls_back_to_retries_after_budget(monkeypatch) -> None:
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(429, text="rate limited")
+
+    _, sleeps = _install_transport(monkeypatch, handler)
+    embedding = _make_embedding(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="after 3 retries"):
+        embedding.embed(["t0"])
+    # 10 rate-limit cooldowns, then the ordinary 3-attempt backoff.
+    assert sleeps == [RATE_LIMIT_COOLDOWN] * MAX_RATE_LIMIT_WAITS + [2.0, 4.0, 8.0]
