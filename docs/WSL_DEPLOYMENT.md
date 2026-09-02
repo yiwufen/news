@@ -108,6 +108,12 @@ infra compose 其余不变；本地版 Caddyfile 删掉 `fin.yiyiyiwufeng.cn` �
 
 ### D4 镜像获取：维持 GHCR pull-only，daemon 配代理
 
+> 边界澄清：本节只涉及**镜像流**——`deploy.sh` 在本机执行时主动出站连 ghcr.io 拉镜像
+> （本地 → GHCR 单向出站），不需要 GitHub 反向连入，NAT/家宽/WSL 均不构成障碍。
+> **真正断掉的是触发流**：ci.yml 现有 deploy job 依赖 GitHub runner SSH 进服务器执行
+> deploy.sh，家宽无公网入站后不可行，处置见 §10-7（移除或改手动触发），替代触发方式见 §9
+> 「CI 自动部署」行。
+
 - **主路线**：保持「CI 构建推 GHCR → 本地 `deploy.sh` pull」不变，部署产物与 CI 测试一致。本地机在国内家宽，ghcr.io 需代理：给 WSL 内 docker daemon 配 systemd drop-in（见 §5.3），代理指向 Windows 宿主机 `http://<宿主IP>:7897`（NAT 模式下宿主 IP = WSL 默认网关）。这是现有机制（`deployment.md` 已记载 drop-in 方案）的直接复用，只是代理地址从服务器侧换成本机 Windows。
 - **降级路线**：`docker compose up -d --build` 本地构建。compose 已带 `build:` 字段，天然支持；但基础镜像（`python:3.13-slim`、`ghcr.io/astral-sh/uv:*`、`node:20-alpine`）同样要拉，代理问题躲不开，且 uv/npm 依赖还需国内镜像加速，仅作为 GHCR 不可用时的 fallback。
 
@@ -293,7 +299,7 @@ docker exec knowledge-neo4j cypher-shell -u neo4j -p $NEO4J_PASSWORD "MATCH (n) 
 | 时钟漂移 | WSL2 休眠唤醒后时钟漂移 → TLS 报错（Anthropic/SiliconFlow/tunnel）。systemd 已启用，`systemctl enable --now systemd-timesyncd` 即可；症状出现时 `sudo hwclock -s` 手动对时 |
 | VHD 膨胀 | `sparseVhd=true`（新盘）/ `wsl --manage Ubuntu-24.04 --set-sparse true`（存量）；deploy.sh 已含 `docker image prune` |
 | 发版 | WSL 内手动 `bash deploy.sh`；回滚 `IMAGE_TAG=sha-<旧commit> bash deploy.sh` |
-| CI 自动部署 | 本地机在 NAT 后，CI 无法 SSH。选项：a) 手动发版（推荐，个人项目节奏足够）；b) Windows 计划任务每日自动 `deploy.sh`（自动跟进 master）；c) GitHub self-hosted runner 跑在 WSL（runner 出站轮询，无需公网入站，可完整保留 push→deploy 自动化）。建议先 a，有需要再 c |
+| CI 自动部署 | 本地机在 NAT 后，CI 无法 SSH（**触发流断了；镜像流不受影响**，见 D4 澄清）。选项：a) 手动发版（推荐，个人项目节奏足够）；b) Windows 计划任务每日自动 `deploy.sh`（自动跟进 master）；c) GitHub self-hosted runner 跑在 WSL（runner 出站轮询领任务，无需公网入站，把 ci.yml 的 deploy job 改 `runs-on: self-hosted` 即可恢复全自动）。**c 的安全前提**：本仓库 public，恶意 fork PR 可能把任务塞进你的 runner——必须同时开启仓库 Actions 设置「外部贡献者 workflow 需人工批准」，且仅 master push 的 job 调度到 self-hosted，PR 的 test/build 留在 GitHub 托管 runner。建议先 a，有需要再 c |
 | 日志 | `docker logs knowledge-mcp -f`；worker 循环 `journalctl -u knowledge-ingestion -f`（与旧服务器完全一致） |
 | LAN 访问 | 需要 mirrored networking（Win11 22H2+）或 `netsh interface portproxy`；默认不做 |
 
