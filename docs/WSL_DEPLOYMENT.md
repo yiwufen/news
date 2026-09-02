@@ -36,6 +36,13 @@
 
 关键约束：**fin-trace 与本项目只在入口层共享 caddy/tunnel，应用层无耦合**。同一 Cloudflare named tunnel 的多个 connector 之间不能按 hostname 区分流量（ingress 规则属于 tunnel，connector 只是无差别承载），所以本项目迁走时**不能把旧 tunnel token 直接搬来**，否则 `fin.*` 流量会落到没有 fin-trace 的新机器上。
 
+> 实测核验（截至 2026-09，`ssh baidu`）：服务器上共三个 compose 项目——`repo`（应用，5 容器：
+> mcp/admin/neo4j + 两个 systemd `run --rm` 拉起的 worker）、`infra`（caddy + cloudflared，
+> `/home/deployer/knowledge/infra/`）、`fin-trace`（外部）。infra 的 compose 与 Caddyfile 与仓库
+> `deploy/infra/` **逐字节一致**，无服务器侧漂移——`deploy/infra/` 即唯一真源，迁移直接拷贝即可。
+> cloudflared 仅挂 `knowledge-net`，token 经 `/home/deployer/knowledge/.env` 注入。应用项目名为
+> `repo`（目录名），故 Neo4j 卷名为 `repo_neo4j-data`——新机器目录同名布局则卷名自动对齐。
+
 ## 2. 目标拓扑
 
 ```
