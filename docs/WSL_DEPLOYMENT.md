@@ -47,7 +47,7 @@
 
 ```
 Windows 主机（开机自启任务 → wsl.exe -d Ubuntu）
-└─ WSL2 (Ubuntu 24.04, /etc/wsl.conf: systemd=true)     ← ext4 内放全部数据，禁止 /mnt/c
+└─ WSL2 (Ubuntu 24.04, /etc/wsl.conf: systemd=true)     ← ext4 内放全部数据，禁止挂载 /mnt/*（数据落 G 盘靠迁移 VHD，见 §4.3）
    ├─ systemd
    │   ├─ docker.service（Docker Engine，daemon 代理走宿主机 7897）
    │   ├─ knowledge-mcp.service        → 应用 compose up -d
@@ -150,7 +150,24 @@ swap=8GB
 
 改后 `wsl --shutdown` 生效。
 
-### 4.3 开机自启与电源
+### 4.3 磁盘布局：发行版落在 G 盘
+
+WSL 发行版（含 `data/`、Docker 镜像、named volumes）整体装在一个 ext4 VHD 文件里，默认在 C 盘。
+空间紧张或想让数据落 G 盘时，**迁移 VHD 文件本身，不要把数据目录挂到 `/mnt/g`（drvfs）**——
+drvfs 上 SQLite 性能差一个量级、WAL 持久化语义有损坏风险，且 Neo4j 卷在 VHD 内会造成存储机制分裂：
+
+```powershell
+# 管理员 PowerShell（WSL 2.1.5+；旧版用 --export/--import 等价替换）
+wsl --shutdown
+wsl --manage Ubuntu-24.04 --move G:\wsl\Ubuntu-24.04
+```
+
+- 时机：**数据迁移前做**最省事（空发行版搬迁快，之后一切自然落盘 G 盘）。
+- 前提确认：G 盘应为 SSD（机械盘会拖垮 Neo4j/SQLite 随机 IO）。
+- 取舍：VHD 内文件对 Windows 资源管理器不可见（一个 vhdx 文件）；「Windows 里直接看 db 文件」
+  属备份需求，由每日备份输出到 `/mnt/g/backups`（即 `G:\backups`）满足。
+
+### 4.4 开机自启与电源
 
 - **WSL 自启**：任务计划程序建系统启动任务（SYSTEM 账户，最高权限），操作 `wsl.exe -d Ubuntu-24.04`。systemd 常驻进程使发行版不会闲置停机，一条启动命令即可拉起整条链路：WSL → systemd → docker.service → knowledge-mcp.service + 两个 worker（unit 均 `Restart=always`/`unless-stopped`）。
 - **电源**：服务器角色建议 `powercfg /change standby-timeout-ac 0`（交流下永不睡眠）+ 关闭快速启动对磁盘的影响评估；若必须睡眠，靠 timer `Persistent=true` 与 `Restart=always` 自动补，接受停机窗口。
@@ -283,7 +300,9 @@ docker exec knowledge-neo4j cypher-shell -u neo4j -p $NEO4J_PASSWORD "MATCH (n) 
 
 1. SQLite：`sqlite3 news.db "VACUUM INTO '/backup/news-<date>.db'"`（在线一致性备份，避开直接拷 wal 的坑）。
 2. Neo4j：`docker exec knowledge-neo4j neo4j-admin database dump neo4j --to-...`（社区版热 dump 需短暂停写，接受凌晨窗口）。
-3. 产物写 **`/mnt/c/...`**（跨出 WSL VHD——VHD 损坏时两者不共存亡），保留 7 天；可选再 rclone 推对象存储异地。
+3. 产物写 **`/mnt/g/backups/`**（即 Windows `G:\backups`，跨出 WSL VHD——VHD 损坏时两者不共存亡），
+   保留 7 天；注意发行版 VHD 本身也在 G 盘（§4.3）时备份与活库同物理盘，防损坏不防整盘故障，
+   需再保留一份异盘（C 盘或外接）或云端副本；可选再 rclone 推对象存储异地。
 4. 每季度做一次恢复演练（否则备份不可信）。
 
 ## 9. 运维要点速查
@@ -315,7 +334,7 @@ docker exec knowledge-neo4j cypher-shell -u neo4j -p $NEO4J_PASSWORD "MATCH (n) 
 2. **家用机可用性**：断电/重启后依赖「任务计划 → WSL → systemd → Restart 策略」整条自愈链路，上线后需做一次冷启动演练（直接断电重启验证）。
 3. **家宽质量**：tunnel 是出站长连接，家宽 NAT/动态 IP 不影响；但上游波动会直接体现在公网端点延迟上。Cloudflare 面板有 connector 健康监控，建议加告警通知。
 4. **机器规格未知**：本方案按 16G 内存舒适值写；若实际 8G，按 §4.2 括号内降配，neo4j 保持旧机 512m 封顶即可（现网 4G 都能跑）。
-5. **`/mnt/c` 依赖**：所有数据、仓库、Docker VHD 必须留在 WSL ext4 内；`/mnt/c`（drvfs）上跑 SQLite/Neo4j 性能差一个数量级且 fsync 语义不可靠。仅备份产物跨到 `/mnt/c`。
+5. **`/mnt/*` 依赖**：所有数据、仓库、Docker VHD 必须留在 WSL ext4 内；`/mnt/g`（drvfs）上跑 SQLite/Neo4j 性能差一个数量级且 fsync 语义不可靠，**数据落 G 盘的正确方式是迁移发行版 VHD（§4.3），不是挂载 Windows 目录**。仅备份产物跨到 `/mnt/g`。
 6. **迁移窗口**：停写→切流之间数据冻结，公网短暂只读；窗口预计 < 1 小时（数据量：SQLite 数百 MB 级 + Neo4j 卷，家宽上行 scp 为瓶颈）。
 
 ## 12. 上线验收清单
@@ -325,7 +344,7 @@ docker exec knowledge-neo4j cypher-shell -u neo4j -p $NEO4J_PASSWORD "MATCH (n) 
 - [ ] `docker ps` 六容器全 healthy（mcp/admin/neo4j/caddy/cloudflared + worker run 容器）
 - [ ] 数据对账：KU/Entity/Cluster 行数、`MAX(updated_at)`、Neo4j 节点统计与旧服务器一致
 - [ ] ingestion/fetch 循环在新库上推进（`journalctl` 无报错，`entities.updated_at` 前进）
-- [ ] 备份产物出现在 `/mnt/c` 且可恢复
+- [ ] 备份产物出现在 `/mnt/g/backups`（Windows 侧 `G:\backups`）且可恢复
 - [ ] 旧服务器停栈一周后退役，Cloudflare 旧 tunnel 仅保留 fin.*
 
 ---
