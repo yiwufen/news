@@ -114,7 +114,7 @@ infra compose 其余不变；本地版 Caddyfile 删掉 `fin.yiyiyiwufeng.cn` �
 > deploy.sh，家宽无公网入站后不可行，处置见 §10-7（移除或改手动触发），替代触发方式见 §9
 > 「CI 自动部署」行。
 
-- **主路线**：保持「CI 构建推 GHCR → 本地 `deploy.sh` pull」不变，部署产物与 CI 测试一致。本地机在国内家宽，ghcr.io 需代理：给 WSL 内 docker daemon 配 systemd drop-in（见 §5.3），代理指向 Windows 宿主机 `http://<宿主IP>:7897`（NAT 模式下宿主 IP = WSL 默认网关）。这是现有机制（`deployment.md` 已记载 drop-in 方案）的直接复用，只是代理地址从服务器侧换成本机 Windows。
+- **主路线**：保持「CI 构建推 GHCR → 本地 `deploy.sh` pull」不变，部署产物与 CI 测试一致。本地机在国内家宽，ghcr.io 需代理：给 WSL 内 docker daemon 配 systemd drop-in（见 §5.2），代理指向 Windows 宿主机 `http://<宿主IP>:7897`（NAT 模式下宿主 IP = WSL 默认网关）。这是现有机制（`deployment.md` 已记载 drop-in 方案）的直接复用，只是代理地址从服务器侧换成本机 Windows。
 - **降级路线**：`docker compose up -d --build` 本地构建。compose 已带 `build:` 字段，天然支持；但基础镜像（`python:3.13-slim`、`ghcr.io/astral-sh/uv:*`、`node:20-alpine`）同样要拉，代理问题躲不开，且 uv/npm 依赖还需国内镜像加速，仅作为 GHCR 不可用时的 fallback。
 
 ### D5 通用化：`KNOWLEDGE_HOME` 单变量参数化
@@ -158,17 +158,11 @@ swap=8GB
 
 ## 5. WSL 内环境
 
-### 5.1 基础
+> 前提：systemd 已启用。`wsl --install -d Ubuntu-24.04` 装出的官方镜像默认带
+> `/etc/wsl.conf` 的 `[boot] systemd=true`，无需手工配置；装完 `systemctl is-system-running`
+> 顺手确认一次即可（老发行版升级上来的才可能缺这条）。
 
-```bash
-# /etc/wsl.conf
-[boot]
-systemd=true
-```
-
-`wsl --shutdown` 后重进，验证 `systemctl list-units` 可用。
-
-### 5.2 安装 Docker Engine（发行版内，官方 apt 源）
+### 5.1 安装 Docker Engine（发行版内，官方 apt 源）
 
 按 Docker 官方 Ubuntu 安装文档（`get.docker.com` 或分步 apt 源；apt 源可换国内镜像）。装完：
 
@@ -178,7 +172,7 @@ docker run --rm hello-world   # 验证
 docker network create knowledge-net   # 固定名外部网络，一次性
 ```
 
-### 5.3 daemon 代理（拉 ghcr.io 用）
+### 5.2 daemon 代理（拉 ghcr.io 用）
 
 ```bash
 sudo mkdir -p /etc/systemd/system/docker.service.d
@@ -193,7 +187,7 @@ sudo systemctl daemon-reload && sudo systemctl restart docker
 
 `<宿主IP>` = `ip route show default | awk '{print $3}'`（NAT 模式下即 Windows 宿主；若开 mirrored networking 则为 `127.0.0.1`）。注意 Windows 代理客户端需允许局域网连接（Listen on 0.0.0.0）。
 
-### 5.4 目录布局与 .env
+### 5.3 目录布局与 .env
 
 ```bash
 export KNOWLEDGE_HOME="$HOME/knowledge"     # 写入 ~/.bashrc
