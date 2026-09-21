@@ -63,8 +63,14 @@ def create_server(
             "1. search_knowledge：检索实体、事件和关系。返回知识单元、实体画像、事件聚类和图谱概览。\n"
             "2. expand_graph_detail：展开图谱聚类的完整节点/边/路径详情。需要 search_knowledge 返回的 cluster_id。\n"
             "\n"
+            "行情数据工具（独立于知识库，直接查上游行情源）：\n"
+            "3. search_stocks：按代码/中文名/拼音搜股票与指数，获取标准代码（消歧入口）。\n"
+            "4. get_stock_quotes：批量查实时或最近收盘价（A股、港股、常用指数）。\n"
+            "5. get_stock_history：查历史日K（默认前复权，含当日盘中未收盘数据）。\n"
+            "\n"
             "典型工作流：先调用 search_knowledge，从返回的 graph_data.clusters_overview 中提取感兴趣的 "
             "cluster_id，再调用 expand_graph_detail 获取完整图谱结构。\n"
+            "行情工作流：不确定代码时先 search_stocks 消歧，再 get_stock_quotes / get_stock_history。\n"
             "\n"
             "实体名称优先使用中文（如 '比亚迪'、'宁德时代'）；常见英文简称（如 'BYD'、'CATL'）"
             "可自动解析，冷门英文名建议先转换为中文。"
@@ -276,6 +282,173 @@ def create_server(
         return await run_sync_in_thread(
             lambda: _expand(cluster_ids=cluster_ids, db_path=db_path),
             limiter=limiter,
+        )
+
+    # ------------------------------------------------------------------
+    # Market data tools（行情直连：纯 IO 走 async httpx，不占 to_thread
+    # limiter；仅 SQLite 落库下放线程。见 marketdata-mcp-design.md 第六节）
+    # ------------------------------------------------------------------
+
+    @mcp.tool()
+    async def search_stocks(
+        query: str,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        """搜索股票与指数：代码、中文名、拼音缩写均可，返回标准候选列表。
+
+        何时调用 / 意图选择指南：
+        - 只知道公司名（如 '贵州茅台'），需要标准代码再查行情 → 先调本工具
+        - get_stock_quotes / get_stock_history 返回 ambiguous 或 not_found 时，
+          用本工具查看候选并消歧
+        - 支持形式：6位A股代码（'600519'）、5位港股代码（'00700'）、中文名
+          （精确或包含）、拼音缩写（'GZMT'）、带市场标识（'600519.SH'/'sh600519'）
+
+        输出结构：
+        - candidates: 候选列表，每项含 secid（标准标识，形如 '1.600519'/
+          '116.00700'）、symbol、name、market（1=沪 0=深 116=港）、asset_type
+        - note: 仅当本地主数据未命中、结果来自在线搜索时出现
+
+        限制：
+        - 覆盖A股、港股正股与常用指数（上证、深成、创业板、恒指、恒生科技），
+          不含美股、ETF、权证
+        - 单个代码可能对应多个标的（如 '000001' = 平安银行 + 上证指数），
+        此时返回全部候选，不会自动选择
+
+        Args:
+            query: 搜索词，代码/中文名/拼音缩写/带市场标识的代码均可。
+            limit: 返回候选数量上限，1-50，默认 10。
+        """
+        from src.marketdata import get_service
+
+        if not query or not query.strip():
+            return {"error": "query must be a non-empty string"}
+        if not 1 <= limit <= 50:
+            return {"error": f"limit must be between 1 and 50, got {limit}"}
+        return await get_service().search_stocks(query.strip(), limit=limit)
+
+    @mcp.tool()
+    async def get_stock_quotes(
+        symbols: list[str],
+    ) -> dict[str, Any]:
+        """批量查询股票/指数的实时行情（A股、港股、常用指数）。
+
+        何时调用：
+        - 用户问某股票现价、涨跌幅、当日高低开收 → 直接调用本工具
+        - 不确定代码是否正确时，先调 search_stocks 消歧
+
+        输出结构：
+        - quotes: 行情列表（按输入顺序），每项含 price、change、change_pct、
+          open、high、low、pre_close、volume、amount、market_time（交易所
+          行情时间）、source、stale（是否来自本地旧快照）、as_of（仅 stale 时）
+        - unresolved: 无法解析或上游无数据的 symbol，含 reason
+          （ambiguous=歧义/not_found=未找到/no_data=上游无行情）与 candidates
+        - degraded: true 表示至少一条来自旧快照（上游全挂时的显式降级，
+          注意 as_of 时间）
+
+        非交易时段返回最近收盘快照（看 market_time 判断新鲜度）。
+        volume 单位：A股为手、港股为股；amount 为成交额（元/港元）。
+
+        限制：
+        - 单次最多 50 个 symbol
+        - 名称歧义（如 '000001'）不会自动选择，进 unresolved，需先消歧
+        - 数据源为公开行情接口，实时性约秒级；上游全挂时返回带 stale 标记
+          的本地快照，绝不静默冒充新数据
+
+        Args:
+            symbols: 证券列表，每项可为代码（'600519'）、中文名（'贵州茅台'）
+                或 search_stocks 返回的 secid。上限 50 个。
+        """
+        from src.marketdata import AllSourcesUnavailable, get_service
+
+        if not symbols:
+            return {"error": "symbols must be a non-empty list"}
+        if len(symbols) > 50:
+            return {"error": f"at most 50 symbols per call, got {len(symbols)}"}
+
+        try:
+            outcome = await get_service().get_quotes(symbols)
+        except AllSourcesUnavailable as exc:
+            return {
+                "error": (
+                    "所有行情源不可用，且本地无可用快照；请稍后重试。"
+                    f"详情: {exc}"
+                )
+            }
+        result: dict[str, Any] = {
+            "quotes": outcome.quotes,
+            "quote_count": len(outcome.quotes),
+        }
+        if outcome.unresolved:
+            result["unresolved"] = outcome.unresolved
+        if outcome.degraded:
+            result["degraded"] = True
+            result["degraded_note"] = (
+                "部分或全部行情来自本地旧快照（见各条 as_of），上游行情源当前不可用"
+            )
+        return result
+
+    @mcp.tool()
+    async def get_stock_history(
+        symbol: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        adjust: str = "qfq",
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        """查询股票/指数的历史日K线（默认前复权）。
+
+        何时调用：
+        - 用户要看某段时间的股价走势、区间涨跌幅、历史高低点 → 调用本工具
+        - 只需要最新报价时用 get_stock_quotes，不要拉全量历史
+
+        输出结构：
+        - secid、adjust、count、first_date、last_date
+        - bars: 日K数组（升序），每项含 date、open、high、low、close、
+          volume（A股:手/港股:股）、amount
+
+        限制：
+        - 一次最多返回 limit 根（默认 500，约两年日线），超出时返回最近的
+          limit 根；需要更长历史请分段调用
+        - 复权仅支持前复权（qfq）；前复权价格在分红除权后会整段调整，
+          已自动检测并重建缓存
+        - 含当日未收盘的实时K线（盘中调用时当日 close 为最新价）
+        - 覆盖范围同 get_stock_quotes（A股、港股、常用指数）
+
+        Args:
+            symbol: 代码/中文名/secid，同 get_stock_quotes。歧义时报错并
+                返回 candidates，请先调 search_stocks 消歧。
+            start_date: 起始日期（ISO，如 '2026-01-01'），可省略。
+            end_date: 结束日期（ISO），可省略，默认至今。
+            adjust: 复权方式，当前仅支持 'qfq'（前复权）。
+            limit: 最多返回的K线数量，1-500，默认 500。
+        """
+        import dateutil.parser as dparser
+
+        from src.marketdata import get_service
+
+        if adjust != "qfq":
+            return {
+                "error": (
+                    f"Unsupported adjust: {adjust!r}. Only 'qfq' "
+                    "(前复权) is supported in the current version."
+                )
+            }
+        if not 1 <= limit <= 500:
+            return {"error": f"limit must be between 1 and 500, got {limit}"}
+        for label, value in (("start_date", start_date), ("end_date", end_date)):
+            if value is not None:
+                try:
+                    dparser.isoparse(value)
+                except ValueError:
+                    return {
+                        "error": (
+                            f"{label} must be an ISO date "
+                            f"(e.g. '2026-01-01'), got {value!r}"
+                        )
+                    }
+
+        return await get_service().get_history(
+            symbol, start=start_date, end=end_date, limit=limit
         )
 
     return mcp

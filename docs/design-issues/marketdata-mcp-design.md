@@ -1,7 +1,7 @@
 # 股票行情检索 MCP 工具设计方案
 
 **日期**: 2026-09-21
-**版本**: v1.0（已与需求方对齐）
+**版本**: v1.1（已与需求方对齐；v1.1 并入限流事故复盘后的架构调整）
 **状态**: 设计定稿，进入实现
 **范围**: A股 + 港股正股 + 常用指数的实时行情与历史日K检索
 
@@ -22,15 +22,41 @@ failover 直连（东财主源 + 腾讯备源）；历史日K按需拉取落库�
 |---|---|---|
 | 东财 `push2.eastmoney.com/api/qt/ulist.np/get` | 实时行情批量（A股+港股统一 secid） | ✅ ~0.35s/次，连测 3 次稳定 |
 | 东财 `push2his.eastmoney.com/api/qt/stock/kline/get` | 历史日K（fqt 支持前复权） | ✅ 贵州茅台 6009 根 |
-| 东财 `searchapi.eastmoney.com/api/suggest/get` | 名称/拼音→代码（在线兜底） | ✅ 可用 |
-| 东财 `push2.eastmoney.com/api/qt/clist/get` | 全量股票列表（主数据） | ✅ A股 5560；港股 18053 含衍生品需过滤 |
+| 东财 `searchapi.eastmoney.com/api/suggest/get` | 名称/拼音→代码（在线兜底） | ✅ 可用；空结果返回 `Data: null`（解析层已兼容） |
+| 东财 `push2.eastmoney.com/api/qt/clist/get` | ~~全量股票列表~~ | ❌ **已弃用**：连续翻页触发域名级封禁（见事故复盘） |
+| 新浪 `Market_Center.getHQNodeData` | 全量列表（主数据专用） | ✅ A股 5564 只，num 上限 100，56 页 |
 | 腾讯 `qt.gtimg.cn/q=` | 备源实时行情 | ✅ GBK 编码，A/H 前缀不同 |
 | 新浪 `hq.sinajs.cn/list=` | 三备（二期） | ⚠️ 强制 Referer（无则 403）、GBK、A/H 格式不一致 |
-| 东财 `searchadapter` smartbox | 搜索 | ❌ 404，接口漂移实证 |
 
-**选型结论**：东财主源（四个接口覆盖全部需求、免 key、JSON 结构化）+ 腾讯备源。
-不引入 akshare / tushare（重依赖、聚合层接口随上游漂移 / token+积分配额），
-复用项目已有 httpx 与爬虫经验（`collectors/eastmoney_crawler.py`）。
+**选型结论**：东财主源（quote/kline/suggest 覆盖需求、免 key、JSON 结构化）+
+腾讯备源；主数据列表用新浪源（分域隔离）。不引入 akshare / tushare（重依赖、
+聚合层接口随上游漂移 / token+积分配额），复用项目已有 httpx 与爬虫经验。
+
+## 一·一、限流事故复盘（2026-09-21 实测）
+
+开发中端到端验证时触发真实限流，据此调整架构：
+
+**事故经过**：clist 连续翻页（~33 页 × 0.65s 间隔）后东财持续断连；
+探测显示封禁为 **push2 域名级**（同域的实时行情 ulist 连坐失效，kline/
+suggest/其他域名不受影响），窗口超过 6 分钟（未测得上限）。页级短重试
+（1s/3s）在封禁窗口内无效。
+
+**架构整改**：
+1. **主数据源与行情源分域**：列表同步改走新浪 `Market_Center` 接口
+   （即使新浪限流也不影响行情链路）；东财 clist 代码整体移除。
+2. **港股不落全量**：无已验证的港股全量列表源（东财 clist 已弃用、
+   新浪港股节点不可用）。港股解析走 suggest 在线兜底 + 回写累积，
+   热门标的自然沉淀进本地主数据。
+3. **列表翻页带断点续传**：页级失败按 1s/5s/15s/30s 退避从失败页继续
+   （而非整体重拉），页间隔 0.4s。
+4. **failover 部分覆盖补缺**：主源响应正常但缺个别 secid（如东财不
+   覆盖恒生科技指数）不算源失败、不熔断，缺失项自动走备源补拉——
+   实测恒生科技由腾讯补回。
+5. **suggest 兜底优先精确名匹配**：多候选中恰有一条名称与查询完全
+   相等时直接解析（解决"腾讯控股"被 ADR 干扰项打成 ambiguous）。
+
+事故本身验证了两个设计前提：failover 链在主源被封时正常接管（期间
+行情全部由腾讯返回）；显式 stale/no_data 契约保证缺项可见。
 
 **风险认知**（详见对话记录 2026-09-21）：push2 属公开网页接口，无 SLA。
 本项目用量（agent 低频、批量接口、TTL 缓存去重、主数据/K线落库后不打上游）
@@ -60,12 +86,14 @@ agent ──► MCP 工具层（3 个工具，沿用 mcp_server.py 现有注册�
 |---|---|
 | `models.py` | 数据模型：`Instrument`、`Quote`、`KlineBar` |
 | `store.py` | SQLite 存取（WAL 模式、短连接） |
-| `providers/base.py` | Provider 协议 + 响应 schema 校验 |
-| `providers/eastmoney.py` | 东财 quote / kline / suggest / clist 适配 |
+| `providers/base.py` | Provider 协议（Quote/History/List/Search）+ 响应 schema 校验 |
+| `providers/eastmoney.py` | 东财 quote / kline / suggest 适配 |
 | `providers/tencent.py` | 腾讯 quote 适配（GBK 解码） |
+| `providers/sina.py` | 新浪全量列表适配（主数据专用，断点续传翻页） |
 | `universe.py` | 主数据同步（懒加载，>24h 重拉）+ 名称解析 |
-| `quotes.py` | failover 链、熔断冷却、TTL 缓存、交易时段感知、stale 降级 |
+| `quotes.py` | failover 链、熔断冷却、TTL 缓存、交易时段感知、stale 降级、部分覆盖补缺 |
 | `klines.py` | 日K按需拉取、增量合并、除权检测重拉 |
+| `service.py` | 门面组合 + 进程级单例（熔断/缓存/连接池跨请求共享） |
 
 ## 三、存储设计
 
@@ -110,8 +138,9 @@ CREATE TABLE kline_daily (
 ```
 
 常用指数（上证指数 `1.000001`、深证成指 `0.399001`、创业板指 `0.399006`、
-恒生指数 `100.HSI`、恒生科技 `100.HSTECH`）硬编码入 `instruments`（asset_type=index），
-不走 clist（决策点 2，已确认）。
+恒生指数 `100.HSI`、恒生科技 `100.HSTECH`）硬编码入 `instruments`
+（asset_type=index），不依赖列表源。北交所（新浪 `bj` 前缀）一期不覆盖，
+解析层过滤。
 
 ## 四、MCP 工具接口契约
 
@@ -182,20 +211,20 @@ docstring 写明调用时机与限制（`src/mcp_server.py` 两个现有工具�
 
 ## 九、已知实现期风险
 
-1. **港股衍生品过滤**：clist 港股全量 18053 条含大量权证，`fs=m:116+t:1`
-   实测不对（仅 458 条信托类）。实现第一天需实测敲定过滤参数；退路为
-   suggest 按 Classify 过滤或按代码段排除。
+1. ~~港股衍生品过滤~~（已随 clist 弃用失效；港股改为 suggest 兜底 + 回写累积）。
 2. **push2 接口漂移**：无 SLA，路径/字段可能变化（smartbox 404 先例）。
    schema 校验保证失效时显式报错，修复成本限于单一 provider 解析函数。
+3. **新浪列表接口同为无 SLA 网页接口**：断点续传 + 长退避兜住限流；
+   即使整体失败也只影响主数据新鲜度，行情链路不受影响。
 
 ## 十、分期
 
-- **一期（本分支）**：东财+腾讯双源、3 个 MCP 工具、主数据同步、日K落库增量、
-  stale 降级、5 个常用指数。
+- **一期（本分支）**：东财+腾讯双源、3 个 MCP 工具、主数据同步（新浪源，
+  A股全量+指数）、日K落库增量、stale 降级、部分覆盖补缺。
 - **二期（按需）**：新浪第三备源；baostock 日K备份源；HKEX 官方 API（港股）；
-  指数范围扩展；ETF。
+  港股全量主数据源；指数范围扩展；ETF；北交所。
 
-## 决策记录（2026-09-21 对齐）
+## 决策记录（2026-09-21 对齐 + 事故复盘增补）
 
 | # | 决策点 | 结论 |
 |---|---|---|
@@ -203,3 +232,5 @@ docstring 写明调用时机与限制（`src/mcp_server.py` 两个现有工具�
 | 2 | 指数范围 | 默认 5 个常用指数硬编码 |
 | 3 | 上游全挂行为 | 返回本地快照 + `stale: true` + `as_of`（无快照才报错） |
 | 4 | 一期备源 | 仅腾讯；新浪放二期 |
+| 5 | 主数据列表源（事故后） | 新浪（分域隔离），东财 clist 弃用 |
+| 6 | 港股主数据（事故后） | 不落全量，suggest 兜底 + 回写累积 |

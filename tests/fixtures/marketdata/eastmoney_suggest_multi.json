@@ -1,0 +1,59 @@
+{
+  "QuotationCodeTable": {
+    "Data": [
+      {
+        "Code": "00700",
+        "Name": "腾讯控股",
+        "PinYin": "TXKG",
+        "ID": "007005",
+        "JYS": "HK",
+        "Classify": "HK",
+        "MarketType": "5",
+        "SecurityTypeName": "港股",
+        "SecurityType": "19",
+        "MktNum": "116",
+        "TypeUS": "3",
+        "QuoteID": "116.00700",
+        "UnifiedCode": "00700",
+        "InnerCode": "30668133409363"
+      },
+      {
+        "Code": "TCTZF",
+        "Name": "腾讯控股",
+        "PinYin": "TXKG",
+        "ID": "TCTZF-1",
+        "JYS": "OTCBB",
+        "Classify": "OTCBB",
+        "MarketType": "-1",
+        "SecurityTypeName": "粉单",
+        "SecurityType": "26",
+        "MktNum": "153",
+        "TypeUS": "1",
+        "QuoteID": "153.TCTZF",
+        "UnifiedCode": "TCTZF",
+        "InnerCode": "30668133409364"
+      },
+      {
+        "Code": "000001",
+        "Name": "上证指数",
+        "PinYin": "SZZS",
+        "ID": "0000011",
+        "JYS": "1",
+        "Classify": "Index",
+        "MarketType": "1",
+        "SecurityTypeName": "指数",
+        "SecurityType": "5",
+        "MktNum": "1",
+        "TypeUS": "1",
+        "QuoteID": "1.000001",
+        "UnifiedCode": "000001",
+        "InnerCode": "38709193279776"
+      }
+    ],
+    "Status": 0,
+    "Message": "成功",
+    "TotalCount": 3,
+    "BizCode": "",
+    "BizMsg": ""
+  }
+}

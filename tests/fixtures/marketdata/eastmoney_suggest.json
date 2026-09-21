@@ -1,0 +1,27 @@
+{
+  "QuotationCodeTable": {
+    "Data": [
+      {
+        "Code": "600519",
+        "Name": "贵州茅台",
+        "PinYin": "GZMT",
+        "ID": "6005191",
+        "JYS": "2",
+        "Classify": "AStock",
+        "MarketType": "1",
+        "SecurityTypeName": "沪A",
+        "SecurityType": "1",
+        "MktNum": "1",
+        "TypeUS": "2",
+        "QuoteID": "1.600519",
+        "UnifiedCode": "600519",
+        "InnerCode": "46077278941243"
+      }
+    ],
+    "Status": 0,
+    "Message": "成功",
+    "TotalCount": 1,
+    "BizCode": "",
+    "BizMsg": ""
+  }
+}
