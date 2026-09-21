@@ -1,0 +1,205 @@
+# 股票行情检索 MCP 工具设计方案
+
+**日期**: 2026-09-21
+**版本**: v1.0（已与需求方对齐）
+**状态**: 设计定稿，进入实现
+**范围**: A股 + 港股正股 + 常用指数的实时行情与历史日K检索
+
+---
+
+## 执行摘要
+
+为 MCP 服务器新增股票价格检索能力，采用**主数据落库 + 行情实时直连**的混合架构：
+股票名单（代码/名称/市场）落本地 SQLite，名称解析不依赖上游；实时行情走多源
+failover 直连（东财主源 + 腾讯备源）；历史日K按需拉取落库、增量合并、除权重拉。
+
+核心设计原则：**稳定性优先**——多源冗余、熔断冷却、显式 stale 降级（禁止静默降级，
+符合 `docs/SHARED_RULES.md` 第 7 节 guardrail）。
+
+## 一、数据源选型（2026-09-21 盘中实测）
+
+| 接口 | 用途 | 实测结论 |
+|---|---|---|
+| 东财 `push2.eastmoney.com/api/qt/ulist.np/get` | 实时行情批量（A股+港股统一 secid） | ✅ ~0.35s/次，连测 3 次稳定 |
+| 东财 `push2his.eastmoney.com/api/qt/stock/kline/get` | 历史日K（fqt 支持前复权） | ✅ 贵州茅台 6009 根 |
+| 东财 `searchapi.eastmoney.com/api/suggest/get` | 名称/拼音→代码（在线兜底） | ✅ 可用 |
+| 东财 `push2.eastmoney.com/api/qt/clist/get` | 全量股票列表（主数据） | ✅ A股 5560；港股 18053 含衍生品需过滤 |
+| 腾讯 `qt.gtimg.cn/q=` | 备源实时行情 | ✅ GBK 编码，A/H 前缀不同 |
+| 新浪 `hq.sinajs.cn/list=` | 三备（二期） | ⚠️ 强制 Referer（无则 403）、GBK、A/H 格式不一致 |
+| 东财 `searchadapter` smartbox | 搜索 | ❌ 404，接口漂移实证 |
+
+**选型结论**：东财主源（四个接口覆盖全部需求、免 key、JSON 结构化）+ 腾讯备源。
+不引入 akshare / tushare（重依赖、聚合层接口随上游漂移 / token+积分配额），
+复用项目已有 httpx 与爬虫经验（`collectors/eastmoney_crawler.py`）。
+
+**风险认知**（详见对话记录 2026-09-21）：push2 属公开网页接口，无 SLA。
+本项目用量（agent 低频、批量接口、TTL 缓存去重、主数据/K线落库后不打上游）
+远低于风控阈值；接口漂移风险靠响应 schema 校验 fail-fast 应对。
+
+## 二、架构
+
+```
+agent ──► MCP 工具层（3 个工具，沿用 mcp_server.py 现有注册模式）
+              │
+              ├─ search_stocks ────► 本地 instruments 表（纯本地，不打上游）
+              │
+              ├─ get_stock_quotes ─► 内存 TTL 缓存 ─► 多源 failover 链
+              │                        │              东财 ─► 腾讯
+              │                        ▼
+              │                   quote_snapshot 表（成功响应顺手落库）
+              │
+              └─ get_stock_history ► kline_daily 表 ──命中──► 直接返回
+                                       │ miss/增量
+                                       ▼
+                                   东财 push2his（拉取后落库，下次走本地）
+```
+
+模块划分（新模块 `src/marketdata/`）：
+
+| 模块 | 职责 |
+|---|---|
+| `models.py` | 数据模型：`Instrument`、`Quote`、`KlineBar` |
+| `store.py` | SQLite 存取（WAL 模式、短连接） |
+| `providers/base.py` | Provider 协议 + 响应 schema 校验 |
+| `providers/eastmoney.py` | 东财 quote / kline / suggest / clist 适配 |
+| `providers/tencent.py` | 腾讯 quote 适配（GBK 解码） |
+| `universe.py` | 主数据同步（懒加载，>24h 重拉）+ 名称解析 |
+| `quotes.py` | failover 链、熔断冷却、TTL 缓存、交易时段感知、stale 降级 |
+| `klines.py` | 日K按需拉取、增量合并、除权检测重拉 |
+
+## 三、存储设计
+
+**独立数据库 `data/market.db`**（决策点 1，已确认）：行情缓存可丢弃重建、与知识库
+生命周期/备份策略不同、不给知识库 schema 迁移添乱。SQLite 开 WAL。短连接模式
+（每次操作开新连接），避免多线程共享连接的锁问题。
+
+### 表结构
+
+```sql
+-- 股票主数据
+CREATE TABLE instruments (
+    secid       TEXT PRIMARY KEY,   -- 东财体系："1.600519" / "0.000001" / "116.00700"
+    symbol      TEXT NOT NULL,      -- "600519" / "00700"
+    market      INTEGER NOT NULL,   -- 1=沪 0=深 116=港
+    name        TEXT NOT NULL,      -- "贵州茅台"
+    pinyin      TEXT,               -- "GZMT"（suggest 提供，clist 无则置空）
+    asset_type  TEXT NOT NULL,      -- "stock" / "index"
+    updated_at  TEXT NOT NULL
+);
+
+-- 最近行情快照（每 secid 一行，upsert；用于 stale 降级与收盘后查询）
+CREATE TABLE quote_snapshot (
+    secid        TEXT PRIMARY KEY,
+    name         TEXT NOT NULL,
+    price        REAL, change_val REAL, change_pct REAL,
+    open         REAL, high REAL, low REAL, pre_close REAL,
+    volume       REAL, amount REAL,
+    market_time  TEXT NOT NULL,     -- 行情时间（交易所时间）
+    fetched_at   TEXT NOT NULL,     -- 抓取时间
+    source       TEXT NOT NULL
+);
+
+-- 历史日K（前复权，见「除权重拉」）
+CREATE TABLE kline_daily (
+    secid      TEXT NOT NULL,
+    trade_date TEXT NOT NULL,       -- "2026-09-21"
+    open REAL, high REAL, low REAL, close REAL,
+    volume REAL, amount REAL,
+    PRIMARY KEY (secid, trade_date)
+);
+```
+
+常用指数（上证指数 `1.000001`、深证成指 `0.399001`、创业板指 `0.399006`、
+恒生指数 `100.HSI`、恒生科技 `100.HSTECH`）硬编码入 `instruments`（asset_type=index），
+不走 clist（决策点 2，已确认）。
+
+## 四、MCP 工具接口契约
+
+沿用现有模式：参数校验在 event loop 上做、错误返回可读 `{"error": ...}`、
+docstring 写明调用时机与限制（`src/mcp_server.py` 两个现有工具的写法）。
+
+### search_stocks(query, limit=10)
+
+纯本地查询。query 接受代码 / 中文名（包含匹配）/ 拼音前缀。返回
+`{candidates: [{secid, symbol, name, market, asset_type}]}`。
+同名多候选时 agent 应先调本工具消歧。
+
+### get_stock_quotes(symbols)
+
+- `symbols: list[str]`，每项为代码或中文名（名称先走本地解析），上限 50。
+- 返回：
+  ```
+  quotes: [{secid, symbol, name, price, change, change_pct, open, high, low,
+            pre_close, volume, amount, market_time, source, stale, as_of}]
+  unresolved: [...]   # 解析失败的 symbol 显式列出，不静默跳过
+  ```
+- 非交易时段返回最近快照（`market_time` 即行情时间，agent 可自行判断新鲜度）。
+- 上游全挂：有本地快照 → 返回且 `stale: true` + `as_of`（决策点 3，已确认）；
+  无快照 → 报错「所有行情源不可用」（fail-fast，符合 guardrail）。
+
+### get_stock_history(symbol, start_date, end_date=None, limit=500)
+
+日K区间查询，默认前复权。本地命中直接返回；缺口区间增量拉取后合并落库。
+`limit` 上限 500 根，防止撑爆调用方上下文。
+
+## 五、稳定性机制（核心）
+
+1. **failover 链**：东财 → 腾讯（新浪二期，决策点 4）。单请求超时 5s；
+   超时/5xx 同源快速重试 1 次，仍失败立即切下一源；端到端预算 ~15s。
+2. **熔断冷却**：某源连续 3 次失败冷却 60s，冷却期直接跳过。参数
+   （源顺序、超时、阈值、冷却时长、TTL）环境变量可覆盖（沿用
+   `MCP_THREAD_LIMIT` 模式）。
+3. **TTL 缓存（交易时段感知）**：相同 secid 集合盘中 10s 内回缓存；
+   收盘后 TTL 放宽至 10min。A股/港股交易时段表内置。
+4. **除权检测重拉**：前复权价格在除权后整段变化，直接缓存会腐烂。每次增量
+   补拉时先比对落库最近 2 根与新拉数据，对不上即删除该 secid 全部日K重拉。
+5. **schema 校验 fail-fast**：东财响应校验 `rc:0` + 字段形状，腾讯校验字段数；
+   形状不对按「该源失败」处理，不吐脏数据。
+6. **主数据本地化**：名称解析不打上游；suggest 仅作冷门标的在线兜底。
+7. **可追踪**：每次上游调用记录 source/status/latency 日志；成功响应 upsert
+   `quote_snapshot`。
+
+## 六、与现有系统的集成
+
+- **mcp_server.py**：注册 3 个工具。行情请求走 `httpx.AsyncClient`（纯 IO，
+  不占共享 to_thread limiter——该 limiter 为 4GB 宿主机内存约束而设）；仅
+  SQLite 落库下放线程。这是与现有工具「阻塞检索 → to_thread」模式的**有意差异**。
+- **无新依赖**：httpx、sqlite3（标准库）均已具备。腾讯 GBK 用 `bytes.decode("gbk")`。
+- **进程管理**：无后台任务。主数据懒加载同步（>24h 重拉），MCP 工具首次调用触发。
+
+## 七、错误契约
+
+- 符号解析失败：`unresolved` 列表 + 提示先调 `search_stocks`。
+- 参数越界：返回合法范围（现有工具做法，让 agent 自纠）。
+- 所有源不可用且无快照：显式报错，不静默降级。
+
+## 八、测试策略
+
+- 用 2026-09-21 实测抓取的真实响应做 fixture（东财 quote/kline/suggest/clist、腾讯）。
+- 单测覆盖：provider 解析与 schema 校验、failover 状态机（熔断进入/恢复）、
+  TTL 与交易时段判断、名称解析、除权重拉、stale 降级路径。
+- 不打真实上游；走 `uv run pytest` + `uv run pyright` 门禁。
+
+## 九、已知实现期风险
+
+1. **港股衍生品过滤**：clist 港股全量 18053 条含大量权证，`fs=m:116+t:1`
+   实测不对（仅 458 条信托类）。实现第一天需实测敲定过滤参数；退路为
+   suggest 按 Classify 过滤或按代码段排除。
+2. **push2 接口漂移**：无 SLA，路径/字段可能变化（smartbox 404 先例）。
+   schema 校验保证失效时显式报错，修复成本限于单一 provider 解析函数。
+
+## 十、分期
+
+- **一期（本分支）**：东财+腾讯双源、3 个 MCP 工具、主数据同步、日K落库增量、
+  stale 降级、5 个常用指数。
+- **二期（按需）**：新浪第三备源；baostock 日K备份源；HKEX 官方 API（港股）；
+  指数范围扩展；ETF。
+
+## 决策记录（2026-09-21 对齐）
+
+| # | 决策点 | 结论 |
+|---|---|---|
+| 1 | 存储位置 | 独立 `data/market.db`，不并入知识库 |
+| 2 | 指数范围 | 默认 5 个常用指数硬编码 |
+| 3 | 上游全挂行为 | 返回本地快照 + `stale: true` + `as_of`（无快照才报错） |
+| 4 | 一期备源 | 仅腾讯；新浪放二期 |
