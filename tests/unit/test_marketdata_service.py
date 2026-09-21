@@ -50,6 +50,11 @@ class StubTencent:
     async def fetch_quotes(self, secids: list[str]) -> dict[str, Any]:
         return {}
 
+    async def fetch_klines(
+        self, secid: str, lmt: int, end: str = "20500101"
+    ) -> list[Any]:
+        return []
+
 
 @pytest.fixture()
 def store(tmp_path: Path) -> MarketStore:
@@ -185,4 +190,12 @@ class TestGetStockHistoryValidation:
         )
         assert "error" in _call(
             tools["get_stock_history"], symbol="600519", end_date="not-a-date"
+        )
+
+    def test_start_after_end(self, tools) -> None:
+        assert "error" in _call(
+            tools["get_stock_history"],
+            symbol="600519",
+            start_date="2026-09-18",
+            end_date="2026-09-01",
         )

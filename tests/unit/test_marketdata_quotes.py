@@ -28,6 +28,8 @@ from src.marketdata.quotes import (
     QuoteService,
     cn_market_open,
     hk_market_open,
+    pick_suggest_result,
+    suggest_query_for,
 )
 from src.marketdata.store import MarketStore
 
@@ -73,16 +75,27 @@ class FlippableProvider(QuoteProvider):
 class FakeSuggest(SearchProvider):
     name = "fake_suggest"
 
-    def __init__(self, results: list[Instrument]) -> None:
-        self._results = results
+    def __init__(
+        self,
+        results: list[Instrument] | None = None,
+        results_map: dict[str, list[Instrument]] | None = None,
+    ) -> None:
+        self._results = results or []
+        self._map = results_map or {}
         self.calls = 0
+        self.queries: list[str] = []
 
     async def fetch_suggest(self, query: str) -> list[Instrument]:
         self.calls += 1
-        return self._results
+        self.queries.append(query)
+        return self._map.get(query, self._results)
 
     async def fetch_instruments(self, fs: str) -> list[Instrument]:
         return []
+
+
+_TX = Instrument("116.00700", "00700", 116, "腾讯控股", "TXKG", "stock")
+_MO = Instrument("0.000700", "000700", 0, "模塑科技", "MSKJ", "stock")
 
 
 @pytest.fixture()
@@ -327,3 +340,81 @@ class TestTtlCache:
         outcome = asyncio.run(svc.get_quotes(["600519"]))
         assert outcome.quotes[0]["stale"] is False
         assert primary.calls == 1  # 第二次命中缓存
+
+
+# ---------------------------------------------------------------------------
+# suggest 解析（pick_suggest_result / suggest_query_for）
+# ---------------------------------------------------------------------------
+
+
+class TestSuggestHelpers:
+    def test_suggest_query_for(self) -> None:
+        assert suggest_query_for("116.00700") == "00700"
+        assert suggest_query_for("100.HSI") == "HSI"
+        assert suggest_query_for("600519") == "600519"
+        assert suggest_query_for("腾讯控股") == "腾讯控股"
+
+    def test_empty_results_returns_none(self) -> None:
+        """空候选必须返回 None（上层按 not_found 处理，不是 ambiguous）。"""
+        assert pick_suggest_result("冷门标的", []) is None
+
+    def test_secid_form_filters_by_secid(self) -> None:
+        """secid 形式输入按 secid 精确过滤，不受同数字串候选干扰。"""
+        picked = pick_suggest_result("116.00700", [_TX, _MO])
+        assert isinstance(picked, Instrument)
+        assert picked.secid == "116.00700"
+
+    def test_secid_form_no_exact_returns_all(self) -> None:
+        picked = pick_suggest_result("116.09999", [_TX, _MO])
+        assert isinstance(picked, list)
+
+    def test_name_exact_preferred(self) -> None:
+        results = [
+            _TX,
+            Instrument("153.TCTZF", "TCTZF", 153, "腾讯控股ADR", None, "stock"),
+        ]
+        picked = pick_suggest_result("腾讯控股", results)
+        assert isinstance(picked, Instrument)
+        assert picked.secid == "116.00700"
+
+    def test_symbol_exact_resolves(self) -> None:
+        """纯代码查询（'00700'）在候选中恰有一条代码精确匹配 → 直接解析。"""
+        picked = pick_suggest_result("00700", [_TX, _MO])
+        assert isinstance(picked, Instrument)
+        assert picked.secid == "116.00700"
+
+    def test_no_exact_returns_all_for_ambiguity(self) -> None:
+        picked = pick_suggest_result("GZMT", [_TX, _MO])
+        assert isinstance(picked, list)
+        assert len(picked) == 2
+
+
+class TestSuggestResolutionViaService:
+    def test_suggest_empty_reports_not_found(self, store: MarketStore) -> None:
+        """修复点：suggest 返回空列表时 reason 应为 not_found 而非 ambiguous。"""
+        primary, backup = FlippableProvider("p"), FlippableProvider("b")
+        suggest = FakeSuggest([])
+        svc = _service(store, primary, backup, suggest=suggest)
+        outcome = asyncio.run(svc.get_quotes(["不存在的标的"]))
+        assert outcome.unresolved[0]["reason"] == "not_found"
+
+    def test_symbol_exact_via_suggest(self, store: MarketStore) -> None:
+        """'00700' 本地 miss → suggest 多候选中代码精确的唯一的可解析。"""
+        primary, backup = FlippableProvider("p"), FlippableProvider("b")
+        suggest = FakeSuggest([_TX, _MO])
+        svc = _service(store, primary, backup, suggest=suggest)
+        outcome = asyncio.run(svc.get_quotes(["00700"]))
+        assert outcome.quotes[0]["secid"] == "116.00700"
+        assert outcome.unresolved == []
+
+    def test_secid_form_input_via_suggest(self, store: MarketStore) -> None:
+        """secid 形式输入（'116.00700'）：suggest 用代码部分查询、按
+        secid 精确过滤，命中后回写主数据。"""
+        primary, backup = FlippableProvider("p"), FlippableProvider("b")
+        suggest = FakeSuggest(results_map={"00700": [_TX, _MO]})
+        svc = _service(store, primary, backup, suggest=suggest)
+
+        outcome = asyncio.run(svc.get_quotes(["116.00700"]))
+        assert outcome.quotes[0]["secid"] == "116.00700"
+        assert suggest.queries == ["00700"]  # 查询词是代码部分
+        assert store.get_instrument("116.00700") is not None  # 已回写

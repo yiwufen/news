@@ -14,7 +14,7 @@ import threading
 from pathlib import Path
 
 from src.marketdata.models import Instrument
-from src.marketdata.providers.base import ListProvider, ProviderError, SearchProvider
+from src.marketdata.providers.base import ListProvider, ProviderError
 from src.marketdata.providers.eastmoney import EastMoneyProvider
 from src.marketdata.providers.sina import SinaListProvider
 from src.marketdata.providers.tencent import TencentProvider
@@ -23,6 +23,8 @@ from src.marketdata.quotes import (
     MarketDataSettings,
     QuoteOutcome,
     QuoteService,
+    pick_suggest_result,
+    suggest_query_for,
 )
 from src.marketdata.klines import KlineService
 from src.marketdata.store import MarketStore
@@ -73,13 +75,15 @@ class MarketDataService:
         self._eastmoney = eastmoney
         # 主数据源与行情源分域（clist 限流连坐事故的整改）：默认新浪
         self._list_provider = list_provider or SinaListProvider()
+        settings = settings or _settings_from_env()
         self.quotes = QuoteService(
             store,
             [eastmoney, tencent],
-            settings or _settings_from_env(),
+            settings,
             suggest_provider=eastmoney,
         )
-        self.klines = KlineService(store, eastmoney)
+        # 日K主源东财，备源腾讯（ifzq fqkline，见 providers/tencent.py）
+        self.klines = KlineService(store, [eastmoney, tencent], settings)
         self._universe_lock = asyncio.Lock()
         self._sync_task: asyncio.Task[None] | None = None
 
@@ -163,16 +167,17 @@ class MarketDataService:
             return candidates[0]
         if not candidates:
             try:
-                online = await self._eastmoney.fetch_suggest(symbol)
+                online = await self._eastmoney.fetch_suggest(
+                    suggest_query_for(symbol)
+                )
             except ProviderError:
                 online = []
-            if len(online) == 1:
-                await asyncio.to_thread(
-                    self._store.upsert_instrument, online[0]
-                )
-                return online[0]
-            if online:
-                return _ambiguous_error(symbol, online[:5])
+            picked = pick_suggest_result(symbol, online)
+            if isinstance(picked, Instrument):
+                await asyncio.to_thread(self._store.upsert_instrument, picked)
+                return picked
+            if isinstance(picked, list):
+                return _ambiguous_error(symbol, picked[:5])
             return {"error": f"Unknown symbol: {symbol!r}"}
         return _ambiguous_error(symbol, candidates[:5])
 

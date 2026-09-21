@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -29,6 +30,13 @@ logger = logging.getLogger(__name__)
 
 _CST = timezone(timedelta(hours=8))
 
+# 同源快速重试之间的间隔：对刚触发限流的源避免毫秒级连打
+RETRY_BACKOFF_SECONDS = 0.3
+
+# secid 形式输入（"116.00700"）：东财 suggest 不识别这种形式（实测返回
+# null），需取代码部分查询后再按 secid 精确过滤
+_SECID_RE = re.compile(r"^(?:0|1|100|116)\.([0-9A-Za-z]+)$")
+
 
 class AllSourcesUnavailable(Exception):
     """failover 链上所有源都失败，且本地无任何快照可降级。"""
@@ -36,6 +44,40 @@ class AllSourcesUnavailable(Exception):
     def __init__(self, errors: list[str]) -> None:
         super().__init__("; ".join(errors) or "no provider attempted")
         self.errors = errors
+
+
+def suggest_query_for(query: str) -> str:
+    """suggest 实际查询词：secid 形式（如 ``116.00700``）取代码部分。"""
+    m = _SECID_RE.match(query)
+    return m.group(1) if m else query
+
+
+def pick_suggest_result(
+    query: str, results: list[Instrument]
+) -> Instrument | list[Instrument] | None:
+    """从 suggest 候选中挑选解析结果。
+
+    优先级：secid 精确（query 为 secid 形式时）> 名称精确 > 代码精确
+    > 全部候选（交上层判歧义）。空候选返回 None（上层按 not_found 处理）。
+    """
+    if not results:
+        return None
+    if _SECID_RE.match(query):
+        exact = [r for r in results if r.secid == query]
+        return exact[0] if len(exact) == 1 else results
+    exact_name = [r for r in results if r.name == query]
+    if len(exact_name) == 1:
+        return exact_name[0]
+    if exact_name:
+        return exact_name
+    # 纯代码查询（如 '00700'）会带出同数字串的 A股候选，代码精确的
+    # 候选通常唯一，可直接解析
+    exact_symbol = [r for r in results if r.symbol == query]
+    if len(exact_symbol) == 1:
+        return exact_symbol[0]
+    if exact_symbol:
+        return exact_symbol
+    return results
 
 
 @dataclass
@@ -180,15 +222,13 @@ class QuoteService:
         if self._suggest is None:
             return None
         try:
-            results = await self._suggest.fetch_suggest(symbol)
+            results = await self._suggest.fetch_suggest(
+                suggest_query_for(symbol)
+            )
         except ProviderError as exc:
             logger.warning("suggest fallback failed for %r: %s", symbol, exc)
             return None
-        # 港股等未落库标的常出现多候选（ADR/关联标的）；名称精确匹配
-        # 的候选优先，等价于"公司全名直接命中"而非模糊联想
-        exact = [r for r in results if r.name == symbol]
-        pool = exact if exact else results
-        return pool[0] if len(pool) == 1 else pool
+        return pick_suggest_result(symbol, results)
 
     # ------------------------------------------------------------------
     # 行情获取
@@ -252,13 +292,14 @@ class QuoteService:
                 continue
 
             fetched: dict[str, Quote] = {}
-            for _ in range(self._settings.retries_per_source + 1):
+            for attempt in range(self._settings.retries_per_source + 1):
                 try:
                     fetched = await provider.fetch_quotes(pending)
                     break
                 except ProviderError as exc:
                     errors.append(str(exc))
-                    continue
+                    if attempt < self._settings.retries_per_source:
+                        await asyncio.sleep(RETRY_BACKOFF_SECONDS)
 
             if fetched:
                 breaker.record_success()

@@ -104,6 +104,29 @@ class TestUniverseStaleness:
         assert universe_is_stale(MarketStore(tmp_path / "m.db")) is True
 
 
+class TestReplacePreservesNonCn:
+    def test_replace_keeps_hk_accumulated_rows(
+        self, store: MarketStore
+    ) -> None:
+        """A股域全量替换不得清除港股 suggest 回写累积的行。"""
+        store.replace_instruments(
+            [Instrument("1.600519", "600519", 1, "贵州茅台", "GZMT", "stock")]
+        )
+        # 港股行保留；A股域整体替换（平安银行/上证指数被清掉）
+        assert store.get_instrument("116.00700") is not None
+        assert store.get_instrument("0.000001") is None
+        assert store.get_instrument("1.600519") is not None
+
+    def test_replace_overwrites_existing_non_deleted_rows(
+        self, store: MarketStore
+    ) -> None:
+        """未删除域的同 secid 行（如硬编码港股指数）按 REPLACE 覆盖。"""
+        new_hsi = Instrument("100.HSI", "HSI", 100, "恒生指数", "HSZS", "index")
+        store.upsert_instrument(new_hsi)
+        store.replace_instruments([new_hsi])
+        assert store.get_instrument("100.HSI") is not None
+
+
 def test_default_indices_shape() -> None:
     secids = {i.secid for i in DEFAULT_INDICES}
     assert secids == {

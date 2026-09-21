@@ -1,12 +1,14 @@
 """marketdata SQLite 存储。
 
 独立于知识库的 ``data/market.db``：缓存性质、可丢弃重建。WAL 模式 +
-短连接（每次操作新开连接），避免多线程共享连接的锁问题。
+短连接（每次操作新开连接，用完显式关闭），避免多线程共享连接的锁问题。
 """
 
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -74,8 +76,18 @@ class MarketStore:
         conn.execute("PRAGMA journal_mode=WAL")
         return conn
 
+    @contextmanager
+    def _conn(self) -> Iterator[sqlite3.Connection]:
+        """短连接 + 事务边界：异常回滚，离开时显式关闭。"""
+        conn = self._connect()
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+
     def _init_schema(self) -> None:
-        with self._connect() as conn:
+        with self._conn() as conn:
             conn.executescript(_SCHEMA)
 
     # ------------------------------------------------------------------
@@ -83,14 +95,14 @@ class MarketStore:
     # ------------------------------------------------------------------
 
     def get_meta(self, key: str) -> str | None:
-        with self._connect() as conn:
+        with self._conn() as conn:
             row = conn.execute(
                 "SELECT value FROM meta WHERE key = ?", (key,)
             ).fetchone()
         return row[0] if row else None
 
     def set_meta(self, key: str, value: str) -> None:
-        with self._connect() as conn:
+        with self._conn() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
                 (key, value),
@@ -101,12 +113,16 @@ class MarketStore:
     # ------------------------------------------------------------------
 
     def replace_instruments(self, items: list[Instrument]) -> int:
-        """全量替换主数据（原子），并记录同步时间。"""
+        """原子替换 A股域（market 0/1）主数据，并记录同步时间。
+
+        其他市场的行（港股 suggest 回写累积）不随 A股全量同步清除；
+        items 中与存量同 secid 的行（如硬编码指数）按 REPLACE 覆盖。
+        """
         now = _now_iso()
-        with self._connect() as conn:
-            conn.execute("DELETE FROM instruments")
+        with self._conn() as conn:
+            conn.execute("DELETE FROM instruments WHERE market IN (0, 1)")
             conn.executemany(
-                "INSERT INTO instruments"
+                "INSERT OR REPLACE INTO instruments"
                 " (secid, symbol, market, name, pinyin, asset_type, updated_at)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [
@@ -130,7 +146,7 @@ class MarketStore:
 
     def upsert_instrument(self, item: Instrument) -> None:
         """suggest 兜底命中后回写，让下次解析走本地。"""
-        with self._connect() as conn:
+        with self._conn() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO instruments"
                 " (secid, symbol, market, name, pinyin, asset_type, updated_at)"
@@ -147,7 +163,7 @@ class MarketStore:
             )
 
     def get_instrument(self, secid: str) -> Instrument | None:
-        with self._connect() as conn:
+        with self._conn() as conn:
             row = conn.execute(
                 "SELECT secid, symbol, market, name, pinyin, asset_type"
                 " FROM instruments WHERE secid = ?",
@@ -156,7 +172,7 @@ class MarketStore:
         return _row_to_instrument(row) if row else None
 
     def find_by_symbol(self, symbol: str) -> list[Instrument]:
-        with self._connect() as conn:
+        with self._conn() as conn:
             rows = conn.execute(
                 "SELECT secid, symbol, market, name, pinyin, asset_type"
                 " FROM instruments WHERE symbol = ? ORDER BY asset_type, secid",
@@ -166,7 +182,7 @@ class MarketStore:
 
     def find_by_name(self, name: str) -> list[Instrument]:
         """精确名 + 包含名两段检索，精确命中优先。"""
-        with self._connect() as conn:
+        with self._conn() as conn:
             exact = conn.execute(
                 "SELECT secid, symbol, market, name, pinyin, asset_type"
                 " FROM instruments WHERE name = ? ORDER BY asset_type, secid",
@@ -183,7 +199,7 @@ class MarketStore:
         return [_row_to_instrument(r) for r in like]
 
     def find_by_pinyin_prefix(self, prefix: str) -> list[Instrument]:
-        with self._connect() as conn:
+        with self._conn() as conn:
             rows = conn.execute(
                 "SELECT secid, symbol, market, name, pinyin, asset_type"
                 " FROM instruments WHERE pinyin LIKE ?"
@@ -193,7 +209,7 @@ class MarketStore:
         return [_row_to_instrument(r) for r in rows]
 
     def count_instruments(self) -> int:
-        with self._connect() as conn:
+        with self._conn() as conn:
             row = conn.execute("SELECT COUNT(*) FROM instruments").fetchone()
         return int(row[0]) if row else 0
 
@@ -203,7 +219,7 @@ class MarketStore:
 
     def upsert_snapshots(self, quotes: list[Quote]) -> None:
         now = _now_iso()
-        with self._connect() as conn:
+        with self._conn() as conn:
             conn.executemany(
                 "INSERT OR REPLACE INTO quote_snapshot"
                 " (secid, symbol, name, price, change_val, change_pct, open,"
@@ -236,7 +252,7 @@ class MarketStore:
         if not secids:
             return {}
         placeholders = ",".join("?" for _ in secids)
-        with self._connect() as conn:
+        with self._conn() as conn:
             rows = conn.execute(
                 "SELECT secid, symbol, name, price, change_val, change_pct,"
                 " open, high, low, pre_close, volume, amount, market_time,"
@@ -275,7 +291,7 @@ class MarketStore:
         """只插入本地缺失的日期（主键冲突忽略），返回新插入行数。"""
         if not bars:
             return 0
-        with self._connect() as conn:
+        with self._conn() as conn:
             cur = conn.executemany(
                 "INSERT OR IGNORE INTO kline_daily"
                 " (secid, trade_date, open, high, low, close, volume, amount)"
@@ -296,9 +312,44 @@ class MarketStore:
             )
             return cur.rowcount
 
+    def upsert_klines(self, bars: list[KlineBar]) -> None:
+        """按日期覆盖写（INSERT OR REPLACE）。
+
+        增量合并用：盘中/收盘后当日 close 会随最新价变化，IGNORE 语义
+        会让首次落库的盘中价永远无法更新。
+        """
+        if not bars:
+            return
+        with self._conn() as conn:
+            conn.executemany(
+                "INSERT OR REPLACE INTO kline_daily"
+                " (secid, trade_date, open, high, low, close, volume, amount)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        b.secid,
+                        b.trade_date,
+                        b.open,
+                        b.high,
+                        b.low,
+                        b.close,
+                        b.volume,
+                        b.amount,
+                    )
+                    for b in bars
+                ],
+            )
+
+    def count_klines(self, secid: str) -> int:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM kline_daily WHERE secid = ?", (secid,)
+            ).fetchone()
+        return int(row[0]) if row else 0
+
     def replace_klines(self, secid: str, bars: list[KlineBar]) -> None:
         """除权重拉时整段替换该 secid 的日K。"""
-        with self._connect() as conn:
+        with self._conn() as conn:
             conn.execute("DELETE FROM kline_daily WHERE secid = ?", (secid,))
             conn.executemany(
                 "INSERT OR REPLACE INTO kline_daily"
@@ -332,7 +383,7 @@ class MarketStore:
             clauses.append("trade_date <= ?")
             params.append(end)
         where = " AND ".join(clauses)
-        with self._connect() as conn:
+        with self._conn() as conn:
             rows = conn.execute(
                 "SELECT secid, trade_date, open, high, low, close, volume,"
                 f" amount FROM kline_daily WHERE {where} ORDER BY trade_date",
@@ -353,7 +404,7 @@ class MarketStore:
         ]
 
     def max_kline_date(self, secid: str) -> str | None:
-        with self._connect() as conn:
+        with self._conn() as conn:
             row = conn.execute(
                 "SELECT MAX(trade_date) FROM kline_daily WHERE secid = ?",
                 (secid,),
@@ -362,7 +413,7 @@ class MarketStore:
 
     def tail_klines(self, secid: str, n: int = 2) -> list[KlineBar]:
         """最近 n 根（升序返回），供增量合并时的除权比对。"""
-        with self._connect() as conn:
+        with self._conn() as conn:
             rows = conn.execute(
                 "SELECT secid, trade_date, open, high, low, close, volume,"
                 " amount FROM kline_daily WHERE secid = ?"

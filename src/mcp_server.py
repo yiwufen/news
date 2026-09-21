@@ -413,6 +413,9 @@ def create_server(
           已自动检测并重建缓存
         - 含当日未收盘的实时K线（盘中调用时当日 close 为最新价）
         - 覆盖范围同 get_stock_quotes（A股、港股、常用指数）
+        - 上游日K源全挂时：本地有缓存则返回并带 degraded=true/
+          degraded_note（可能过期）；无缓存返回 error。备源（腾讯）无
+          成交额字段，其覆盖日期的 amount 为 0
 
         Args:
             symbol: 代码/中文名/secid，同 get_stock_quotes。歧义时报错并
@@ -435,20 +438,33 @@ def create_server(
             }
         if not 1 <= limit <= 500:
             return {"error": f"limit must be between 1 and 500, got {limit}"}
+        # 解析后归一化为 YYYY-MM-DD：isoparse 接受 basic 格式（'20260101'）
+        # 与带时间的串，而下游是字符串比较，不归一化会静默过滤错
+        start_iso: str | None = None
+        end_iso: str | None = None
         for label, value in (("start_date", start_date), ("end_date", end_date)):
-            if value is not None:
-                try:
-                    dparser.isoparse(value)
-                except ValueError:
-                    return {
-                        "error": (
-                            f"{label} must be an ISO date "
-                            f"(e.g. '2026-01-01'), got {value!r}"
-                        )
-                    }
+            if value is None:
+                continue
+            try:
+                normalized = dparser.isoparse(value).date().isoformat()
+            except ValueError:
+                return {
+                    "error": (
+                        f"{label} must be an ISO date "
+                        f"(e.g. '2026-01-01'), got {value!r}"
+                    )
+                }
+            if label == "start_date":
+                start_iso = normalized
+            else:
+                end_iso = normalized
+        if start_iso and end_iso and start_iso > end_iso:
+            return {
+                "error": f"start_date {start_iso} is after end_date {end_iso}"
+            }
 
         return await get_service().get_history(
-            symbol, start=start_date, end=end_date, limit=limit
+            symbol, start=start_iso, end=end_iso, limit=limit
         )
 
     return mcp

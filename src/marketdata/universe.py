@@ -55,11 +55,12 @@ def universe_is_stale(store: MarketStore) -> bool:
 async def sync_universe(
     store: MarketStore, provider: ListProvider
 ) -> int:
-    """同步主数据：A股全量（新浪源）+ 硬编码指数，全量替换。
+    """同步主数据：A股全量（新浪源）+ 硬编码指数，替换 A股域。
 
     港股不落全量：2026-09-21 实测东财 clist 翻页触发域名级封禁（连坐
     行情接口），且无其他已验证的港股全量源；港股解析走 suggest 在线
-    兜底 + 回写累积（热门标的会自然沉淀进本地）。
+    兜底 + 回写累积（热门标的自然沉淀，且不随 A股域全量替换清除——
+    见 store.replace_instruments）。
     """
     items: dict[str, Instrument] = {}
     for inst in await provider.fetch_instruments(NODE_CN_STOCKS):

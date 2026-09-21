@@ -18,6 +18,7 @@ from src.marketdata.providers.eastmoney import (
 )
 from src.marketdata.providers.sina import parse_sina_list_rows
 from src.marketdata.providers.tencent import (
+    parse_tencent_klines,
     parse_tencent_quotes,
     secid_to_tencent,
 )
@@ -208,3 +209,61 @@ class TestParseTencentQuotes:
     def test_garbage_body_raises(self) -> None:
         with pytest.raises(ValueError, match="no parsable rows"):
             parse_tencent_quotes("garbage\n", {"1.600519": "sh600519"})
+
+
+class TestParseTencentKlines:
+    def test_real_a_share_qfq(self) -> None:
+        bars = parse_tencent_klines(
+            _load_json("tencent_kline_a.json"), "1.600519", 5
+        )
+        assert len(bars) == 5
+        assert all(b.secid == "1.600519" for b in bars)
+        assert bars[0].trade_date == "2026-09-14"
+        # 腾讯行序：日期,开,收,高,低,量；无成交额 → amount=0
+        assert bars[0].open == pytest.approx(1277.27)
+        assert bars[0].close == pytest.approx(1277.96)
+        assert bars[0].high == pytest.approx(1285.53)
+        assert bars[0].low == pytest.approx(1270.36)
+        assert bars[0].volume == pytest.approx(16571.0)
+        assert bars[0].amount == 0.0
+
+    def test_real_hk_row_with_dict_suffix(self) -> None:
+        """港股行尾带除权信息 dict 与附加字段：解析只取前 6 列。"""
+        bars = parse_tencent_klines(
+            _load_json("tencent_kline_hk.json"), "116.00700", 5
+        )
+        assert len(bars) == 5
+        assert bars[0].trade_date == "2026-09-15"
+        assert bars[0].open == pytest.approx(428.0)
+        assert bars[0].close == pytest.approx(438.8)
+        assert bars[0].volume == pytest.approx(21791117.0)
+
+    def test_real_index_day_key(self) -> None:
+        """指数无复权概念，上游用 day 键（qfqday 缺失时回退）。"""
+        bars = parse_tencent_klines(
+            _load_json("tencent_kline_index.json"), "1.000001", 5
+        )
+        assert len(bars) == 5
+        assert bars[0].trade_date == "2026-09-14"
+        assert bars[0].close == pytest.approx(3885.33)
+
+    def test_lmt_trims_to_latest(self) -> None:
+        bars = parse_tencent_klines(
+            _load_json("tencent_kline_a.json"), "1.600519", 2
+        )
+        assert [b.trade_date for b in bars] == ["2026-09-17", "2026-09-18"]
+
+    def test_missing_data_raises(self) -> None:
+        with pytest.raises(ValueError, match="data missing"):
+            parse_tencent_klines(
+                {"code": 0, "msg": "", "data": {}}, "1.600519", 5
+            )
+
+    def test_malformed_row_raises(self) -> None:
+        payload = {"code": 0, "data": {"sh600519": {"qfqday": [["2026-09-14"]]}}}
+        with pytest.raises(ValueError, match="malformed"):
+            parse_tencent_klines(payload, "1.600519", 5)
+
+    def test_unmappable_secid_raises(self) -> None:
+        with pytest.raises(ValueError, match="unmappable"):
+            parse_tencent_klines({"code": 0, "data": {}}, "99.999999", 5)
