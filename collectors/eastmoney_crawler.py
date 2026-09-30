@@ -138,8 +138,7 @@ class EastMoneyCrawler:
         if any(w in text for w in ["地缘政治", "俄乌", "巴以", "冲突", "战争", "军演"]):
             return EventType.GEOPOLITICAL.name
             
-        # 兜底：纯行情/无实质事件的快讯归通用快讯，不再误标为市场波动
-        return EventType.GENERAL.name
+        return EventType.MARKET_VOLATILITY.name
 
     def process_and_save(self, news_list: list[dict]) -> int:
         """处理并保存数据到数据库"""

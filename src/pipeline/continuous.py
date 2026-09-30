@@ -30,7 +30,6 @@ from src.knowledge_base import (
 from src.knowledge_extractor import KnowledgeExtractor
 from src.knowledge_graph_sync import KnowledgeGraphSync
 from src.pipeline.circuit_breaker import CircuitBreaker, CircuitOpenError
-from src.pipeline.state_filter import is_pure_state_unit
 from src.retrieval.indexing import KnowledgeIndexBuilder
 
 logger = logging.getLogger(__name__)
@@ -49,8 +48,6 @@ class DocumentProcessingResult:
     units: list[KnowledgeUnit] = field(default_factory=list)
     entities: list[Entity] = field(default_factory=list)
     clusters: list[EventCluster] = field(default_factory=list)
-    # 准入过滤丢弃的纯状态 KU 数（行情快照，见 state_filter 模块 docstring）
-    state_units_dropped: int = 0
 
     @property
     def knowledge_units_count(self) -> int:
@@ -192,7 +189,6 @@ class ContinuousPipeline:
         total_edges = 0
         total_entities_saved = 0
         total_clusters_saved = 0
-        total_state_units_dropped = 0
         batch_count = 0
         docs_done = 0
 
@@ -252,7 +248,6 @@ class ContinuousPipeline:
                     all_units.extend(result.units)
                     total_entities_saved += result.entities_count
                     total_clusters_saved += result.clusters_count
-                total_state_units_dropped += result.state_units_dropped
 
                 # 收集错误
                 if result.error_message:
@@ -334,10 +329,6 @@ class ContinuousPipeline:
             clusters_saved=total_clusters_saved if not dry_run else 0,
         )
         logger.info(
-            f"State-unit admission filter: dropped {total_state_units_dropped} "
-            "pure-state units across all documents in this run"
-        )
-        logger.info(
             f"Pipeline run completed: {result.knowledge_units_extracted} units extracted, "
             f"{result.nodes_created} nodes, {result.edges_created} edges"
         )
@@ -402,23 +393,6 @@ class ContinuousPipeline:
             valid_units.append(unit)
         units = valid_units
         result.units = units
-
-        # Post-extraction: 准入过滤纯状态 KU（行情快照不入知识层，由
-        # marketdata 工具承接；规格见 docs/design-issues/state-vs-statement-routing.md §2.1）。
-        # 必须在 unit_type 归一化之后执行——过滤规则依赖 canonical 类型词表。
-        kept_units: list[KnowledgeUnit] = []
-        for unit in units:
-            if is_pure_state_unit(unit):
-                result.state_units_dropped += 1
-                continue
-            kept_units.append(unit)
-        units = kept_units
-        result.units = units
-        if result.state_units_dropped:
-            logger.info(
-                f"[{document.doc_id}] Dropped {result.state_units_dropped} "
-                "pure-state units (quote snapshots superseded by marketdata)"
-            )
 
         if not units:
             result.status = "success"
