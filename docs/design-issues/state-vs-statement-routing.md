@@ -129,6 +129,17 @@ def is_pure_state_unit(unit: KnowledgeUnit) -> bool: ...
 
 **降级路径**：若实现期抽检精度达不到门槛（误杀 ≥2%），文档级拦截退为"仅打标不拦截"，准入判定改用一次轻量 LLM 分类调用（放弃 §4.4 的省钱收益，保质量）；KU 级校验保留（其对象已被 LLM 分类过，精度问题不同）。
 
+### 4.1.2 语义判定的求解结构：正任务化 + 落地核查 + 审计回路
+
+regex 层不判语义（§4.1.1），语义判定归 LLM——但不是靠再写一遍否定性禁令。§1.3 的 71% 违约有结构性原因：prompt 约束是"不要提取"，而模型运行在提取任务模式，否定性指令没有对应的输出槽位，违约不可见、不可查。解法分四步：
+
+1. **判定正任务化**：抽取工具 schema 为每个 KU 增加必填字段 `attribution: "causal" | "state_only"`（causal 时必附 `cause_evidence` 原文片段，state_only 时为空）。模型对每个行情类单元显式回答"有因还是纯状态"，而不是靠"没提取"隐式表达。显式逐项判定的合规率远高于否定性禁令——与 `unit_type` 走封闭枚举同理：封闭槽位优于自由文本纪律。
+2. **机械落地核查**：`attribution="causal"` 时核查 `cause_evidence` 确为原文子串（span 落地，与 evidence 验证同一机制），核查失败按违约丢弃并计数；`attribution="state_only"` 的行情类单元按契约丢弃——这是 LLM 自己宣判的纯状态，代码只执行。语义判断归 LLM，真值核查归代码。
+3. **审计回路**：新增 `admission_audit` 抽样表——按比例记录被跳过文档、被丢弃单元、全部"短正文 + causal"边界样本；Admin 触发批量复判（更强 prompt 或人工），输出准入层实测精度/召回。作用：错误率从未知变成被测量（71% 泄漏存在 100 天未被发现，正因缺此回路）；检出信源模板漂移；免费积累标注语料反哺词表阈值。
+4. **可逆性兜底**：原始层永不删除、`skipped_state` 可批量重置、被丢 KU 可由重处理重建——任何准入误判的最坏代价是"晚入库"，不是"永久丢失"。知识层由此定位为原始层之上带准入策略的物化视图，而非裁决记录。
+
+残余不完美（隐含因果误判、复判漂移）不试图归零，圈进"可测量、有界、可恢复"的框架。
+
 ### 4.2 插入点：`ContinuousPipeline._process_single_document`
 
 两个确定性拦截都插在唯一咽喉点，`run()` 循环与 Admin 的 `process_single_document()` 重处理自动同时生效：
@@ -144,6 +155,8 @@ def is_pure_state_unit(unit: KnowledgeUnit) -> bool: ...
 
 - 把归因要求从 `stock_price_change` 扩展到 `price_change`、`sector_performance`（当前完全没有）。
 - 明示"若整篇文档只含行情数字、无任何归因与实质事件，返回空 knowledge_units 列表"（prompt 末尾已允许空列表，补一个正例）。
+
+禁令文本仍保留作引导，但执行不依赖它——执行依赖 §4.1.2 的结构化判定（attribution 字段）与落地核查。
 
 ### 4.4 成本收益
 
@@ -189,6 +202,7 @@ def is_pure_state_unit(unit: KnowledgeUnit) -> bool: ...
 | 上线后新增行情类 KU 占比 | 从 18.9% 降到 < 2%（持续两周观察 processing log） |
 | eval 回归 | P2 后 eval_guard 无退化，或退化项逐条归因并更新基线 |
 | 溯源完整性 | 被清理文档仍在 news_articles 可查，Admin 文章详情可达 |
+| 准入层实测精度（审计回路，上线后） | 每周复判样本 ≥200 条，精度/召回在 Admin 可见；信源模板漂移触发告警 |
 
 上线顺序依赖：P2 必须在 P0 合入后执行（否则清理窗口内新数据继续泄漏）；P1/P3 任意时机。
 
@@ -221,3 +235,4 @@ def is_pure_state_unit(unit: KnowledgeUnit) -> bool: ...
 4. **FX/商品覆盖缺口**：v1 丢弃，后续由 marketdata 扩品种（东方财富 provider 本身有汇率/商品接口，扩展成本低）。
 5. **`_infer_category` 存量数据是否回填 GENERAL**：建议回填（一次性 UPDATE，无下游 JOIN 依赖）。
 6. **regex 准入层的适用范围**：明确绑定东财模板化快讯单一源；未来接入自由文本源（研报/长文）时，文档级预过滤必须按源开关（`raw_metadata`/source_name 判定），不能沿用——自由文本上形态法不成立，直接走 §4.1.1 降级路径。
+7. **`attribution` 字段是否持久化**：建议随 KU 进 payload（不进 SHARED_RULES 核心字段表，无契约侵入）——审计回路与后续按归因检索需要它；`cause_evidence` 同入 payload。
