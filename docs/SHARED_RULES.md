@@ -292,11 +292,12 @@
 2. 文档标准化
 3. `KnowledgeUnit` 抽取
 4. 实体标准化
-5. 时间标准化
-6. 去重、冲突保留与保守归并
-7. 生成或更新 `EventCluster`
-8. 更新图谱
-9. 构建或更新多种索引
+5. 状态内容准入过滤：纯行情状态描述（无因果归因、无事件实质词）不生成 KnowledgeUnit，直接丢弃并计数（`src/pipeline/state_filter.py`；判据与实测见 `docs/design-issues/state-vs-statement-routing.md`）
+6. 时间标准化
+7. 去重、冲突保留与保守归并
+8. 生成或更新 `EventCluster`
+9. 更新图谱
+10. 构建或更新多种索引
 
 迁移要求：
 
