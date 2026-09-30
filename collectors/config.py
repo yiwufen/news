@@ -20,7 +20,6 @@ class EventType(Enum):
     EXECUTIVE_CHANGE = "高管变动/人事调整"
     IPO_FUNDING = "IPO/融资事件"
     GEOPOLITICAL = "地缘政治影响"
-    GENERAL = "通用快讯"
 
 
 class SourceType(Enum):
