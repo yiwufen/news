@@ -1,0 +1,203 @@
+# 状态类内容治理：陈述/状态分流落地方案
+
+> 状态：设计稿（讨论中，未实施）
+> 数据基线：生产库实测 2026-09-30（news_articles 65,135 篇 / knowledge_units 122,965 条 / event_clusters 111,152 个，数据窗口 2026-05-23 ~ 2026-09-03）
+> 前置依赖：生产采集与知识化自 2026-09-03 起停机（约 4 周），需先恢复才能做上线后验证
+
+## 执行摘要
+
+生产库中约 **18.9%（23,179 条）的 KnowledgeUnit 是"某股/板块涨跌多少"类状态描述**，其中 **71%（16,361 条）连因果归因都没有**，是纯粹的行情快照叙事。它们半衰期以小时计，却永久占据 FTS、向量索引、事件簇和图谱（19,075 个行情簇，88% 单例），持续稀释检索信噪比，并与刚合入的 marketdata 行情工具（实时报价 + 日K，PR #21）完全重复。
+
+关键教训：**抽取 prompt 中"纯股价涨跌数字不要提取 KU"的禁令自 2026-05-22（commit cc208d9）就存在，早于全部数据窗口，但 71% 的泄漏率证明纯 prompt 约束对 LLM 无效**，且该禁令只覆盖 `stock_price_change`，`price_change` / `sector_performance` 根本没有归因要求。
+
+方案按第一性原理把信息分为两类治理——**陈述**（真值绑定事件时刻，一年后仍是真命题）与**状态**（真值绑定读取时刻，被下一笔报价取代）——落地为四个阶段：
+
+| 阶段 | 内容 | 性质 |
+|---|---|---|
+| P0 | 准入端确定性拦截：文档级预过滤 + KU 级抽取后校验 + prompt 收紧 | 阻止新增，纯增量 |
+| P2 | 存量清理脚本（一次性） | 消化 16k 历史 KU 及其簇/图谱节点 |
+| P1 | 检索端时间衰减（仅 reaction 类型，eval 门控） | 可选优化 |
+| P3 | 采集端 `_infer_category` 兜底修正 | 统计失真修复 |
+
+核心不变式：**原始层（news_articles）永远无损保留一切，知识层只收陈述**。溯源承诺不破；"某股涨多少"的查询由 marketdata 承接，永远是新鲜且精确的。
+
+## 一、问题量化（生产实测）
+
+### 1.1 原始层
+
+| 指标 | 值 |
+|---|---|
+| 快讯总量 | 65,135 篇（东方财富 7x24） |
+| 标题命中纯行情模式 | 25.8%（盘中时段逐小时密度最高 46%，UTC 01 时） |
+| `MARKET_VOLATILITY` 分类占比 | 76.4% —— **虚高**，`_infer_category` 把所有不匹配特定关键词的快讯兜底归入此类，兜底桶实际是政策/产品/地缘杂项 |
+
+### 1.2 知识层
+
+| 指标 | 值 |
+|---|---|
+| 行情三类型 KU（stock_price_change / price_change / sector_performance） | 23,179 条（18.9%） |
+| 其中含因果归因词的 | ~8%（按月 5%→17% 缓慢爬升，`sector_performance` 始终 2–4%） |
+| 纯状态描述（行情词 ∩ 无归因） | 16,361 条（占行情类 71%，占全库 13.3%） |
+| 行情类事件簇 | 19,075 个，88% 单例（其他类型 90%，但行情类基数大、几乎无聚合价值） |
+| 行情类 KU 关联了实体 | 84%（"SK海力士跌超9%"这类具名个股快讯） |
+
+### 1.3 prompt 禁令失效的直接证据
+
+`src/knowledge_extractor.py` SYSTEM_PROMPT 中【市场分析类】第 1 条：
+
+> 重要：不要为纯粹的股价涨跌数字提取此类 KU。只有当陈述包含因果归因（如因...、受...影响、得益于、推动、带动）时才提取。
+
+该规则 2026-05-22 引入，数据窗口 2026-05-23 开始。实际抽取结果随机抽样（20 条 stock_price_change）：
+
+- 无归因 18/20，例如："SK海力士跌超9%"、"台积电盘前涨超1%"、"科创50跌超6%，创业板指跌4.6%，沪指跌超1%"——全是 prompt 明令不提取的内容。
+- 有归因 2/20，例如："IMAX股价创新高，因电影产业迎来……市场利好"——这是应该保留的形态。
+
+结论：LLM 遵循否定性指令的合规率不稳定（约 12–17%），且约束范围不全。**必须用确定性代码执行契约，prompt 只作引导。**
+
+## 二、设计原则（第一性原理）
+
+判据一句话：**"一年后再读，这句话是否仍是一个真命题？"**
+
+- "汇丰将网易目标价从 162 下调至 150" → 是。关于一次发言的事实，永久为真 → **陈述，入库**。
+- "网易涨超5%" → 否。被下一笔报价取代 → **状态，不入知识层**。
+- "因 Q3 净利超预期，比亚迪涨停" → 复合。归因主张是陈述（可错、可冲突、可证伪）→ 入库；"涨停"本身是对状态的引用 → 由 marketdata 验证。
+
+三层模型：
+
+```
+原始层 news_articles      无损、append-only、便宜 —— 保留一切（含行情快讯）
+        │
+  准入控制（本方案新增）     陈述 / 状态 / 混合 判定
+        │
+   ┌────┴──────────────┐
+知识层 KU/簇/图谱        状态层 marketdata（实时报价 + 日K时序）
+只收陈述                  "多少"类查询的唯一权威表示
+   └─ 桥：KU 引用状态（entity+timestamp），不复制状态数字 ──┘
+```
+
+与现有设计的连续性（不是新概念，是把已有概念推到终点）：
+
+- `KnowledgeUnit.status: active/superseded` 已存在——状态的实质就是"被每笔后继报价取代的极端 supersession"。
+- `enums.derive_edge_nature()` 已把行情三类型 + market/industry_analysis 标为 `reaction` 做图谱剪枝——本方案把"reaction 不进因果链"升级为"纯 reaction 不进知识层"。
+- 抽取 prompt 已有归因要求——本方案把 prompt 契约变成代码强制。
+
+## 三、已否决的替代方案
+
+| 方案 | 否决原因 |
+|---|---|
+| 只改 prompt | 已被生产证伪（§1.3），71% 泄漏 |
+| 按时间 TTL 删除 | 时间不是矛盾的本质，类型才是：三年前的财报陈述仍有价值，三小时前的盘中快讯已无价值。任何时间阈值都同时误伤两者 |
+| 采集端整条丢弃 | 东方财富快讯两类内容混在同一条里（"因X消息，板块拉升3%"），整条丢会丢失归因知识；且原始层必须无损 |
+| 状态叙事原样入库 + 检索时过滤 | 索引污染照旧：FAISS/FTS/图谱的库容和召回池已经被占，查询时过滤救不了竞争性排序的稀释 |
+
+## 四、P0：准入端确定性拦截
+
+### 4.1 新模块 `src/pipeline/state_filter.py`
+
+纯函数、无 LLM 依赖，模式定义只此一份，供三处复用（管道预过滤、抽取后校验、P2 清理脚本）：
+
+```python
+MOVE_PATTERN:      # 强行情词：涨/跌+数字、%、涨停/跌停/连板/拉升/走强/异动/冲高/回落/跳水/直线…
+ATTRIBUTION_PATTERN: # 归因词：因…/受…影响/由于/得益于/推动/带动/引发/刺激/消息面上/利好/利空/担忧…
+STATE_UNIT_TYPES = {"stock_price_change", "price_change", "sector_performance"}
+
+def is_state_only_document(doc: RawDocument) -> bool: ...
+def is_pure_state_unit(unit: KnowledgeUnit) -> bool: ...
+```
+
+**文档级**（保守，宁可不跳过）：标题命中强行情模式 ∧ 正文无任何归因词 ∧ 正文长度低于阈值（快讯正文通常 = 标题或标题+一行）。三者同时满足才判 state-only，避免误杀"标题是行情、正文有实质内容"的混合稿。
+
+**KU 级**：`unit_type ∈ STATE_UNIT_TYPES` ∧ summary/evidence 命中行情模式 ∧ 无归因词 → 判为纯状态，丢弃。
+
+精确模式集在实现期用生产样本调参（§1.3 的 20 条样本 + 另抽样 100 条作为 fixture），验收门槛见 §8。
+
+### 4.2 插入点：`ContinuousPipeline._process_single_document`
+
+两个确定性拦截都插在唯一咽喉点，`run()` 循环与 Admin 的 `process_single_document()` 重处理自动同时生效：
+
+1. **Stage 0（新增）**：`is_state_only_document(document)` 为真 → 不调 LLM，直接记处理日志后返回。
+   - 日志新状态值 `skipped_state`（processing log 的 status 是 TEXT，无 schema 约束）。
+   - `KnowledgeProcessingLogRepository.get_processed_doc_ids()`（`knowledge_base.py:758`）从 `status = 'success'` 改为 `status IN ('success', 'skipped_state')`，否则每次运行都会重扫这些文档。
+   - `DocumentProcessingResult.status` Literal（`continuous.py:45`）加 `'skipped_state'`。
+   - 留重处理通道：规则后续调优后，把 `skipped_state` 批量重置为 pending 即可重跑（Admin reprocessing 已有类似机制）。
+2. **Stage 1.5（新增，在现有 unit_type 归一化循环之后、实体解析之前）**：对 units 逐条 `is_pure_state_unit()`，丢弃的计数写入结果（`error_message` 或新字段记录 `state_units_dropped`，fail-fast 哲学要求一切丢弃可见）。放在实体解析之前，省掉的还有实体解析与聚类的下游成本。
+
+### 4.3 prompt 收紧（配合，非主力）
+
+- 把归因要求从 `stock_price_change` 扩展到 `price_change`、`sector_performance`（当前完全没有）。
+- 明示"若整篇文档只含行情数字、无任何归因与实质事件，返回空 knowledge_units 列表"（prompt 末尾已允许空列表，补一个正例）。
+
+### 4.4 成本收益
+
+约 25% 文档跳过 LLM 抽取（按生产密度），抽取 API 成本等比下降；实体解析、聚类、嵌入、图谱同步的下游成本同步减少。质量收益：FTS/FAISS 召回池不再进纯状态噪声。
+
+## 五、P2：存量清理（一次性脚本）
+
+新建 `scripts/prune_state_kus.py`，遵循 `migrate_unit_types.py` / `reclassify_units.py` / `prune_graph_orphans.py` 的既有模式。**选择规则与 4.1 的 `is_pure_state_unit` 是同一实现**——保证"新增拦截"与"存量清理"的边界完全一致，不会出现清理标准宽于拦截标准的漂移。
+
+步骤（全部先 `--dry-run` 出报告，再执行）：
+
+1. **备份**：`scripts/backup.sh` 先例，SQLite + Neo4j dump。
+2. **选择**：全库扫描，`is_pure_state_unit()` 命中的 KU 列表（预估 ~16,361 条）。
+3. **删除 KU**：`knowledge_units` 行 + `knowledge_units_fts` 对应行（两表必须同删——`_ensure_materialized_search_state` 会按行数差自动重建 FTS，单删主表会触发全量重建）。
+4. **簇清理**：`event_clusters` 的 payload.member_ku_ids 若全部命中删除集 → 删簇行 + `cluster_entity_map`；预估 19,075 个行情簇中大半变空。
+5. **图谱清理**：空簇对应的 Neo4j 节点用 `KnowledgeGraphSync.delete_node()`（已有 API）删除；实体节点一律保留（见下）。
+6. **向量索引重建**：`migrate_vectors.py` 先例，从存活 KU 全量重建 FAISS（IndexIDMap 支持 remove_ids，但一次性清理走重建更稳，避免增量删除的碎片状态）。
+7. **实体不清理（v1 决策）**：实体库 84% 行情 KU 有关联，但实体本身（如 ETF、指数名）是无害的少量冗余；自动删实体会引发 alias/identifier/图谱连锁。脚本只输出"剩余 KU 关联为 0 的实体"报告，人工决定是否二期处理。
+8. **eval 资产同步**：用 `snapshot_eval_pair.py` 重新生成 fixture DB；**审计 `eval/golden_dataset_v3.json` 中是否有期望行情类 KU 的 golden 查询**（如"某股股价怎样"），有则修订 golden 并按"刻意演进"路径更新 `eval/baseline.json`（SHARED_RULES §9 冲突裁定：带改动说明的基线演进合法）。
+9. **验证**：`eval_run.py` + `eval_guard.py` 跑通；Admin 抽查若干实体详情页确认 KU/簇计数一致。
+
+预估影响：知识库 KU -13.3%，事件簇约 -15%（行情空簇 + 少量连带），FTS/FAISS 同步缩小，图谱节点与边显著减少。
+
+## 六、P1：检索端时间衰减（可选，独立决策）
+
+即使过了准入的行情类 KU（有归因的），其检索价值也随时间快速衰减。方案：`_score_final_hit()` 中对 `unit_type ∈ reaction 类型` 且 `_unit_anchor` 距今超过 N 天（建议 30）的命中乘衰减因子（如 0.5），衰减曲线与阈值进 `ScoringProfile`，按 intent 可调。
+
+约束：
+
+- 修改 `src/retrieval/` 必须跑 `eval_run.py` + `eval_guard.py`（SHARED_RULES §8），基线漂移走刻意演进申报。
+- **独立于 P0/P2，可单独决策是否做**。若 P2 清理后行情类 KU 只剩 ~6,800 条有归因的，衰减的边际收益有限，可以先不做。
+
+## 七、P3：采集端分类兜底修正
+
+`collectors/eastmoney_crawler.py:119` `_infer_category` 的 fallback 从 `MARKET_VOLATILITY` 改为新增 `GENERAL`。纯统计修复：当前 76.4% 的"市场异动"让所有基于 category 的分析与 Admin 筛选失真。注意 news_articles 已有存量数据的 category 不会自动迁移——可选跑一次性 UPDATE（无 JOIN 依赖 category 的关键逻辑，风险低，实施时再 grep 确认）。
+
+## 八、度量与验收
+
+| 门槛 | 标准 |
+|---|---|
+| 预过滤器精度（上线前，存量抽样） | 随机抽 100 条被判 state-only 的文档，人工核对误杀率 < 2% |
+| KU 校验器精度 | 随机抽 100 条被丢弃 KU，误杀率 < 2%（归因句必须全部存活） |
+| 上线后新增行情类 KU 占比 | 从 18.9% 降到 < 2%（持续两周观察 processing log） |
+| eval 回归 | P2 后 eval_guard 无退化，或退化项逐条归因并更新基线 |
+| 溯源完整性 | 被清理文档仍在 news_articles 可查，Admin 文章详情可达 |
+
+上线顺序依赖：P2 必须在 P0 合入后执行（否则清理窗口内新数据继续泄漏）；P1/P3 任意时机。
+
+## 九、风险与边界
+
+| 风险 | 缓解 |
+|---|---|
+| 误杀混合句（标题纯行情、正文有事件） | 文档级三条件 AND（含正文归因词检查 + 长度阈值）；100 条人工抽检门槛；`skipped_state` 可批量重置重跑 |
+| marketdata 覆盖缺口（汇率/商品/美股无行情层） | v1 接受丢弃："日元上涨0.3%"数日后检索价值≈0，陈旧 KU 比空结果更有害；长期靠 marketdata 扩品种承接，而不是知识库降级保存 |
+| FAISS 全量重建窗口 | 离线容器内执行（生产本就是 offline ingestion 容器跑知识化），重建期间 MCP 检索短暂降级，选低峰执行 |
+| Admin 已处理文档重处理语义 | 重处理不清除旧 KU 是现状行为；清理脚本跑过后重处理同一文档不会复活已删 KU（ku_id 内容哈希会重新生成同 ID——**注意**：若文档重处理发生在清理后，需先确认该文档在 skip 名单或规则已拦截，实施时验证此路径） |
+| 采集停机 4 周（2026-09-03 起） | 阻塞上线后验证，属运维问题，单独排查（deploy job 改 manual-only 之后可能未再触发） |
+
+## 十、工作量估计
+
+| 项 | 估计 |
+|---|---|
+| P0（state_filter 模块 + 插入点 + prompt + 单测，fixture 用生产样本） | 1–1.5 天 |
+| P2（清理脚本 + dry-run 报告 + 演练 + eval 资产同步） | 1 天 |
+| P1（衰减 + eval 门控，可选） | 0.5 天 |
+| P3（category 修正 + 存量 UPDATE） | 0.5 小时 |
+| SHARED_RULES 增补（§5 流程加"准入分流"一步、§8 验收加门槛） | 随 P0 合入 |
+
+## 决策记录（待与用户对齐）
+
+1. **P1 衰减是否 v1 就做**：建议 P2 后按行情类 KU 剩余量再定（本文倾向先不做）。
+2. **`skipped_state` 状态值命名**：或 `skipped_state_only` / `filtered_state`，随实现定。
+3. **实体孤儿二期清理**：v1 只出报告不动数据。
+4. **FX/商品覆盖缺口**：v1 丢弃，后续由 marketdata 扩品种（东方财富 provider 本身有汇率/商品接口，扩展成本低）。
+5. **`_infer_category` 存量数据是否回填 GENERAL**：建议回填（一次性 UPDATE，无下游 JOIN 依赖）。
