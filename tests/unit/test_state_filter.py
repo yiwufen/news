@@ -1,7 +1,7 @@
 """Tests for state-content admission filter (``src.pipeline.state_filter``).
 
-样本全部来自生产库实测（2026-09-30）：丢弃例取自丢弃集抽样（0 误杀），
-保留例覆盖两类出口（归因词/事件实质词）与类型限定。规格见
+样本全部来自生产库实测（2026-09-30）：丢弃例取自丢弃集抽样，保留例覆盖
+两类出口（归因词/事件实质词）、类型限定与 % 上下文限定。规格见
 ``docs/design-issues/state-vs-statement-routing.md`` §2.1。
 """
 
@@ -130,6 +130,62 @@ class TestUnitTypeGuard:
             "price_change",
             "sector_performance",
         }
+
+
+class TestPercentRequiresMoveContext:
+    """% 上下文限定（2026-09-30 WSL 生产 dry-run 实证收紧）。
+
+    裸 % 会误杀被 LLM 错标为 price_change 的能力/占比陈述
+    （"算力消耗仅为上代产品的27%"）；% 必须与 涨/跌 相邻出现才算行情形态。
+    """
+
+    def test_keep_capability_statement_mistyped_as_price_change(self) -> None:
+        # 生产 dry-run 抓到的真实误杀样本：全句无涨跌，仅"27%"为量值
+        unit = make_unit(
+            "DeepSeek通过架构创新实现算力消耗大幅降低，V4系列处理百万级Token长上下文时算力消耗仅为上代产品的27%",
+            unit_type="price_change",
+        )
+        assert is_pure_state_unit(unit) is False
+
+    def test_keep_share_of_total_percent(self) -> None:
+        # 占比 %（非涨跌幅）：无涨跌上下文 → 不判行情形态
+        unit = make_unit(
+            "SpaceX购入特斯拉Cybertruck总量的8%",
+            unit_type="price_change",
+        )
+        assert is_pure_state_unit(unit) is False
+
+    def test_drop_percent_with_fall_rise_word_nearby(self) -> None:
+        # "涨幅扩大至1%"：涨 与 1% 间隔 4 个非数字字符，仍在 0-6 窗口内
+        unit = make_unit(
+            "现货黄金日内涨幅扩大至1%，报4551.85美元/盎司",
+            unit_type="price_change",
+        )
+        assert is_pure_state_unit(unit) is True
+
+    def test_drop_percent_with_about_qualifier(self) -> None:
+        # "上涨约0.5%"：涨 与 0 之间隔"约"
+        unit = make_unit(
+            "标普500指数期货在亚洲早盘交易中上涨约0.5%；纳斯达克100指数期货上涨0.6%",
+            unit_type="price_change",
+        )
+        assert is_pure_state_unit(unit) is True
+
+    def test_drop_crypto_rise_to_price(self) -> None:
+        # 生产 dry-run 正当命中样本：涨4.53% / 涨至2125.7
+        unit = make_unit(
+            "以太坊过去24小时内涨4.53%，涨至2125.7美元",
+            unit_type="price_change",
+        )
+        assert is_pure_state_unit(unit) is True
+
+    def test_drop_commodity_env_rise(self) -> None:
+        # 生产 dry-run 正当命中样本："环比上涨3.5%"
+        unit = make_unit(
+            "2026年5月中旬，焦炭（准一级冶金焦）价格为1496.4元/吨，环比上涨3.5%",
+            unit_type="price_change",
+        )
+        assert is_pure_state_unit(unit) is True
 
 
 class TestEvidenceExit:
